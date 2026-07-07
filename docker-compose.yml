@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+  # ── 1. PostgreSQL — Data Warehouse + App (UN SOLO SERVIDOR) ─────────────────
+  # Aloja dos esquemas:
+  #   - public.* → tablas de la app: roles, usuarios (autenticación RBAC)
+  #   - edw.*    → Data Warehouse: dimensiones, hechos, KPIs, analytics
+  postgres_edw:
+    image: postgres:16-alpine
+    container_name: bi_postgres_edw
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: edw
+      POSTGRES_USER: etl_user
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - edw_data:/var/lib/postgresql/data
+      - ./edw:/docker-entrypoint-initdb.d # Ejecuta todos los SQL en orden al iniciar
+    ports:
+      - "5433:5432" # Expuestos en 5433 al host para no colisionar con PG local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U etl_user -d edw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 2. Backend FastAPI ───────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bi_backend
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres_edw:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app # Hot-reload en desarrollo
+      - ./ml/models:/app/ml_models:ro
+      - ./ml:/app/ml:ro
+
+  # ── 3. Frontend React ────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: bi_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src # Hot-reload Vite
+    depends_on:
+      - backend
+
+  # ── 4. ETL Runner (ejecución manual o programada) ───────────────────────────
+  etl:
+    build:
+      context: ./etl
+      dockerfile: Dockerfile
+    container_name: bi_etl
+    env_file: .env
+    depends_on:
+      postgres_edw:
+        condition: service_healthy
+    # No se inicia automáticamente; ejecutar con: docker compose run etl
+    profiles: ["etl"]
+
+  # ── 5. ML Orchestrator (pipeline de entrenamiento) ──────────────────────────
+  ml:
+    build:
+      context: ./ml
+      dockerfile: Dockerfile
+    container_name: bi_ml
+    env_file: .env
+    depends_on:
+      postgres_edw:
+        condition: service_healthy
+    volumes:
+      - ./ml:/app
+    ports:
+      - "8888:8888"
+    profiles: ["ml"]
+
+volumes:
+  edw_data:

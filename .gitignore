@@ -1,3 +1,102 @@
-# variables secretas
+# ==========================================
+# GOBIERNO DE SEGURIDAD & SECRETO GENERAL
+# ==========================================
+# Ignorar archivos de variables de entorno y secrets
 .env
 .env.*
+*.env
+*.secret
+
+# ==========================================
+# ENTORNOS DE DESARROLLO (IDEs) & ARCHIVOS SISTEMA OPERATIVO
+# ==========================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.lnk
+*.cab
+[Dd]esktop.ini
+
+# IDEs y Editores de Código
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.eslintcache
+
+# Logs de error generales
+*.log
+
+# ==========================================
+# DESARROLLO BACKEND (PYTHON & FASTAPI)
+# ==========================================
+# Byte-compiled / archivos cacheados
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.oxlint_cache/
+.ipynb_checkpoints/
+
+# Entornos virtuales locales
+.venv/
+venv/
+ENV/
+env/
+ActiveState.venv/
+
+# ==========================================
+# DESARROLLO FRONTEND (NODE / REACT / VITE)
+# ==========================================
+# Dependencias instaladas
+node_modules/
+/frontend/node_modules/
+
+# Carpeta de compilación de producción
+dist/
+build/
+/frontend/dist/
+
+# Logs de NPM y Yarn
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==========================================
+# CIENCIA DE DATOS & MLOPS (MODELOS ML & DATASETS)
+# ==========================================
+# Ignorar modelos serializados pesados y datasets de entrenamiento
+*.pkl
+*.joblib
+*.h5
+*.pb
+*.onnx
+
+# Directorios específicos de pesos de modelos en backend y ml
+ml/models/
+backend/ml_models/
+data/raw/
+data/processed/
+
+# ==========================================
+# DOCKER Y CONTENEDORES
+# ==========================================
+# Evitar guardar base de datos física del volumen local
+pgdata/
+docker_pgdata/
+

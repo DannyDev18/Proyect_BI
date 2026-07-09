@@ -11,24 +11,32 @@ CREATE TABLE edw.Fact_Ventas_Detalle (
     sucursal_sk         INT NOT NULL REFERENCES edw.Dim_Sucursal(sucursal_sk),
     vendedor_sk         INT NOT NULL REFERENCES edw.Dim_Vendedor(vendedor_sk),
     formapago_sk        INT NOT NULL REFERENCES edw.Dim_FormaPago(formapago_sk),
-    num_factura         VARCHAR(10) NOT NULL,
-    tipo_documento      VARCHAR(5),
+    estado_documento_sk INT NOT NULL REFERENCES edw.Dim_Estado_Documento(estado_documento_sk),
+    num_factura         VARCHAR(20) NOT NULL,
     cantidad            NUMERIC(15,4) NOT NULL,
     precio_unitario     NUMERIC(15,4) NOT NULL,
-    costo_unitario      NUMERIC(15,4) NOT NULL,
+    costo_unitario      NUMERIC(15,4),
     subtotal_bruto      NUMERIC(15,4) NOT NULL,
     valor_descuento     NUMERIC(15,4) NOT NULL,
     subtotal_neto       NUMERIC(15,4) NOT NULL,
     valor_iva           NUMERIC(15,4) NOT NULL,
     total_linea         NUMERIC(15,4) NOT NULL,
-    costo_total         NUMERIC(15,4) NOT NULL,
-    margen_bruto        NUMERIC(15,4) NOT NULL,
+    costo_total         NUMERIC(15,4),
+    margen_bruto        NUMERIC(15,4),
     pct_margen          NUMERIC(8,4) NOT NULL,
-    es_devolucion       BOOLEAN DEFAULT FALSE,
-    estado_factura      VARCHAR(1) DEFAULT 'A',
     fecha_carga         TIMESTAMP DEFAULT NOW()
 );
 COMMENT ON TABLE edw.Fact_Ventas_Detalle IS 'Hechos detallados de transacciones de venta.';
+COMMENT ON COLUMN edw.Fact_Ventas_Detalle.pct_margen IS
+    'margen_bruto / subtotal_neto. Convención (auditoría 07 H8): si subtotal_neto = 0
+     (promociones/cortesías con precio 0), pct_margen = 0, no NULL ni error de carga.';
+COMMENT ON COLUMN edw.Fact_Ventas_Detalle.costo_unitario IS
+    'NULL cuando el artículo no tiene costo definido en articulos.ultcos (auditoría 08 F2:
+     no se fuerza a 0.0, o el margen se infla artificialmente al 100%). Auditoría 10
+     (docs/auditoria/10_auditoria_ventas_detalle_calculo.md) relajó el NOT NULL original
+     tras confirmar filas reales de Producción con este caso.';
+COMMENT ON COLUMN edw.Fact_Ventas_Detalle.margen_bruto IS
+    'NULL cuando costo_total es NULL (ver costo_unitario) — no se puede calcular margen sin costo.';
 
 -- ── 2. FACT_INVENTARIO_SNAPSHOT ──
 CREATE TABLE edw.Fact_Inventario_Snapshot (
@@ -56,6 +64,8 @@ CREATE TABLE edw.Fact_Movimientos_Inventario (
     producto_sk         INT NOT NULL REFERENCES edw.Dim_Producto(producto_sk),
     sucursal_sk         INT NOT NULL REFERENCES edw.Dim_Sucursal(sucursal_sk),
     almacen_sk          INT NOT NULL REFERENCES edw.Dim_Almacen(almacen_sk),
+    cliente_sk          INT REFERENCES edw.Dim_Cliente(cliente_sk),
+    vendedor_sk         INT REFERENCES edw.Dim_Vendedor(vendedor_sk),
     tipo_movimiento     VARCHAR(3) NOT NULL,
     num_documento       VARCHAR(10) NOT NULL,
     cantidad_movimiento NUMERIC(15,4) NOT NULL,
@@ -65,6 +75,10 @@ CREATE TABLE edw.Fact_Movimientos_Inventario (
     es_entrada          BOOLEAN NOT NULL,
     es_salida           BOOLEAN NOT NULL
 );
+COMMENT ON COLUMN edw.Fact_Movimientos_Inventario.cliente_sk IS
+    'Cliente asociado al movimiento (kardex.codcli). NULL salvo tipo_movimiento=''FAC''. Ver auditoría 07 H5.';
+COMMENT ON COLUMN edw.Fact_Movimientos_Inventario.vendedor_sk IS
+    'Vendedor asociado al movimiento (kardex.codven). NULL salvo tipo_movimiento=''FAC''. Ver auditoría 07 H5.';
 COMMENT ON TABLE edw.Fact_Movimientos_Inventario IS 'Historial analítico de movimientos físicos de stock (Kardex).';
 
 -- ── 4. FACT_COMPRAS ──
@@ -194,3 +208,25 @@ CREATE TABLE edw.Fact_Devoluciones (
     fecha_carga         TIMESTAMP DEFAULT NOW()
 );
 COMMENT ON TABLE edw.Fact_Devoluciones IS 'Devoluciones de stock hechas por clientes.';
+
+-- ── 12. FACT_TRANSFERENCIAS ──
+-- Grain: transferencia por línea, pareada por (num_documento, num_renglon, codart) según
+-- transferencias_extractor.sql (regla de negocio §5 de docs/auditoria/02_reglas_negocio_validadas.md:
+-- cada ítem transferido genera 2 filas de kardex, SA=origen/EN=destino, ya reconstruidas por
+-- el extractor en una sola fila origen→destino). Ver auditoría 07 H10.
+CREATE TABLE edw.Fact_Transferencias (
+    transferencia_sk    BIGSERIAL PRIMARY KEY,
+    fecha_sk            INT NOT NULL REFERENCES edw.Dim_Fecha(fecha_sk),
+    producto_sk         INT NOT NULL REFERENCES edw.Dim_Producto(producto_sk),
+    sucursal_sk         INT NOT NULL REFERENCES edw.Dim_Sucursal(sucursal_sk),
+    almacen_origen_sk   INT NOT NULL REFERENCES edw.Dim_Almacen(almacen_sk),
+    almacen_destino_sk  INT NOT NULL REFERENCES edw.Dim_Almacen(almacen_sk),
+    num_documento       VARCHAR(20) NOT NULL,
+    num_renglon         VARCHAR(20) NOT NULL,
+    cantidad_enviada    NUMERIC(15,4) NOT NULL,
+    costo_unitario      NUMERIC(15,4),
+    costo_total         NUMERIC(15,4),
+    fecha_carga         TIMESTAMP DEFAULT NOW(),
+    UNIQUE (num_documento, num_renglon, producto_sk)
+);
+COMMENT ON TABLE edw.Fact_Transferencias IS 'Transferencias de mercadería entre bodegas, reconstruidas origen→destino.';

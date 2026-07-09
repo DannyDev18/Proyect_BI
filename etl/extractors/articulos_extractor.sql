@@ -9,11 +9,13 @@ SELECT
     NULL AS nombre_subclase,
     coduni AS unidad,
     NULL AS nombre_unidad,
-    precio AS precio_oficial,
-    ultcos AS costo_promedio,
+    prec01 AS precio_oficial,
+    ultcos AS costo_promedio,   -- OJO: 'ultcos' es el ÚLTIMO costo, no un promedio. El nombre de
+                                -- la columna del DW (dim_producto.costo_promedio) se conserva para no
+                                -- alterar el esquema. Ver docs/auditoria/02_reglas_negocio_validadas.md §9.
     estado,
     fecult
-FROM 
+FROM
     articulos
-WHERE 
-    codemp = '01';
+WHERE
+    codemp = '{CODEMP}';

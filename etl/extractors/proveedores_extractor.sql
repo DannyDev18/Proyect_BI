@@ -10,4 +10,4 @@ SELECT
 FROM 
     proveedores
 WHERE 
-    codemp = '01';
+    codemp = '{CODEMP}';

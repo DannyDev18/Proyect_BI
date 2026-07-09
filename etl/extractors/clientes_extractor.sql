@@ -18,4 +18,4 @@ SELECT
 FROM 
     clientes
 WHERE 
-    codemp = '01';
+    codemp = '{CODEMP}';

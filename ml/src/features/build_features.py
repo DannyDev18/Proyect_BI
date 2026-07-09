@@ -5,6 +5,19 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+# Feriados nacionales de fecha fija en Ecuador (Dim_Fecha.es_feriado nunca se puebla en el
+# EDW -- ver transformers/dim_tiempo.py: "Poblar con calendario local si fuera necesario" --
+# así que se aproxima aquí solo con los feriados de fecha fija; los móviles (Carnaval,
+# Viernes Santo) quedan fuera por simplicidad y son una mejora futura documentada.
+FERIADOS_ECUADOR_FECHA_FIJA = {(1, 1), (5, 1), (5, 24), (7, 24), (8, 10), (10, 9), (11, 2), (11, 3), (12, 25)}
+
+# Columnas exógenas que fetch_daily_sales() calcula del MISMO día que el target
+# (n_facturas/n_clientes se derivan de las mismas transacciones que y_sales_net).
+# Usarlas tal cual sería fuga de datos (en producción no se conocen hasta que el
+# día termina); se rezagan 1 día para que sean predictoras legítimas.
+COLUMNAS_EXOGENAS_CONTEMPORANEAS = ['n_clientes', 'n_facturas', 'pct_descuento_prom']
+
+
 class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
     """
     Genera Features de lags e informaciones temporales básicas.
@@ -56,6 +69,15 @@ class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
             X_out['quarter'] = X_out.index.quarter
             X_out['is_month_start'] = X_out.index.is_month_start.astype(int)
             X_out['is_month_end'] = X_out.index.is_month_end.astype(int)
+            X_out['es_feriado'] = [
+                1 if (d.month, d.day) in FERIADOS_ECUADOR_FECHA_FIJA else 0 for d in X_out.index
+            ]
+
+        # Rezagar 1 día las exógenas contemporáneas (evita fuga de datos: ver constante arriba).
+        for col in COLUMNAS_EXOGENAS_CONTEMPORANEAS:
+            if col in X_out.columns:
+                X_out[f'{col}_prev'] = X_out[col].shift(1)
+                X_out.drop(columns=[col], inplace=True)
 
         # Imputar los NaN resultantes del shift manteniendo soporte para groupbys temporales
         X_out = X_out.bfill().fillna(0)

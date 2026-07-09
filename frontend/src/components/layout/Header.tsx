@@ -14,11 +14,11 @@ export const Header = () => {
   };
 
   return (
-    <header className="h-16 border-b border-slate-800/60 bg-slate-950/40 backdrop-blur-md px-4 md:px-6 flex items-center justify-between sticky top-0 z-20">
+    <header className="h-16 border-b border-slate-800 bg-slate-950 px-4 md:px-6 flex items-center justify-between sticky top-0 z-20">
       <div className="flex items-center">
-        <button 
+        <button
           onClick={toggleSidebar}
-          className="md:hidden mr-4 p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors focus:outline-none"
+          className="md:hidden mr-4 p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors focus:outline-none cursor-pointer"
         >
           <Menu size={24} />
         </button>
@@ -31,9 +31,13 @@ export const Header = () => {
       </div>
 
       <div className="flex items-center space-x-4 md:space-x-6">
-        <button className="text-slate-400 hover:text-slate-200 transition-colors relative">
+        <button
+          disabled
+          aria-label="Notificaciones (próximamente)"
+          title="Notificaciones — próximamente"
+          className="text-slate-600 cursor-not-allowed"
+        >
           <Bell size={20} />
-          <span className="absolute top-0 right-0 w-2 h-2 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span>
         </button>
 
         <div className="h-8 w-px bg-slate-800"></div>
@@ -48,9 +52,9 @@ export const Header = () => {
           </div>
         </div>
         
-        <button 
+        <button
           onClick={handleLogout}
-          className="ml-2 sm:ml-4 p-2 text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all"
+          className="ml-2 sm:ml-4 p-2 text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all cursor-pointer"
           title="Logout"
         >
           <LogOut size={20} />

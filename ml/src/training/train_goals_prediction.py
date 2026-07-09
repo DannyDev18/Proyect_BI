@@ -18,7 +18,14 @@ def train_goals_prediction(df_raw: pd.DataFrame):
     # Sort chronologically to prevent Time Series Data Leakage
     df_raw = df_raw.sort_values(by=['anio', 'mes'])
     
-    features = [col for col in df_raw.columns if col not in ['y_ventas_futuras', 'id_vendedor_origen', 'sucursal', 'vendedor_sk', 'sucursal_sk']]
+    # 'estacionalidad_mes_objetivo' se excluye a propósito: en backtest, su versión cruda es
+    # colineal con 'indice_estacional_relativo' (que ya la normaliza contra el nivel actual)
+    # y degrada el R2 al combinarse (0.06 vs 0.17 solo con el índice). Ver
+    # ml/REPORTE_MEJORA_MODELOS.md.
+    features = [col for col in df_raw.columns if col not in [
+        'y_ventas_futuras', 'id_vendedor_origen', 'sucursal', 'vendedor_sk', 'sucursal_sk',
+        'estacionalidad_mes_objetivo',
+    ]]
     X = df_raw[features].fillna(0)
     y = df_raw['y_ventas_futuras'].fillna(1.0)
     

@@ -18,23 +18,3 @@ FROM
 WHERE 
     codemp = '01' AND estado = 'P'
 
-UNION ALL
-
-SELECT 
-    codemp,
-    numfac,
-    codcli,
-    codven,
-    codalm,
-    fecfac,
-    (totnet * -1) AS totnet,
-    (totdes * -1) AS totdes,
-    (totiva * -1) AS totiva,
-    (totfac * -1) AS totfac,
-    estado,
-    conpag,
-    establ
-FROM 
-    encabezadodevoluciones
-WHERE 
-    codemp = '01' AND estado = 'P';

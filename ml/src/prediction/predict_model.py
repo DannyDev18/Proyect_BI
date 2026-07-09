@@ -13,20 +13,22 @@ class MultiModelPredictor:
     """
     def __init__(self, models_dir: str = None):
         self.models_dir = models_dir or os.getenv("ML_MODELS_DIR", "/app/ml_models")
-        self.models_dir = models_dir
         self.models = {}
         self._load_models()
-        
+
     def _load_models(self):
-        """Carga perezosa/pesada inicial de los .pkl en memoria dict."""
+        """Carga perezosa/pesada inicial de los .pkl en memoria dict.
+        Los nombres de archivo deben coincidir con los que escriben los `save_*`
+        de cada `train_*` (ver src/training/): son el modelo GANADOR de la
+        competencia multi-algoritmo, no el RandomForest base."""
         model_files = {
-            'sales_rf': 'sales_rf_model.pkl',
-            'demand_rf': 'demand_rf_model.pkl',
-            'churn_rf': 'churn_classifier.pkl',
+            'sales_rf': 'sales_best_model.pkl',
+            'demand_rf': 'demand_best_model.pkl',
+            'churn_rf': 'churn_best_classifier.pkl',
             'segmentation': 'kmeans_rfm_model.pkl',
             'association': 'association_rules.pkl',
             'anomaly': 'isolation_forest_model.pkl',
-            'goals_rf': 'goals_rf_model.pkl'
+            'goals_rf': 'goals_best_model.pkl'
         }
         
         for key, filename in model_files.items():

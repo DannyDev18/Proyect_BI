@@ -1,49 +1,37 @@
+# connectors/test_sap.py — prueba de conectividad de SOLO LECTURA contra SAP SQL Anywhere.
+# Usa el mismo conector del pipeline (SQLAnywhereConnector), por lo que valida la ruta
+# real de conexión en ambos entornos:
+#   - Host Windows:  DB_DRIVER nativo ("SQL Anywhere NN")  → cadena ENG/DBN/Links
+#   - Contenedor:    DB_DRIVER=FreeTDS (docker-compose.yml) → cadena Server/Port/TDS 5.0
+# Ejecutar en Docker:  docker compose run --rm etl python connectors/test_sap.py
 import os
-import pyodbc
-from sqlalchemy import create_engine
-from dotenv import load_dotenv
+import sys
 
-# 1. Cargar las variables del archivo .env
-# Esto requiere python-dotenv
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-# 2. Leer las variables de entorno
-DB_DRIVER = os.getenv("DB_DRIVER", "SQL Anywhere 12")
-DB_SERVER = os.getenv("DB_SERVER")
-DB_DATABASE = os.getenv("DB_DATABASE")
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
+from config.settings import ETLConfig
+from connectors.sqlany_connector import SQLAnywhereConnector
 
-# 3. Construir la cadena de conexión
-CONN_STR = (
-    f"Driver={{{DB_DRIVER}}};"
-    f"ENG={DB_SERVER};"
-    f"DBN={DB_DATABASE};"
-    f"UID={DB_USER};"
-    f"PWD={DB_PASSWORD};"
-)
 
-if DB_HOST and DB_PORT:
-    CONN_STR += f"Links=tcpip(Host={DB_HOST};Port={DB_PORT});"
-
-def test_connection():
-    """Prueba la conexión directa con pyodbc."""
+def test_connection() -> bool:
+    cfg = ETLConfig()
+    sap = SQLAnywhereConnector(cfg)
+    masked = sap._conn_str.replace(cfg.DB_PASSWORD, "***") if cfg.DB_PASSWORD else sap._conn_str
+    print(f"Driver: {cfg.DB_DRIVER}")
+    print(f"Cadena de conexión: {masked}")
     try:
-        conn = pyodbc.connect(CONN_STR)
-        if conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT TOP 1 * FROM "dbo"."kardex"')
-            cursor.fetchone()
-            conn.close()
-            print("[OK] Conexión exitosa a la base de datos origen en SAP")
-            return True
-        return False
+        sap.connect()
+        df = sap.query_to_dataframe('SELECT TOP 1 * FROM "dbo"."kardex"')
+        print(f"[OK] Conexión exitosa a Producción (SELECT de solo lectura, {len(df)} fila).")
+        return True
     except Exception as e:
-        print(f"[Error] de conexión (pyodbc nativo): {e}")
+        print(f"[Error] de conexión: {e}")
         return False
+    finally:
+        sap.disconnect()
+
 
 if __name__ == "__main__":
     print("Probando conexión hacia SAP SQL Anywhere transaccional (Producción)...")
-    test_connection() 
+    ok = test_connection()
+    sys.exit(0 if ok else 1)

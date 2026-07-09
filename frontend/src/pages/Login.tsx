@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, User, ArrowRight, Building2, ShieldAlert } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
-import { authLogin, getMe } from '../services/api';
+import { authLogin, getMe } from '../services/auth';
 
 export const Login = () => {
   const [username, setUsername] = useState('');
@@ -55,13 +55,9 @@ export const Login = () => {
 
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center relative overflow-hidden font-sans">
-      {/* Background Orbs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-600/20 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-slate-800/40 rounded-full blur-[150px] pointer-events-none" />
-
-      <div className="w-full max-w-md relative z-10 p-8 sm:p-10 bg-slate-900/50 backdrop-blur-xl rounded-2xl border border-slate-800 shadow-2xl">
+      <div className="w-full max-w-md relative z-10 p-8 sm:p-10 bg-slate-900 rounded-2xl border border-slate-800">
         <div className="flex justify-center mb-8">
-          <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center shadow-[0_0_15px_rgba(59,130,246,0.15)]">
+          <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
             <Building2 className="text-blue-500 w-8 h-8" />
           </div>
         </div>

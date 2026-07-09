@@ -1,9 +1,7 @@
 import logging
-import os
-import joblib
-import pandas as pd
 from sklearn.metrics import classification_report, roc_auc_score
 from src.training.model_selector import find_best_classification_model
+from src.utils.model_export import save_artifact
 
 logger = logging.getLogger("ML.ChurnPrediction")
 
@@ -22,9 +20,8 @@ def train_churn_model(X_train, y_train):
     best_model = find_best_classification_model(X_train, y_train, cv_splits=3)
     return best_model
 
-def save_churn_model(model, filepath=None):
-    if filepath is None:
-        filepath = os.path.join(os.getenv("ML_MODELS_DIR", "./models"), "churn_best_classifier.pkl")
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    joblib.dump(model, filepath)
-    logger.info(f"Clasificador de Abandonos guardado en: {filepath}")
+def save_churn_model(model, filepath=None, metrics=None):
+    save_artifact(
+        model, "churn_best_classifier.pkl", filepath=filepath, metrics=metrics,
+        extra={"problema": "clasificacion_binaria", "target": "is_churn (recency > umbral)"},
+    )

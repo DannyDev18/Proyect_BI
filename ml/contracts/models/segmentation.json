@@ -1,0 +1,30 @@
+{
+  "name": "segmentation",
+  "version": "0.1.0",
+  "task": "clustering",
+  "status": "draft",
+  "features": [],
+  "target": {
+    "name": "",
+    "transform": null,
+    "inverse_transform": null,
+    "description": "No supervisado. K-Means, K=4 (RFM: recency, frequency, monetary_value), escalado con StandardScaler."
+  },
+  "output": {
+    "type": "cluster_id",
+    "unit": "",
+    "plausible_range": [0, 3]
+  },
+  "population_filter": {
+    "description": "Excluir cliente_sk = -1 (centinela 'desconocido'): hoy entra al RFM como un pseudo-cliente de valor monetario enorme y distorsiona los centroides (H-16, regla 12 de CLAUDE.md — los centinelas son para integridad referencial, no para análisis). Mismo filtro de estado/devolución vía dim_estado_documento (C-1).",
+    "sql_condition": "WHERE cliente_sk <> -1 AND <filtro dim_estado_documento>"
+  },
+  "library_versions": {},
+  "data_range": {},
+  "known_serving_mismatch": [
+    "H-02: el .pkl legacy es un dict {'model': KMeans, 'scaler': StandardScaler}; el backend llama .predict() sobre el dict -> AttributeError en el 100% de las llamadas. El artefacto reconstruido DEBE ser un único objeto sklearn.Pipeline([('scaler', StandardScaler()), ('kmeans', KMeans(...))]) con predict() autocontenido",
+    "H-12: K=4 fijo sin selección justificada más allá de silhouette logueado; las etiquetas de K-Means son arbitrarias entre corridas — el mapeo cluster_id -> nombre de negocio debe recalcularse ordenando por centroides (p.ej. monetary desc / recency asc) y persistirse en el meta.json, no hardcodearse en el backend",
+    "H-14: semántica RFM distinta entre entrenamiento (frequency = días distintos de compra, recency vs max del dataset) y serving (frequency = nº de facturas, recency vs now()) — debe unificarse en una sola definición compartida"
+  ],
+  "notes": "Contrato en blanco (features=[]) por D-2; en Fase 2/3 se fija la semántica RFM única y se documenta la elección de K (silhouette/elbow) en el reporte de reconstrucción."
+}

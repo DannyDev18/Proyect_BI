@@ -21,15 +21,15 @@ ORDER BY table_name;
 -- 3. Resumen y validación exhaustiva de Dimensiones vs Hechos esperadas
 WITH tablas_esperadas AS (
     SELECT unnest(ARRAY[
-        -- Dimensiones (11)
-        'dim_fecha', 'dim_sucursal', 'dim_almacen', 'dim_producto', 'dim_cliente', 
-        'dim_proveedor', 'dim_vendedor', 'dim_empleado', 'dim_usuario', 'dim_formapago', 
-        'dim_geografia',
+        -- Dimensiones (11; Dim_Geografia retirada en H4, Dim_Estado_Documento agregada en H9)
+        'dim_fecha', 'dim_sucursal', 'dim_almacen', 'dim_producto', 'dim_cliente',
+        'dim_proveedor', 'dim_vendedor', 'dim_empleado', 'dim_usuario', 'dim_formapago',
+        'dim_estado_documento',
         -- Hechos (11)
         'fact_ventas_detalles', 'fact_ventas_detalle', 'fact_inventario_snapshot', 'fact_movimientos_inventario',
         'fact_compras', 'fact_cobros_cxc', 'fact_pagos_cxp', 'fact_nomina', 
-        'fact_movimientos_caja', 'fact_metas_comerciales', 'fact_logs_auditoria', 
-        'fact_devoluciones', 'etl_control'
+        'fact_movimientos_caja', 'fact_metas_comerciales', 'fact_logs_auditoria',
+        'fact_devoluciones', 'fact_transferencias', 'etl_control'
     ]) AS tabla
 ),
 tablas_existentes AS (

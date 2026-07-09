@@ -12,4 +12,4 @@ SELECT
 FROM 
     nom_empleados
 WHERE 
-    codemp = '01';
+    codemp = '{CODEMP}';

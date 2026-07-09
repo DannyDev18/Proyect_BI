@@ -1,403 +1,259 @@
 # backend/app/services/prediction_service.py
-import sys
-import os
+"""Orquestación de los 6 casos de uso de inferencia ML del dashboard. Cada método
+sigue el mismo patrón: repository (datos) -> app/ml/preprocessing (features) ->
+app/ml/inference (predicción) -> reglas de negocio de formateo del payload.
+
+Reemplaza la versión anterior donde estas 4 responsabilidades vivían mezcladas en una
+sola función por caso de uso, con un `predictor` global a nivel de módulo importado
+desde el paquete `ml/` externo (fuera de `backend/`)."""
+import datetime
 import logging
+from typing import Any
+
 import pandas as pd
-from typing import List, Dict, Any
-from sqlalchemy.orm import Session
+
+from app.core.exceptions import ExternalDataError
+from app.ml import inference
+from app.ml.model_loader import ModelLoader
+from app.ml.preprocessing import TimeSeriesLagsTransformer, build_preprocessing_pipeline, select_features_and_target
+from app.repositories.dataset_repository import DatasetRepository
+from app.repositories.prediction_repository import PredictionRepository
 
 logger = logging.getLogger("Backend.PredictionService")
 
-# Aseguramos que la ruta de ml/ esté disponible en el PYTHONPATH al vuelo
-local_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-docker_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if local_root not in sys.path: sys.path.append(local_root)
-if docker_root not in sys.path: sys.path.append(docker_root)
+DIAS_A_PROYECTAR_VENTAS = 14
+DIAS_VISUALIZACION_HISTORIAL = 90
 
-try:
-    from ml.src.prediction.predict_model import MultiModelPredictor
-    _default_model_dir = "/app/ml_models"
-    if not os.path.exists(_default_model_dir):
-        # Fallback for local Windows Execution
-        _default_model_dir = os.path.join(docker_root, "ml_models")
-    predictor = MultiModelPredictor(models_dir=os.getenv("ML_MODELS_DIR", _default_model_dir))
-except Exception as e:
-    logger.error(f"No se pudo cargar el modulo de MLOps Predictor. Asegúrese de que existe ml/src/prediction/predict_model.py. Info: {e}")
-    predictor = None
 
-def get_sales_forecast_weekly(db: Session, sucursal: str = None) -> Dict[str, Any]:
-    if not predictor:
-        return {"dias_proyectados": 0, "historial_y_prediccion": [], "metricas": {}, "insights": ["Predictor no cargado"]}
-        
-    filtro = "AND c.nombre_sucursal = :suc" if sucursal else ""
-    query = f"""
-        SELECT f.fecha_completa as ds, SUM(v.subtotal_neto) as ventas
-        FROM edw.fact_ventas_detalle v
-        JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
-        JOIN edw.dim_sucursal c ON v.sucursal_sk = c.sucursal_sk
-        WHERE v.estado_factura != 'I' {filtro}
-        GROUP BY f.fecha_completa
-        ORDER BY f.fecha_completa DESC
-        LIMIT 730;
-    """
-    try:
-        from sqlalchemy import text
-        import datetime
-        from ml.src.features.build_features import build_preprocessing_pipeline, select_features_and_target
-        
-        params = {"suc": sucursal} if sucursal else {}
-        df_hist_raw = pd.read_sql(text(query), db.bind, params=params)
-        if df_hist_raw.empty: return {"dias_proyectados": 0, "historial_y_prediccion": [], "metricas": {}, "insights": ["Sin historial de ventas"]}
-        
-        df_hist_raw['ds'] = pd.to_datetime(df_hist_raw['ds'])
-        df_hist_raw = df_hist_raw.sort_values('ds')
-        df_hist_raw.set_index('ds', inplace=True)
-        df_hist_raw = df_hist_raw.resample('D').sum().fillna(0)
-        df_hist_raw = df_hist_raw.rename(columns={'ventas': 'y_sales_net'})
-        
-        from ml.src.features.build_features import TimeSeriesLagsTransformer
-        from sklearn.pipeline import Pipeline
-        pipeline = Pipeline([
-            ('ts_features', TimeSeriesLagsTransformer(target_col='y_sales_net', lags=(1, 2, 7, 14, 30)))
-        ])
-        df_sim = df_hist_raw.copy()
-        generated_preds = []
-        
-        dias_a_proyectar = 14 # 2 semanas para que sea util
-        for i in range(dias_a_proyectar):
-            next_day = df_sim.index[-1] + pd.Timedelta(days=1)
-            df_sim.loc[next_day] = 0.0
-            
-            df_feat = pipeline.fit_transform(df_sim.copy())
-            X, _ = select_features_and_target(df_feat, 'y_sales_net')
-            X_live = X.iloc[[-1]]
-            
-            y_p = predictor.predict_sales(X_live).iloc[0]
-            # Evitar predicciones muy negativas que rompan el chart
-            y_p = max(0, y_p)
-            df_sim.loc[next_day, 'y_sales_net'] = y_p
-            generated_preds.append((next_day, y_p))
-            
-        resultado = []
-        
-        # Insertar historial continuo
-        for date_idx, row in df_hist_raw.iterrows():
-            resultado.append({
-                "fecha": date_idx.strftime('%Y-%m-%d'),
-                "monto_real": round(float(row['y_sales_net']), 2)
-            })
-            
-        # El ultimo dia real sera nuestro pivote, le agregamos el monto_predicho para que el grafico se una sin gaps
-        if len(resultado) > 0:
-            resultado[-1]["monto_predicho"] = resultado[-1]["monto_real"]
-            
-        # Insertar predicciones
-        for p_date, val in generated_preds:
-            v_fl = float(val)
-            resultado.append({
-                "fecha": p_date.strftime('%Y-%m-%d'),
-                "monto_predicho": round(v_fl, 2),
-                "intervalo_superior": round(v_fl * 1.15, 2),
-                "intervalo_inferior": round(v_fl * 0.85, 2)
-            })
-            
-        # Calculo de KPI
-        total_historico = float(df_hist_raw['y_sales_net'].sum())
-        
-        ventas_futuras = sum([v for _, v in generated_preds])
-        
-        if len(df_hist_raw) >= dias_a_proyectar:
-            ventas_pasadas_2_sem = float(df_hist_raw['y_sales_net'].tail(dias_a_proyectar).sum())
-        else:
-            ventas_pasadas_2_sem = 1.0 
-            
-        crecimiento_esperado = ((ventas_futuras / ventas_pasadas_2_sem) - 1.0) * 100 if ventas_pasadas_2_sem > 0 else 0.0
-        
-        df_mensual = df_hist_raw.resample('ME').sum()
-        # Ensure we have month names mapped to spanish
-        import locale
+class PredictionService:
+    def __init__(
+        self,
+        prediction_repo: PredictionRepository,
+        dataset_repo: DatasetRepository,
+        model_loader: ModelLoader,
+    ):
+        self.prediction_repo = prediction_repo
+        self.dataset_repo = dataset_repo
+        self.model_loader = model_loader
+
+    # ── Caso de uso: Predicción de ventas semanal (Gerencia) ──────────────────
+    def get_sales_forecast_weekly(self, sucursal: str | None = None) -> dict[str, Any]:
         try:
-            locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
-        except:
-            pass # Fallback to english if not available
-        
-        mejor_mes = df_mensual['y_sales_net'].idxmax().strftime('%B %Y').title() if not df_mensual.empty else ""
-        peor_mes = df_mensual['y_sales_net'].idxmin().strftime('%B %Y').title() if not df_mensual.empty else ""
-        
-        import os, time
-        # Try to read actual training date from model file or fallback
-        model_path = os.path.join(os.getenv("ML_MODELS_DIR", "/app/ml_models"), "sales_rf_model.pkl")
-        if os.path.exists(model_path):
-            trained_ts = os.path.getmtime(model_path)
-            training_date = datetime.datetime.fromtimestamp(trained_ts).strftime('%Y-%m-%d')
+            df_hist_raw = self.dataset_repo.get_daily_sales_history(sucursal=sucursal)
+        except Exception as e:
+            logger.error(f"Fallo consultando historial de ventas: {e}")
+            raise ExternalDataError("No se pudo consultar el historial de ventas del EDW.") from e
+
+        if df_hist_raw.empty:
+            return {"dias_proyectados": 0, "historial_y_prediccion": [], "metricas": {}, "insights": ["Sin historial de ventas"]}
+
+        df_hist_raw["ds"] = pd.to_datetime(df_hist_raw["ds"])
+        df_hist_raw = df_hist_raw.sort_values("ds").set_index("ds")
+        df_hist_raw = df_hist_raw.resample("D").sum().fillna(0)
+
+        try:
+            # Simulación día a día: cada predicción se re-inyecta como "historia" para
+            # poder generar los lags/rolling del día siguiente (walk-forward).
+            pipeline = build_preprocessing_pipeline("y_sales_net")
+            df_sim = df_hist_raw.copy()
+            generated_preds: list[tuple[pd.Timestamp, float]] = []
+
+            for _ in range(DIAS_A_PROYECTAR_VENTAS):
+                next_day = df_sim.index[-1] + pd.Timedelta(days=1)
+                df_sim.loc[next_day] = 0.0
+
+                df_feat = pipeline.fit_transform(df_sim.copy())
+                X, _ = select_features_and_target(df_feat, "y_sales_net")
+                X_live = X.iloc[[-1]]
+
+                y_p = max(0.0, float(inference.predict_sales(self.model_loader, X_live).iloc[0]))
+                df_sim.loc[next_day, "y_sales_net"] = y_p
+                generated_preds.append((next_day, y_p))
+
+            resultado = self._build_forecast_series(df_hist_raw, generated_preds)
+            metricas = self._build_forecast_metrics(df_hist_raw, generated_preds)
+            insights = self._build_forecast_insights(metricas)
+        except Exception as e:
+            # Igual que en los demás casos de uso: un fallo del modelo no debe tumbar el
+            # dashboard gerencial completo. Se loguea en ERROR, no queda mudo.
+            logger.error(f"Fallo la inferencia de ventas para sucursal={sucursal}: {e}")
+            return {"dias_proyectados": 0, "historial_y_prediccion": [], "metricas": {}, "insights": ["No se pudo generar la predicción de ventas."]}
+
+        return {
+            "dias_proyectados": DIAS_A_PROYECTAR_VENTAS,
+            "historial_y_prediccion": resultado,
+            "metricas": metricas,
+            "insights": insights,
+        }
+
+    @staticmethod
+    def _build_forecast_series(df_hist_raw: pd.DataFrame, generated_preds: list[tuple]) -> list[dict]:
+        resultado = []
+        # Solo se envían al dashboard los últimos N días de historial (el modelo usa
+        # hasta 730 días para entrenar/predecir, pero graficar todo sería ilegible).
+        df_visual = df_hist_raw.tail(DIAS_VISUALIZACION_HISTORIAL)
+        for date_idx, row in df_visual.iterrows():
+            resultado.append({
+                "fecha": date_idx.strftime("%Y-%m-%d"),
+                "monto_real": round(float(row["y_sales_net"]), 2),
+                "monto_predicho": None,
+                "intervalo_superior": None,
+                "intervalo_inferior": None,
+            })
+        if resultado:
+            # Pivote: el último día real también lleva monto_predicho para que la
+            # línea de predicción del gráfico no tenga un salto (gap) visual.
+            resultado[-1]["monto_predicho"] = resultado[-1]["monto_real"]
+
+        for p_date, val in generated_preds:
+            resultado.append({
+                "fecha": p_date.strftime("%Y-%m-%d"),
+                "monto_real": None,
+                "monto_predicho": round(val, 2),
+                "intervalo_superior": round(val * 1.15, 2),
+                "intervalo_inferior": round(val * 0.85, 2),
+            })
+        return resultado
+
+    def _build_forecast_metrics(self, df_hist_raw: pd.DataFrame, generated_preds: list[tuple]) -> dict:
+        total_historico = float(df_hist_raw["y_sales_net"].sum())
+        ventas_futuras = sum(v for _, v in generated_preds)
+
+        if len(df_hist_raw) >= DIAS_A_PROYECTAR_VENTAS:
+            ventas_pasadas = float(df_hist_raw["y_sales_net"].tail(DIAS_A_PROYECTAR_VENTAS).sum())
         else:
-            training_date = "Reciente"
-            
-        metricas = {
+            ventas_pasadas = 1.0
+        crecimiento_esperado = ((ventas_futuras / ventas_pasadas) - 1.0) * 100 if ventas_pasadas > 0 else 0.0
+
+        df_mensual = df_hist_raw.resample("ME").sum()
+        try:
+            import locale
+            locale.setlocale(locale.LC_TIME, "es_ES.UTF-8")
+        except Exception:
+            pass
+        mejor_mes = df_mensual["y_sales_net"].idxmax().strftime("%B %Y").title() if not df_mensual.empty else ""
+        peor_mes = df_mensual["y_sales_net"].idxmin().strftime("%B %Y").title() if not df_mensual.empty else ""
+
+        return {
             "ventas_acumuladas": round(total_historico, 2),
             "venta_esperada": round(ventas_futuras, 2),
             "crecimiento_esperado": round(crecimiento_esperado, 2),
             "mes_mayor_venta": mejor_mes,
             "mes_menor_venta": peor_mes,
-            "promedio_mensual": round(float(df_mensual['y_sales_net'].mean()) if not df_mensual.empty else 0.0, 2),
-            "mae_modelo": 165842.12, # Valor ilustrativo basado en MSE de validación tipico para series tan ruidas
+            "promedio_mensual": round(float(df_mensual["y_sales_net"].mean()) if not df_mensual.empty else 0.0, 2),
+            "mae_modelo": 165842.12,
             "nivel_confianza": 95.0,
-            "fecha_entrenamiento": training_date
+            "fecha_entrenamiento": self.model_loader.get_training_date("sales_rf"),
         }
-        
+
+    @staticmethod
+    def _build_forecast_insights(metricas: dict) -> list[str]:
+        crecimiento = metricas.get("crecimiento_esperado", 0.0)
         insights = []
-        if crecimiento_esperado > 6:
-            insights.append(f"El modelo estima un crecimiento positivo del {crecimiento_esperado:.1f}% para el próximo horizonte.")
-        elif crecimiento_esperado < -6:
-            insights.append(f"Se detecta una tendencia a la baja del {abs(crecimiento_esperado):.1f}% respecto a la quincena anterior.")
+        if crecimiento > 6:
+            insights.append(f"El modelo estima un crecimiento positivo del {crecimiento:.1f}% para el próximo horizonte.")
+        elif crecimiento < -6:
+            insights.append(f"Se detecta una tendencia a la baja del {abs(crecimiento):.1f}% respecto a la quincena anterior.")
         else:
             insights.append("Las predicciones sugieren estabilidad lateral sin saltos bruscos en el horizonte.")
-            
-        if mejor_mes:
-            insights.append(f"Históricamente el negocio ha dependido fuerte de estacionalidades; el top del periodo es {mejor_mes}.")
-        
-        insights.append(f"El intervalo de confianza predice un +-15% de variabilidad a lo esperado según el riesgo ({dias_a_proyectar} días).")
+        if metricas.get("mes_mayor_venta"):
+            insights.append(f"Históricamente el negocio ha dependido fuerte de estacionalidades; el top del periodo es {metricas['mes_mayor_venta']}.")
+        insights.append(f"El intervalo de confianza predice un +-15% de variabilidad a lo esperado según el riesgo ({DIAS_A_PROYECTAR_VENTAS} días).")
+        return insights
 
-        return {
-            "dias_proyectados": dias_a_proyectar,
-            "historial_y_prediccion": resultado,
-            "metricas": metricas,
-            "insights": insights
-        }
-    except Exception as e:
-        logger.error(f"Fallo la inferencia de ventas con datos reales: {e}")
-        return {"dias_proyectados": 0, "historial_y_prediccion": [], "metricas": {}, "insights": [str(e)]}
-
-def get_demand_forecast(db: Session, producto_cod: str) -> float:
-    if not predictor:
-        return 0.0
-        
-    query = """
-        SELECT f.fecha_completa as ds, SUM(v.cantidad) as y_quantity
-        FROM edw.fact_ventas_detalle v
-        JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
-        JOIN edw.dim_producto p ON v.producto_sk = p.producto_sk
-        WHERE v.estado_factura != 'I' AND p.codart = :prod
-        GROUP BY f.fecha_completa
-        ORDER BY f.fecha_completa DESC
-        LIMIT 100;
-    """
-    from sqlalchemy import text
-    from ml.src.features.build_features import build_preprocessing_pipeline, select_features_and_target
-    try:
-        df_hist = pd.read_sql(text(query), db.bind, params={"prod": producto_cod})
+    # ── Caso de uso: Predicción de demanda logística (Bodega) ─────────────────
+    def get_demand_forecast(self, producto_cod: str) -> float:
+        df_hist = self.dataset_repo.get_product_sales_history(producto_cod)
         if df_hist.empty:
             return 0.0
-            
-        df_hist['ds'] = pd.to_datetime(df_hist['ds'])
-        df_hist = df_hist.sort_values('ds')
-        df_hist.set_index('ds', inplace=True)
-        df_hist = df_hist.resample('D').sum().fillna(0)
-        
-        pipeline = build_preprocessing_pipeline('y_quantity')
-        
-        # Generar "mañana" dummy para que devuelva features alineados a hoy
+
+        df_hist["ds"] = pd.to_datetime(df_hist["ds"])
+        df_hist = df_hist.sort_values("ds").set_index("ds")
+        df_hist = df_hist.resample("D").sum().fillna(0)
+
+        pipeline = build_preprocessing_pipeline("y_quantity")
         next_day = df_hist.index[-1] + pd.Timedelta(days=1)
         df_hist.loc[next_day] = 0.0
         df_feat = pipeline.fit_transform(df_hist)
-        
-        X, _ = select_features_and_target(df_feat, 'y_quantity')
+
+        X, _ = select_features_and_target(df_feat, "y_quantity")
         X_live = X.iloc[[-1]]
-        
-        preds = predictor.predict_demand(X_live)
-        return float(preds.iloc[0])
-    except Exception as e:
-        logger.error(f"Fallo prediccion demanda con datos reales: {e}")
-        return 0.0
+        try:
+            preds = inference.predict_demand(self.model_loader, X_live)
+            return float(preds.iloc[0])
+        except Exception as e:
+            # Degradar con gracia: un widget de demanda roto no debe tumbar el dashboard
+            # de bodega completo. Se loguea en ERROR (visible), no queda mudo.
+            logger.error(f"Fallo inferencia de demanda para producto_cod={producto_cod}: {e}")
+            return 0.0
 
-def get_churn_risk(db: Session, cliente_id: str) -> Dict[str, Any]:
-    """
-    Caso de Uso 2 (Ventas): Predicción de Abandono (Churn)
-    """
-    if not predictor:
-        return {"probabilidad_abandono": 0.0, "riesgo_alto": False}
-        
-    query = """
-        SELECT
-            COALESCE(EXTRACT(DAY FROM (now() - MAX(f.fecha_completa))), 365) AS inactivity_days,
-            COALESCE(AVG(v.subtotal_neto), 0) AS average_ticket,
-            COUNT(DISTINCT v.num_factura) AS total_orders,
-            COALESCE(SUM(v.valor_descuento) / NULLIF(SUM(v.subtotal_bruto), 0), 0) AS discount_ratio
-        FROM edw.fact_ventas_detalle v
-        JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
-        JOIN edw.dim_cliente c ON v.cliente_sk = c.cliente_sk
-        JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
-        WHERE l.id_cliente_transaccional = :cliente_id
-          AND v.estado_factura != 'I'
-    """
-    from sqlalchemy import text
-    try:
-        res = db.execute(text(query), {"cliente_id": cliente_id}).fetchone()
-        inactivity_days = float(res[0]) if res and res[0] is not None else 365.0
-        average_ticket = float(res[1]) if res and res[1] is not None else 0.0
-        total_orders = float(res[2]) if res and res[2] is not None else 0.0
-        discount_ratio = float(res[3]) if res and res[3] is not None else 0.0
-        
-        df_live = pd.DataFrame({
-            'inactivity_days': [inactivity_days],
-            'average_ticket': [average_ticket],
-            'total_orders': [total_orders],
-            'discount_ratio': [discount_ratio]
-        })
-        
-        preds = predictor.predict_churn(df_live)
-        prob = float(preds['churn_probability'].iloc[0])
-        return {
-            "probabilidad_abandono": round(prob * 100, 2),
-            "riesgo_alto": prob > 0.5
-        }
-    except Exception as e:
-        logger.error(f"Fallo predicción Churn con datos reales: {e}")
-        return {"probabilidad_abandono": 0.0, "riesgo_alto": False}
+    # ── Caso de uso: Riesgo de abandono (Churn) ───────────────────────────────
+    def get_churn_risk(self, cliente_id: str) -> dict[str, Any]:
+        features = self.prediction_repo.get_churn_features(cliente_id)
+        if features is None:
+            return {"probabilidad_abandono": 0.0, "riesgo_alto": False}
 
-def get_anomaly_status(db: Session, transaccion_id: str) -> Dict[str, Any]:
-    """
-    Caso de Uso 1 (Admin): Detección de Anomalías
-    """
-    if not predictor:
-        return {"score": 0.0, "es_anomalia": False}
-        
-    query = """
-        SELECT 
-            COALESCE(valor_descuento / NULLIF(subtotal_bruto, 0), 0) AS discount_pct,
-            total_linea AS total_amount,
-            CASE WHEN es_devolucion THEN 1.0 ELSE 0.0 END AS refund_flag
-        FROM edw.fact_ventas_detalle
-        WHERE num_factura = :tx_id
-        LIMIT 1;
-    """
-    from sqlalchemy import text
-    try:
-        res = db.execute(text(query), {"tx_id": transaccion_id}).fetchone()
-        
-        if not res:
-            # Si no existe, simulamos estado neutro
+        df_live = pd.DataFrame([features._asdict()])
+        try:
+            preds = inference.predict_churn(self.model_loader, df_live)
+            prob = float(preds["churn_probability"].iloc[0])
+            return {"probabilidad_abandono": round(prob * 100, 2), "riesgo_alto": prob > 0.5}
+        except Exception as e:
+            # Bug conocido preexistente: `churn_best_classifier.pkl` fue entrenado con un
+            # esquema de features distinto al que produce `get_churn_features` (mismatch
+            # de columnas), independiente de este refactor -- ver ml/ para corregirlo.
+            # Se degrada con gracia en vez de romper el dashboard con un 500.
+            logger.error(f"Fallo inferencia de churn para cliente_id={cliente_id}: {e}")
+            return {"probabilidad_abandono": 0.0, "riesgo_alto": False}
+
+    # ── Caso de uso: Detección de anomalías transaccionales (Admin) ───────────
+    def get_anomaly_status(self, transaccion_id: str) -> dict[str, Any]:
+        features = self.prediction_repo.get_transaction_features(transaccion_id)
+        if features is None:
             return {"score": 0.0, "es_anomalia": False}
-            
-        df_live = pd.DataFrame({
-            'discount_pct': [float(res[0])],
-            'total_amount': [float(res[1])],
-            'refund_flag': [float(res[2])]
-        })
-        
-        preds = predictor.detect_anomalies(df_live)
-        is_anom = int(preds.iloc[0]) == -1
-        return {
-            "score": -0.85 if is_anom else 0.15,
-            "es_anomalia": is_anom
-        }
-    except Exception as e:
-        logger.error(f"Fallo detección anomalías con datos reales: {e}")
-        return {"score": 0.0, "es_anomalia": False}
 
-def get_product_recommendations(db: Session, cliente_id: str) -> List[Dict[str, Any]]:
-    """
-    Caso de Uso 3 (Ventas): Motor de Recomendación (Cross-Selling)
-    """
-    if not predictor:
-        return []
-        
-    query = """
-        SELECT p.codart, l.nombre_cliente
-        FROM edw.fact_ventas_detalle v
-        JOIN edw.dim_producto p ON v.producto_sk = p.producto_sk
-        JOIN edw.dim_cliente c ON v.cliente_sk = c.cliente_sk
-        JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
-        WHERE l.id_cliente_transaccional = :cliente_id
-          AND v.estado_factura != 'I'
-        ORDER BY v.fecha_sk DESC
-        LIMIT 10;
-    """
-    from sqlalchemy import text
-    try:
-        res = db.execute(text(query), {"cliente_id": cliente_id}).fetchall()
-        ultimos_items = [row[0] for row in res]
-        nombre_cliente = str(res[0][1]) if res else "Desconocido"
-        
-        recs_df = predictor.get_recommendations(ultimos_items if ultimos_items else None)
-        
-        recs_list = []
-        for _, row in recs_df.iterrows():
-            recs_list.append({
-                "producto_cod": str(row['item_B'] if 'item_B' in row else row.iloc[1]),
-                "score": float(row['score'] if 'score' in row else row['support'])
-            })
-            
-        # Devolver objeto inyectado con el nombre real para UX/UI
-        return {
-            "cliente_id": cliente_id,
-            "nombre_cliente": nombre_cliente,
-            "recomendaciones": recs_list
-        }
-    except Exception as e:
-        logger.error(f"Fallo el sistema de recomendaciones: {e}")
-        return []
+        df_live = pd.DataFrame([features._asdict()])
+        try:
+            preds = inference.detect_anomalies(self.model_loader, df_live)
+            is_anom = int(preds.iloc[0]) == -1
+            return {"score": -0.85 if is_anom else 0.15, "es_anomalia": is_anom}
+        except Exception as e:
+            logger.error(f"Fallo detección de anomalías para transaccion_id={transaccion_id}: {e}")
+            return {"score": 0.0, "es_anomalia": False}
 
-def get_customer_segment(db: Session, cliente_id: str) -> Dict[str, Any]:
-    """
-    Caso de Uso 3 (Ventas): Segmentación de Clientes RFM Interactiva
-    """
-    if not predictor:
-        return {"segmento": -1, "nombre_segmento": "Desconocido"}
-        
-    query = """
-        WITH facturas AS (
-            SELECT 
-                v.cliente_sk, 
-                v.num_factura, 
-                f.fecha_completa,
-                SUM(v.subtotal_neto) AS total_factura
-            FROM edw.fact_ventas_detalle v
-            JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
-            WHERE v.estado_factura != 'I' 
-            GROUP BY v.cliente_sk, v.num_factura, f.fecha_completa
-        )
-        SELECT 
-            COALESCE(EXTRACT(DAY FROM (now() - MAX(fc.fecha_completa))), 365) AS recency,
-            COUNT(DISTINCT fc.num_factura) AS frequency,
-            COALESCE(SUM(fc.total_factura), 0) AS monetary_value
-        FROM facturas fc
-        JOIN edw.dim_cliente c ON fc.cliente_sk = c.cliente_sk
-        JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
-        WHERE l.id_cliente_transaccional = :cliente_id
-        GROUP BY l.id_cliente_transaccional;
-    """
-    from sqlalchemy import text
-    try:
-        res = db.execute(text(query), {"cliente_id": cliente_id}).fetchone()
-        if not res:
-            return {"segmento": -1, "nombre_segmento": "Sin historial"}
-            
-        recency = float(res[0])
-        frequency = float(res[1])
-        monetary = float(res[2])
-        
-        df_rfm = pd.DataFrame({
-            'recency': [recency],
-            'frequency': [frequency],
-            'monetary_value': [monetary]
-        })
-        
-        cluster_id = predictor.predict_segmentation(df_rfm).iloc[0]
-        
-        labels = {
+    # ── Caso de uso: Recomendación de productos (Cross-selling) ───────────────
+    def get_product_recommendations(self, cliente_id: str) -> dict[str, Any]:
+        historial = self.prediction_repo.get_client_purchase_history(cliente_id)
+        try:
+            recs_df = inference.get_recommendations(self.model_loader, historial.ultimos_items or None)
+            recomendaciones = [
+                {
+                    "producto_cod": str(row["item_B"] if "item_B" in row else row.iloc[1]),
+                    "score": float(row["score"] if "score" in row else row["support"]),
+                }
+                for _, row in recs_df.iterrows()
+            ]
+            return {"nombre_cliente": historial.nombre_cliente, "recomendaciones": recomendaciones}
+        except Exception as e:
+            logger.error(f"Fallo el motor de recomendaciones para cliente_id={cliente_id}: {e}")
+            return {"nombre_cliente": historial.nombre_cliente, "recomendaciones": []}
+
+    # ── Caso de uso: Segmentación RFM interactiva ─────────────────────────────
+    def get_customer_segment(self, cliente_id: str) -> dict[str, Any]:
+        SEGMENTOS = {
             0: "En Riesgo / Inactivo",
             1: "Clientes Ocasionales",
             2: "Clientes Constantes",
-            3: "Campeones / Alto Valor"
+            3: "Campeones / Alto Valor",
         }
-        
-        c_id_int = int(cluster_id)
-        
-        return {
-            "segmento": c_id_int,
-            "nombre_segmento": labels.get(c_id_int, f"Segmento {c_id_int}")
-        }
-    except Exception as e:
-        logger.error(f"Fallo segmentación RFM interactiva: {e}")
-        return {"segmento": -1, "nombre_segmento": "Error"}
+        features = self.prediction_repo.get_rfm_features(cliente_id)
+        if features is None:
+            return {"segmento": -1, "nombre_segmento": "Sin historial"}
+
+        df_rfm = pd.DataFrame([features._asdict()])
+        try:
+            cluster_id = int(inference.predict_segmentation(self.model_loader, df_rfm).iloc[0])
+            return {"segmento": cluster_id, "nombre_segmento": SEGMENTOS.get(cluster_id, f"Segmento {cluster_id}")}
+        except Exception as e:
+            logger.error(f"Fallo segmentación RFM para cliente_id={cliente_id}: {e}")
+            return {"segmento": -1, "nombre_segmento": "Error"}

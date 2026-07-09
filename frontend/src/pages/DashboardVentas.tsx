@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import { Target, Users, TrendingDown, BarChart2 } from 'lucide-react';
-import { useSalesGoals, useChurnRisk, useRecommendations, useCustomerSegment } from '../hooks/useAnalytics';
+import { useSalesGoals, useChurnRisk, useRecommendations, useCustomerSegment } from '../hooks/ventas';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
 import { SearchInput } from '../components/ui/SearchInput';
 import { GlobalBranchSelector } from '../components/ui/GlobalBranchSelector';
 import { useAuthStore } from '../store/authStore';
-
-const pct = (n: number) => `${n.toFixed(1)}%`;
+import { pct } from '../utils/format';
 
 // ─── Gauge: churn probability bar ────────────────────────────────────────────
 const ChurnGauge = ({ prob }: { prob: number }) => {
@@ -93,7 +92,7 @@ export const DashboardVentas = () => {
 
       {/* Buscador de cliente */}
       <div className="card p-6 animate-fade-in-up stagger-1">
-        <h3 className="font-display font-semibold text-slate-200 mb-4">Análisis Individual de Cliente</h3>
+        <h3 className="font-sans font-semibold text-slate-200 mb-4">Análisis Individual de Cliente</h3>
         <SearchInput
           placeholder="Ingresa el ID del cliente (ej: CLI-00123)"
           onSearch={handleSearch}

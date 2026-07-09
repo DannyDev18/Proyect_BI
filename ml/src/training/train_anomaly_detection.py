@@ -1,8 +1,7 @@
 # ml/src/training/train_anomaly_detection.py
 import logging
-import os
-import joblib
 from sklearn.ensemble import IsolationForest
+from src.utils.model_export import save_artifact
 
 logger = logging.getLogger("ML.AnomalyDetection")
 
@@ -30,9 +29,8 @@ def train_isolation_forest(X_train, contamination=0.01):
     
     return model
 
-def save_anomaly_model(model, filepath=None):
-    if filepath is None:
-        filepath = os.path.join(os.getenv("ML_MODELS_DIR", "./models"), "isolation_forest_model.pkl")
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    joblib.dump(model, filepath)
-    logger.info(f"Filtro de Anomalías guardado en: {filepath}")
+def save_anomaly_model(model, filepath=None, metrics=None):
+    save_artifact(
+        model, "isolation_forest_model.pkl", filepath=filepath, metrics=metrics,
+        extra={"problema": "deteccion_anomalias_no_supervisada"},
+    )

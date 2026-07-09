@@ -1,0 +1,29 @@
+{
+  "name": "recommendation",
+  "version": "0.1.0",
+  "task": "recommendation",
+  "status": "draft",
+  "features": [],
+  "target": {
+    "name": "",
+    "transform": null,
+    "inverse_transform": null,
+    "description": "No supervisado. Reglas de asociación (market basket) sobre canastas agrupadas por num_factura (ahora VARCHAR(20) en el nuevo EDW). Deben ser direccionales (A->B y B->A) con confidence y lift, no solo soporte simétrico — usar mlxtend.association_rules, ya declarado en ml/requirements.txt."
+  },
+  "output": {
+    "type": "rules",
+    "unit": "",
+    "plausible_range": null
+  },
+  "population_filter": {
+    "description": "SQL legacy inválido contra el nuevo esquema: fetch_market_basket filtra 'WHERE NOT fvd.es_devolucion', columna eliminada de fact_ventas_detalle (migró a dim_estado_documento, cambio C-1). Debe reescribirse como JOIN.",
+    "sql_condition": "TBD en Fase 2: JOIN edw.dim_estado_documento ... WHERE NOT es_devolucion"
+  },
+  "library_versions": {},
+  "data_range": {},
+  "known_serving_mismatch": [
+    "H-10: reglas legacy simétricas ordenadas alfabéticamente, solo con soporte (sin confidence/lift); backend/app/ml/inference.py::get_recommendations filtra solo rules['item_A'].isin(historial) -> pierde ~50% de las recomendaciones donde el ítem comprado quedó como item_B",
+    "H-10: entrenamiento legacy usa nombre_articulo pero el response del backend espera producto_cod — el contrato debe fijar codart como clave, con el nombre solo para display"
+  ],
+  "notes": "Contrato en blanco (features=[]) por D-2 — aquí 'features' se interpreta como el esquema del DataFrame de salida de reglas (item_A, item_B, support, confidence, lift), no como columnas de entrada a un estimador supervisado; se completa en Fase 2/3."
+}

@@ -4,12 +4,12 @@ from typing import Generator, Annotated
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
-from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
-from app.db.session import SessionLocal
+from app.database.session import SessionLocal
 from app.models.user import User
+from app.schemas.token import TokenPayload
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,6 @@ def get_db() -> Generator:
 # Tipos anotados para inyección de dependencias
 SessionDep = Annotated[Session, Depends(get_db)]
 TokenDep = Annotated[str, Depends(reusable_oauth2)]
-
-
-class TokenPayload(BaseModel):
-    sub: str | None = None
 
 
 def get_current_user(db: SessionDep, token: TokenDep) -> User:

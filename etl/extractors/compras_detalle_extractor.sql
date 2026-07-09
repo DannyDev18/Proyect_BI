@@ -15,4 +15,4 @@ FROM
     renglonescompras c
 JOIN encabezadocompras e ON c.codemp = e.codemp AND c.numfac = e.numfac
 WHERE 
-    c.codemp = '01';
+    c.codemp = '{CODEMP}' AND c.fecfac >= '{FECHA_DESDE}';

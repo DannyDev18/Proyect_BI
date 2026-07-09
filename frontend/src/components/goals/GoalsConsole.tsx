@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   CheckCircle,
   XCircle,
@@ -8,80 +8,48 @@ import {
   Loader2,
 } from "lucide-react";
 
-interface GoalProposal {
-  id: number;
-  vendedor: string;
-  monto_meta: number;
-  comision_base_pct: number;
-  estado: string;
-}
-
-import { api } from "../../services/api";
+import { usePeriods, useGoalsTracking, useGenerateGoals, useReviewGoal } from "../../hooks/goals";
+import type { GoalPeriodOption, GoalProposal } from "../../types/goals";
 
 export function GoalsConsole() {
-  const [proposals, setProposals] = useState<GoalProposal[]>([]);
   const [pressure, setPressure] = useState<number>(10);
-  const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
-
-  const [months, setMonths] = useState<{anio: number, mes: number, label: string}[]>([]);
   const [period, setPeriod] = useState({ anio: new Date().getFullYear(), mes: new Date().getMonth() + 1 });
+  const [hasInitializedPeriod, setHasInitializedPeriod] = useState(false);
+
+  const periods = usePeriods();
+  const months = useMemo<GoalPeriodOption[]>(() => periods.data.map((d) => {
+    const date = new Date(d.anio, d.mes - 1, 1);
+    const name = date.toLocaleString('es-ES', { month: 'long' });
+    return {
+      anio: d.anio,
+      mes: d.mes,
+      label: `${name.charAt(0).toUpperCase() + name.slice(1)} ${d.anio}`,
+    };
+  }), [periods.data]);
 
   useEffect(() => {
-    fetchPeriods();
-  }, []);
-
-  const fetchPeriods = async () => {
-    try {
-      const res = await api.get(`/api/v1/gerencia/goals/periods`);
-      const data = res.data || [];
-      const mapped = data.map((d: any) => {
-        const date = new Date(d.anio, d.mes - 1, 1);
-        const name = date.toLocaleString('es-ES', { month: 'long' });
-        return {
-          anio: d.anio,
-          mes: d.mes,
-          label: `${name.charAt(0).toUpperCase() + name.slice(1)} ${d.anio}`
-        }
-      });
-      setMonths(mapped);
-      if (mapped.length > 0) {
-        setPeriod({ anio: mapped[0].anio, mes: mapped[0].mes });
-      }
-    } catch (err) {
-      console.error(err);
+    if (!hasInitializedPeriod && months.length > 0) {
+      setPeriod({ anio: months[0].anio, mes: months[0].mes });
+      setHasInitializedPeriod(true);
     }
-  };
-  const [loading, setLoading] = useState<boolean>(false);
+  }, [months, hasInitializedPeriod]);
 
+  const tracking = useGoalsTracking(period.anio, period.mes);
+  const [proposals, setProposals] = useState<GoalProposal[]>([]);
   useEffect(() => {
-    fetchProposals();
-  }, [period]);
+    setProposals(tracking.data);
+  }, [tracking.data]);
 
-  const fetchProposals = async () => {
-    setLoading(true);
-    try {
-      const res = await api.get(
-        `/api/v1/gerencia/goals/tracking?anio=${period.anio}&mes=${period.mes}`,
-      );
-      setProposals(res.data.reporte_cumplimiento || []);
-    } catch (err) {
-      console.error("Error cargando metas:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const generateMut = useGenerateGoals();
+  const reviewMut = useReviewGoal();
+  const loading = tracking.loading || generateMut.loading;
 
   const handleGenerate = async () => {
-    setLoading(true);
     const factor = 1 + pressure / 100;
     try {
-      await api.post(
-        `/api/v1/gerencia/goals/generate?anio=${period.anio}&mes=${period.mes}&pressure_factor=${factor}`
-      );
-      await fetchProposals();
+      await generateMut.generate({ anio: period.anio, mes: period.mes, factor });
     } catch (err) {
       console.error("Error generando metas:", err);
-      setLoading(false);
     }
   };
 
@@ -91,18 +59,10 @@ export function GoalsConsole() {
     monto: number,
     comision: number,
   ) => {
-    setActionLoadingId(id);
     try {
-      await api.put(`/api/v1/gerencia/goals/${id}/review`, {
-        monto_meta: monto,
-        estado: estado,
-        comision_base_pct: comision,
-      });
-      await fetchProposals();
+      await reviewMut.review({ id, monto_meta: monto, estado, comision_base_pct: comision });
     } catch (err) {
       console.error("Error procesando aprobacion:", err);
-    } finally {
-      setActionLoadingId(null);
     }
   };
 
@@ -204,10 +164,10 @@ export function GoalsConsole() {
                   // si no está aprobada, es aplicar un factor adicional simulado O asumir que el default era 10%
                   const isModified = pressure !== 10 && p.estado === "PROPUESTA";
                   const baseValue = p.monto_meta;
-                  
+
                   // 1. Calculamos el monto numérico a enviar al backend
                   const numericMonto = isModified ? (baseValue / 1.1) * (1 + pressure / 100) : baseValue;
-                  
+
                   // 2. Generamos el formato visual que configuraste
                   const formattedMonto = new Intl.NumberFormat('es-EC', {
                     style: 'currency',
@@ -265,7 +225,7 @@ export function GoalsConsole() {
                           p.estado === "APROBADA"
                             ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/25"
                             : p.estado === "RECHAZADA"
-                            ? "bg-rose-500/10 text-rose-400 border border-rose-500/25" 
+                            ? "bg-rose-500/10 text-rose-400 border border-rose-500/25"
                             : "bg-amber-500/10 text-amber-400 border border-amber-500/25"
                         }`}
                       >
@@ -289,10 +249,10 @@ export function GoalsConsole() {
                             p.comision_base_pct,
                           )
                         }
-                        disabled={actionLoadingId === p.id}
+                        disabled={reviewMut.pendingId === p.id}
                         className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold py-1.5 px-3 rounded text-xs transition-colors duration-200 cursor-pointer flex items-center gap-1"
                       >
-                        {actionLoadingId === p.id ? (
+                        {reviewMut.pendingId === p.id ? (
                           <Loader2 className="w-3 h-3 animate-spin" />
                         ) : null}
                         Aprobar
@@ -306,10 +266,10 @@ export function GoalsConsole() {
                             p.comision_base_pct,
                           )
                         }
-                        disabled={actionLoadingId === p.id}
+                        disabled={reviewMut.pendingId === p.id}
                         className="bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-semibold py-1.5 px-3 rounded text-xs transition-colors duration-200 cursor-pointer flex items-center gap-1"
                       >
-                        {actionLoadingId === p.id ? (
+                        {reviewMut.pendingId === p.id ? (
                           <Loader2 className="w-3 h-3 animate-spin" />
                         ) : null}
                         Rechazar

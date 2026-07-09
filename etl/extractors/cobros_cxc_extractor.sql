@@ -9,8 +9,9 @@ SELECT
     valcob AS valor_cobrado, -- Valor del documento
     saldodoc AS saldo_documento, -- Saldo pendiente
     diasvence AS dias_vencimiento, -- Días de vencimiento
-    codforpag        -- Forma de pago asociada
-FROM 
+    codforpag,       -- Forma de pago asociada
+    tiporg AS tipo_doc
+FROM
     cuentasporcobrar
 WHERE 
-    codemp = '01';
+    codemp = '{CODEMP}' AND fecemi >= '{FECHA_DESDE}';

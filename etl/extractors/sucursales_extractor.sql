@@ -9,4 +9,4 @@ SELECT
 FROM 
     establecimientos
 WHERE 
-    codemp = '01';
+    codemp = '{CODEMP}';

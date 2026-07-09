@@ -1,0 +1,30 @@
+{
+  "name": "goals",
+  "version": "0.1.0",
+  "task": "regression",
+  "status": "draft",
+  "features": [],
+  "target": {
+    "name": "y_ventas_futuras",
+    "transform": null,
+    "inverse_transform": null,
+    "description": "Ratio de crecimiento del mes siguiente, LEAST(ventas_mes_b / ventas_mes_a, 1.5). Cap razonable y documentado; construcción sin fuga (estacionalidad_mes_objetivo solo usa años < b.anio)."
+  },
+  "output": {
+    "type": "float",
+    "unit": "ratio",
+    "plausible_range": [0, 1.5]
+  },
+  "population_filter": {
+    "description": "fetch_goals_data ya filtra estado_factura != 'I', pero esa columna migra a dim_estado_documento en el nuevo EDW (C-1) — el SQL es inválido tal cual y debe reescribirse con el mismo JOIN que el resto de los modelos.",
+    "sql_condition": "TBD en Fase 2: JOIN edw.dim_estado_documento ... WHERE estado != 'Ingresada'"
+  },
+  "library_versions": {},
+  "data_range": {},
+  "known_serving_mismatch": [
+    "H-13: entrenamiento legacy usa 7 features (anio, mes, ventas_historicas, unidades_historicas, ventas_anio_anterior, promedio_movil_3m, indice_estacional_relativo) pero backend/app/services/goals_service.py arma solo 6 (falta indice_estacional_relativo) — mismatch confirmado, sin degradación con gracia",
+    "H-13: 'anio' como feature numérica cruda no permite extrapolar a años futuros nunca vistos por los árboles — excluir o transformar a antigüedad relativa (p.ej. anios_desde_inicio_historico)",
+    "H-13: evaluación en test silenciada por un except/pass en el entrenamiento legacy; debe loguearse"
+  ],
+  "notes": "Contrato en blanco (features=[]) por D-2; en Fase 2/3 el contrato de 7 features debe alinearse exactamente con lo que construye goals_service.py, cerrando el gap de indice_estacional_relativo. Migrar exportación de joblib.dump directo a save_artifact (hoy sin sidecar de metadatos, a diferencia de ventas/demanda/churn/anomalías)."
+}

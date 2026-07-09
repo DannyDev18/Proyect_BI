@@ -22,12 +22,9 @@ export const KpiCard = ({
   const t = trendConfig[trend];
   return (
     <div
-      className="animate-fade-in-up card card-hover p-6 group relative overflow-hidden"
+      className="animate-fade-in-up card card-hover p-6 group relative"
       style={{ animationDelay: `${animDelay}ms` }}
     >
-      {/* Ambient glow blob */}
-      <div className="absolute -top-8 -right-8 w-28 h-28 rounded-full blur-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 bg-cyan-500/8" />
-
       <div className="flex justify-between items-start mb-4 relative z-10">
         <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">{title}</p>
         <div className={`p-2.5 rounded-xl border ${t.bg}`}>

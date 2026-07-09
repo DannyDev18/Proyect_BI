@@ -16,16 +16,29 @@ from src.training.train_goals_prediction import train_goals_prediction, save_goa
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("MLOps.Orchestrator")
 
+# El EDW tiene ~8.5 años de historia de ventas (2018-2026) con una tendencia de crecimiento
+# sostenida del negocio (~31% de crecimiento en el monto diario promedio entre 2018 y 2026,
+# validado por EDA). Entrenar con el histórico completo y evaluar con el último 20%
+# cronológico compara el modelo contra un régimen de ventas estructuralmente distinto
+# (mucho más alto) al de los años tempranos, lo que degrada el R2 (-0.03 medido en backtest,
+# ver ml/REPORTE_MEJORA_MODELOS.md). Restringir a una ventana reciente evita ese quiebre
+# estructural y mejoró el R2 a +0.21 en el mismo backtest.
+VENTANA_ENTRENAMIENTO_VENTAS_ANIOS = 3
+
 def train_general_sales_prediction(extractor: SalesTimeSerieExtractor):
     logger.info("=== 1. ENTRENANDO PREDICCIÓN DE VENTAS GENERALES (GERENCIA) ===")
     df_raw = extractor.fetch_daily_sales()
     if len(df_raw) < 30:
         logger.error("Data insuficiente en la EDW (> 30 días solicitados) para entrenar el modelo.")
         return
-        
+
     pipeline = build_preprocessing_pipeline()
     df_features = pipeline.fit_transform(df_raw)
-    
+
+    # Ventana reciente: ver VENTANA_ENTRENAMIENTO_VENTAS_ANIOS arriba.
+    fecha_corte = df_features.index.max() - pd.DateOffset(years=VENTANA_ENTRENAMIENTO_VENTAS_ANIOS)
+    df_features = df_features.loc[df_features.index >= fecha_corte]
+
     train_size = int(len(df_features) * 0.8)
     df_train = df_features.iloc[:train_size]
     df_test = df_features.iloc[train_size:]

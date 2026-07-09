@@ -1,15 +1,27 @@
--- Extracción de cuentasporpagar (Hechos: Pagos CXP)
+-- ============================================================
+-- EXTRACCIÓN DE CUENTAS POR PAGAR (VERSIÓN SIMPLIFICADA)
+-- ============================================================
+-- Campos mínimos necesarios para el EDW
+-- ============================================================
+
 SELECT 
-    codemp,          -- Código de empresa
-    numcpp AS num_transaccion, -- Número de CPP
-    codpro,          -- Código proveedor
-    fecemi,          -- Fecha emisión
-    fecven,          -- Fecha de vencimiento
-    valcob AS valor_pagado, -- Valor del documento
-    CASE WHEN cerrado = 'S' THEN 0.0 ELSE valcob END AS saldo_pendiente, -- Saldo a pagar
-    dias AS dias_vencimiento, -- Días plazo
-    'C' AS codforpag -- Forma de pago (siempre crédito por ser CXP)
-FROM 
+    codemp,
+    numcpp AS num_transaccion,
+    tipdoc AS tipo_documento,      -- RT, FC, AB
+    codpro,
+    fecemi AS fecha_emision,
+    fecven AS fecha_vencimiento,
+    fectra AS fecha_transaccion,
+    valcob AS valor_documento,      -- Siempre negativo
+    totnet AS total_neto,
+    totiva AS total_iva,
+    cerrado AS documento_cerrado,   -- 'S' = Cerrado
+    estadoconta AS estado_contable, -- 'P' = Contabilizado
+    numdoc AS documento_origen,     -- Factura de compra
+    codusu AS usuario,
+    establ,                         -- Auditoría 10: faltaba para resolver sucursal_sk (caía a -1).
+    'C' AS codforpag                -- Fijo: Crédito
+FROM
     cuentasporpagar
-WHERE 
-    codemp = '01';
+WHERE
+    codemp = '{CODEMP}';

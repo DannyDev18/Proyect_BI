@@ -1,58 +1,32 @@
--- Extracción de la tabla renglonesfacturas (Hechos: Detalle de Facturas)
+-- Extracción de facturas (datos crudos)
 SELECT 
     r.codemp,
-    r.numfac AS num_factura,
+    r.numfac,
     'F' AS tipo_documento,
     r.codart,
     e.codcli,
     e.codven,
-    e.conpag AS codforpag,
+    e.conpag,
     r.codalm,
-    r.cantid AS cantidad,
-    r.preuni AS precio_unitario,
-    a.ultcos AS costo_unitario,
-    (r.cantid * r.preuni) AS subtotal_bruto,
-    r.desren AS valor_descuento,
-    r.totren AS subtotal_neto,
-    (r.totren * e.poriva / 100.0) AS valor_iva,
-    (r.totren + (r.totren * e.poriva / 100.0)) AS total_linea,
-    (r.cantid * a.ultcos) AS costo_total,
-    (r.totren - (r.cantid * a.ultcos)) AS margen_bruto,
-    e.estado AS estado_factura,
-    e.fecfac
+    r.cantid,
+    r.preuni,
+    r.desren,
+    r.totren,
+    a.ultcos,
+    r.porceiva,       -- Tasa de IVA ya resuelta por línea (fracción decimal, ej. 0.15).
+                       -- NO usar e.poriva: es el código de tarifa (FK a iva.codiva), no la
+                       -- tasa (auditoría 10, docs/auditoria/10_auditoria_ventas_detalle_calculo.md).
+    e.estado,
+    e.fecfac,
+    NULL AS desinv  -- Para unificar con devoluciones
 FROM 
     renglonesfacturas r
-JOIN encabezadofacturas e ON r.codemp = e.codemp AND r.numfac = e.numfac
-JOIN articulos a ON r.codemp = a.codemp AND r.codart = a.codart
+JOIN encabezadofacturas e 
+    ON r.codemp = e.codemp AND r.numfac = e.numfac
+LEFT JOIN articulos a 
+    ON r.codemp = a.codemp AND r.codart = a.codart
 WHERE 
-    r.codemp = '01' AND e.estado = 'P'
+    r.codemp = '{CODEMP}' 
+    AND e.estado = '{ESTADO}' 
+    AND e.fecfac >= '{FECHA_DESDE}'
 
-UNION ALL
-
-SELECT 
-    d.codemp,
-    d.numfac AS num_factura,
-    'NC' AS tipo_documento,
-    d.codart,
-    e.codcli,
-    e.codven,
-    e.conpag AS codforpag,
-    d.codalm,
-    (d.cantid * -1) AS cantidad,
-    d.valuni AS precio_unitario,
-    a.ultcos AS costo_unitario,
-    ((d.cantid * d.valuni) * -1) AS subtotal_bruto,
-    0 AS valor_descuento,
-    (d.totren * -1) AS subtotal_neto,
-    ((d.totren * e.poriva / 100.0) * -1) AS valor_iva,
-    ((d.totren + (d.totren * e.poriva / 100.0)) * -1) AS total_linea,
-    ((d.cantid * a.ultcos) * -1) AS costo_total,
-    ((d.totren - (d.cantid * a.ultcos)) * -1) AS margen_bruto,
-    e.estado AS estado_factura,
-    e.fecfac
-FROM 
-    renglonesdevoluciones d
-JOIN encabezadodevoluciones e ON d.codemp = e.codemp AND d.numfac = e.numfac
-JOIN articulos a ON d.codemp = a.codemp AND d.codart = a.codart
-WHERE 
-    d.codemp = '01' AND e.estado = 'P';

@@ -1,0 +1,30 @@
+{
+  "name": "demand",
+  "version": "0.1.0",
+  "task": "regression",
+  "status": "draft",
+  "features": [],
+  "target": {
+    "name": "y_quantity",
+    "transform": "log1p",
+    "inverse_transform": "expm1",
+    "description": "Unidades vendidas por producto/día. Igual que ventas, requiere artefacto autocontenido (TransformedTargetRegressor) — hoy sufre el mismo bug de escala H-01."
+  },
+  "output": {
+    "type": "float",
+    "unit": "units",
+    "plausible_range": [0, 100000]
+  },
+  "population_filter": {
+    "description": "Mismo filtro de estado/devolución que ventas, vía dim_estado_documento (C-1). Agrupar por la llave de negocio del producto (codart) en vez de nombre_articulo, para no partir series de productos renombrados en dim_producto SCD2 (H-21).",
+    "sql_condition": "TBD en Fase 2: JOIN edw.dim_estado_documento ... WHERE es_procesada AND NOT es_devolucion"
+  },
+  "library_versions": {},
+  "data_range": {},
+  "known_serving_mismatch": [
+    "H-01: mismo bug de escala log1p sin expm1 en backend/app/ml/inference.py:predict_demand",
+    "H-08: el entrenamiento legacy no aplica la ventana de 3 años que sí usa ventas, pese a la misma justificación de quiebre estructural del negocio",
+    "H-08b: select_features_and_target elimina la columna 'producto' — el modelo global queda ciego al SKU más allá de sus lags"
+  ],
+  "notes": "Features planeadas: mismo pipeline de lags/rolling/calendario que ventas (ml/src/preprocessor.py), evaluando en Fase 3 si conviene codificar el producto (target encoding o features estáticas del SKU) para no perder precisión por artículo. Aplicar VENTANA_ENTRENAMIENTO_VENTAS_ANIOS también aquí (hoy solo se usa en ventas). Contrato en blanco (features=[]) por D-2; se completa en Fase 2/3."
+}

@@ -8,4 +8,4 @@ SELECT
 FROM 
     usuarios
 WHERE 
-    codemp = '01';
+    codemp = '{CODEMP}';

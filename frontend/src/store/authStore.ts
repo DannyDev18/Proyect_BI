@@ -1,14 +1,7 @@
 import { create } from 'zustand';
+import type { Role, User } from '../types/auth';
 
-export type Role = 'administrador' | 'gerencia' | 'bodega' | 'ventas';
-
-export interface User {
-  id: string | number;
-  name: string;
-  email: string;
-  role: Role;
-  sucursalId?: string;
-}
+export type { Role, User };
 
 interface AuthState {
   user: User | null;

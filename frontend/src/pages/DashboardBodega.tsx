@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AlertTriangle, Package, TrendingUp, ShieldAlert } from 'lucide-react';
-import { useBodegaKPIs, useDemandForecast } from '../hooks/useAnalytics';
+import { useBodegaKPIs, useDemandForecast } from '../hooks/bodega';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
@@ -10,17 +10,8 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import { useAuthStore } from '../store/authStore';
-
-const fmt = (n: number) =>
-  n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M` : `$${(n / 1_000).toFixed(0)}k`;
-
-// Mock reorder table — to be wired to backend reorder endpoint when available
-const MOCK_ALERTS = [
-  { sku: 'TEC-0012', name: 'Laptop Pro 14',      stock: 15, demanda: 45, reorden: 30, estado: 'warning'  },
-  { sku: 'HOG-0932', name: 'Lavadora Automática', stock: 4,  demanda: 22, reorden: 15, estado: 'critical' },
-  { sku: 'TEC-8821', name: 'Monitor Ultrawide 34', stock: 0, demanda: 15, reorden: 10, estado: 'critical' },
-  { sku: 'AUD-2201', name: 'Auriculares BT Pro',  stock: 32, demanda: 20, reorden: 10, estado: 'neutral'  },
-];
+import { MOCK_ALERTS } from '../services/mocks/bodega.mock';
+import { fmt } from '../utils/format';
 
 export const DashboardBodega = () => {
   const { user } = useAuthStore();
@@ -100,7 +91,7 @@ export const DashboardBodega = () => {
       {/* SKU Demand Forecasting */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="card p-6 animate-fade-in-up stagger-1">
-          <h3 className="font-display font-semibold text-slate-200 mb-4">Predicción de Demanda por SKU</h3>
+          <h3 className="font-sans font-semibold text-slate-200 mb-4">Predicción de Demanda por SKU</h3>
           <SearchInput
             placeholder="Ej: TEC-0012"
             onSearch={handleSkuSearch}
@@ -155,7 +146,7 @@ export const DashboardBodega = () => {
       {/* Alertas de Reposición */}
       <div className="card animate-fade-in-up stagger-2 overflow-hidden">
         <div className="p-6 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="font-display font-semibold text-slate-200">Alertas Inteligentes de Reposición (ML)</h3>
+          <h3 className="font-sans font-semibold text-slate-200">Alertas Inteligentes de Reposición (ML)</h3>
           <AlertBadge variant="warning">{MOCK_ALERTS.filter(a => a.estado !== 'neutral').length} ítems</AlertBadge>
         </div>
         <div className="overflow-x-auto">

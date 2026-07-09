@@ -27,7 +27,7 @@ export const Settings = () => {
         </div>
 
         <div className="col-span-3 bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-xl p-6 shadow-lg">
-          <h3 className="text-lg font-display font-semibold text-slate-200 mb-6 flex items-center border-b border-slate-800 pb-4">
+          <h3 className="text-lg font-sans font-semibold text-slate-200 mb-6 flex items-center border-b border-slate-800 pb-4">
             <SettingsIcon className="mr-3 text-slate-400" /> Detalles de la Cuenta
           </h3>
           

@@ -1,7 +1,7 @@
 # backend/app/models/goal.py
 from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, DateTime, func, CheckConstraint
 from sqlalchemy.orm import relationship
-from app.db.session import Base
+from app.database.session import Base
 
 class Goal(Base):
     """

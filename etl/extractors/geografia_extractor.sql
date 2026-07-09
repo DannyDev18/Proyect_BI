@@ -9,4 +9,4 @@ FROM
 LEFT JOIN provincia p ON c.codprovin = p.codprovin
 -- LEFT JOIN zona z ON c.codciu = z.codciu
 WHERE 
-    c.codemp = '01';
+    c.codemp = '{CODEMP}';

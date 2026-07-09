@@ -1,33 +1,16 @@
 import { useState } from 'react';
 import { Activity, Cpu, FileText } from 'lucide-react';
-import { useAnomalyDetector } from '../hooks/useAnalytics';
+import { useAnomalyDetector } from '../hooks/admin';
 import { AlertBadge } from '../components/ui/AlertBadge';
 import { SearchInput } from '../components/ui/SearchInput';
 import { ChartCard } from '../components/ui/ChartCard';
-
-// ─── Static audit log entries (Live polling to be wired when /admin/audit-logs endpoint is ready) ───
-const AUDIT_ENTRIES = [
-  { ts: '2026-07-03 10:15:22', level: 'INFO',  source: 'ETL_WORKER',    msg: 'Data synchronization completed. 5 200 rows inserted to PostgreSQL.' },
-  { ts: '2026-07-03 11:42:01', level: 'INFO',  source: 'ML_PIPELINE',  msg: 'Random Forest re-trained. R² = 0.89 · RMSE = 1 240.' },
-  { ts: '2026-07-03 12:05:14', level: 'WARN',  source: 'API_AUTH',     msg: 'Access forbidden (403) — Rol "ventas" tried /api/v1/analytics/admin/anomalies.' },
-  { ts: '2026-07-03 12:12:15', level: 'INFO',  source: 'ADMIN_PANEL',  msg: 'User admin@empresa.com logged in from 192.168.0.10.' },
-  { ts: '2026-07-03 14:00:00', level: 'INFO',  source: 'ML_PIPELINE',  msg: 'Isolation Forest model loaded. 0 warnings.' },
-  { ts: '2026-07-03 14:30:05', level: 'ERROR', source: 'ETL_WORKER',   msg: 'SAP connection timeout. Retry 1/3.' },
-];
+import { AUDIT_ENTRIES, MODEL_STATUS } from '../services/mocks/admin.mock';
 
 const levelColor = {
   INFO:  'text-cyan-400',
   WARN:  'text-amber-400',
   ERROR: 'text-red-400',
 };
-
-// ─── MLOps status cards (static — wire to /admin/mlops/status when ready) ───
-const MODEL_STATUS = [
-  { name: 'Random Forest (Ventas)',      r2: 0.89, status: 'OK' },
-  { name: 'Isolation Forest (Anomalías)', r2: null, status: 'OK' },
-  { name: 'K-Means RFM (Seg. Clientes)', r2: null, status: 'OK' },
-  { name: 'Apriori (Cross-sell)',         r2: null, status: 'OK' },
-];
 
 export const DashboardAdmin = () => {
   const anomaly = useAnomalyDetector();
@@ -128,7 +111,7 @@ export const DashboardAdmin = () => {
       <div className="card animate-fade-in-up stagger-2 overflow-hidden">
         <div className="p-5 border-b border-slate-800 flex items-center gap-3">
           <FileText size={18} className="text-slate-400" />
-          <h3 className="font-display font-semibold text-slate-200">Log de Auditoría del Sistema</h3>
+          <h3 className="font-sans font-semibold text-slate-200">Log de Auditoría del Sistema</h3>
           <AlertBadge variant="neutral" className="ml-auto">Últimas 24 h</AlertBadge>
         </div>
         <div className="overflow-x-auto">

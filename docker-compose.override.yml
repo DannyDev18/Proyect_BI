@@ -1,0 +1,19 @@
+# docker-compose.override.yml
+# Se aplica automáticamente al hacer `docker compose up` (mecanismo nativo de Compose,
+# sin flags extra) -- SOLO para desarrollo local. No se usa en despliegues de producción
+# (ahí se corre `docker compose -f docker-compose.yml up`, ignorando este archivo).
+#
+# Reintroduce lo que el compose base (producción-like) deliberadamente no monta:
+# hot-reload del código del backend, y el código fuente de ml/ para poder probar
+# POST /admin/modelos/retrain localmente (ver TrainingService.trigger_retraining_pipeline,
+# que en producción falla con un mensaje claro en vez de esto).
+services:
+  backend:
+    environment:
+      ENV: development
+      ML_SOURCE_DIR: /app/ml_src
+    volumes:
+      - ./backend:/app
+      - ./ml/models:/app/ml_models:ro
+      - ./ml:/app/ml_src:ro
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

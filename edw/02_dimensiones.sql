@@ -26,12 +26,13 @@ CREATE TABLE edw.Dim_Sucursal (
     sucursal_sk     SERIAL PRIMARY KEY,
     codemp          VARCHAR(2) NOT NULL,
     establ          VARCHAR(3) NOT NULL,
-    codigo_sucursal VARCHAR(5) NOT NULL UNIQUE,
+    codigo_sucursal VARCHAR(5) NOT NULL,
     nombre_sucursal VARCHAR(100),
     direccion       VARCHAR(200),
     telefono        VARCHAR(14),
     activa          BOOLEAN DEFAULT TRUE,
-    fecha_carga     TIMESTAMP DEFAULT NOW()
+    fecha_carga     TIMESTAMP DEFAULT NOW(),
+    UNIQUE (codemp, codigo_sucursal)
 );
 COMMENT ON TABLE edw.Dim_Sucursal IS 'Establecimientos y puntos de venta.';
 
@@ -157,13 +158,78 @@ CREATE TABLE edw.Dim_FormaPago (
 );
 COMMENT ON TABLE edw.Dim_FormaPago IS 'Medios y modalidades de cobros y pagos.';
 
--- ── 11. DIM_GEOGRAFIA ──
-CREATE TABLE edw.Dim_Geografia (
-    geografia_sk    SERIAL PRIMARY KEY,
-    pais            VARCHAR(60) NOT NULL,
-    provincia       VARCHAR(60),
-    canton          VARCHAR(60),
-    parroquia       VARCHAR(60),
-    UNIQUE (pais, provincia, canton, parroquia)
+-- ── 11. DIM_ESTADO_DOCUMENTO (junk dimension) ──
+-- Consolida los flags/códigos de baja cardinalidad de Fact_Ventas_Detalle (tipo_documento,
+-- es_devolucion, estado_factura) en una sola dimensión. Ver auditoría 07 H9.
+CREATE TABLE edw.Dim_Estado_Documento (
+    estado_documento_sk SERIAL PRIMARY KEY,
+    tipo_documento       VARCHAR(5),
+    es_devolucion        BOOLEAN NOT NULL DEFAULT FALSE,
+    estado_factura       VARCHAR(1) NOT NULL DEFAULT 'A',
+    UNIQUE (tipo_documento, es_devolucion, estado_factura)
 );
-COMMENT ON TABLE edw.Dim_Geografia IS 'Variables territoriales desnormalizadas.';
+COMMENT ON TABLE edw.Dim_Estado_Documento IS 'Junk dimension: combinaciones de tipo/estado/devolución de un documento de venta.';
+
+-- Dim_Geografia fue retirada del alcance (auditoría 07, H4): no tenía ninguna FK que la
+-- conectara al resto del modelo (dead dimension). Dim_Cliente ya cubre ciudad/zona
+-- desnormalizadas. geografia_extractor.sql queda sin tabla destino en el EDW por decisión
+-- explícita, no por omisión.
+
+-- ============================================================
+-- REGISTROS CENTINELA (-1) — Regla de negocio #12 (CLAUDE.md)
+-- Toda dimensión lleva una fila "-1" para llaves foráneas no resueltas en los hechos
+-- (NOT NULL en las 11 facts); prohibido el fallback a filas arbitrarias (LIMIT 1).
+-- Se siembran aquí, en el DDL, para no depender de que el loader lo recuerde implementar.
+-- ============================================================
+
+INSERT INTO edw.Dim_Fecha
+    (fecha_sk, fecha_completa, anio, trimestre, mes, nombre_mes, semana_anio, dia_mes,
+     dia_semana, nombre_dia, es_fin_semana, es_feriado, semestre, periodo_fiscal)
+VALUES
+    (-1, '1900-01-01', 1900, 1, 1, '(Desconocido)', 1, 1, 1, '(Desconocido)', FALSE, FALSE, 1, NULL)
+ON CONFLICT (fecha_completa) DO NOTHING;
+
+INSERT INTO edw.Dim_Sucursal (sucursal_sk, codemp, establ, codigo_sucursal, nombre_sucursal, activa)
+VALUES (-1, '-1', '-1', '-1', '(Desconocido)', FALSE)
+ON CONFLICT (codemp, codigo_sucursal) DO NOTHING;
+
+INSERT INTO edw.Dim_Almacen (almacen_sk, codemp, codalm, nombre_almacen, establ)
+VALUES (-1, '-1', '-1', '(Desconocido)', '-1')
+ON CONFLICT (codemp, codalm) DO NOTHING;
+
+INSERT INTO edw.Dim_Producto
+    (producto_sk, codemp, codart, nombre_articulo, estado, es_vigente, fecha_inicio_vigencia)
+VALUES (-1, '-1', '-1', '(Desconocido)', 'A', TRUE, '1900-01-01')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO edw.Dim_Cliente
+    (cliente_sk, hash_anonimo, codemp, estado, es_vigente, fecha_inicio_vigencia)
+VALUES (-1, '-1', '-1', 'A', TRUE, '1900-01-01')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO edw.Dim_Proveedor (proveedor_sk, codemp, codpro, nombre_proveedor, estado)
+VALUES (-1, '-1', '-1', '(Desconocido)', 'A')
+ON CONFLICT (codemp, codpro) DO NOTHING;
+
+INSERT INTO edw.Dim_Vendedor (vendedor_sk, codemp, codven, nombre_vendedor, activo)
+VALUES (-1, '-1', '-1', '(Desconocido)', FALSE)
+ON CONFLICT (codemp, codven) DO NOTHING;
+
+INSERT INTO edw.Dim_Empleado (empleado_sk, codemp, codemple, nombre_empleado, activo)
+VALUES (-1, '-1', '-1', '(Desconocido)', FALSE)
+ON CONFLICT (codemp, codemple) DO NOTHING;
+
+INSERT INTO edw.Dim_Usuario (usuario_sk, codemp, codusu, nombre_usuario, estado)
+VALUES (-1, '-1', '-1', '(Desconocido)', 'I')
+ON CONFLICT (codemp, codusu) DO NOTHING;
+
+INSERT INTO edw.Dim_FormaPago (formapago_sk, codemp, codforpag, nombre_forma_pago, dias_plazo)
+VALUES (-1, '-1', '-1', '(Desconocido)', 0)
+ON CONFLICT (codemp, codforpag) DO NOTHING;
+
+-- tipo_documento = '-1' (no NULL): un UNIQUE compuesto no detecta conflicto entre dos NULL,
+-- así que un valor centinela explícito mantiene el INSERT idempotente en reejecuciones del DDL.
+INSERT INTO edw.Dim_Estado_Documento
+    (estado_documento_sk, tipo_documento, es_devolucion, estado_factura)
+VALUES (-1, '-1', FALSE, 'A')
+ON CONFLICT (tipo_documento, es_devolucion, estado_factura) DO NOTHING;

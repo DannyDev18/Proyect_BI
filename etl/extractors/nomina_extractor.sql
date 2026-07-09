@@ -11,4 +11,4 @@ SELECT
 FROM 
     nom_nomina
 WHERE 
-    codemp = '01';
+    codemp = '{CODEMP}' AND fecnom >= '{FECHA_DESDE}';

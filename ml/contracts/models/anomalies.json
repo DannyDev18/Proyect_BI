@@ -1,0 +1,30 @@
+{
+  "name": "anomalies",
+  "version": "0.1.0",
+  "task": "anomaly_detection",
+  "status": "draft",
+  "features": [],
+  "target": {
+    "name": "",
+    "transform": null,
+    "inverse_transform": null,
+    "description": "No supervisado, IsolationForest. contamination=0.01 es un supuesto de negocio sin validar; contrastar contra casos conocidos de fact_logs_auditoria en Fase 3."
+  },
+  "output": {
+    "type": "score",
+    "unit": "",
+    "plausible_range": [-1, 1]
+  },
+  "population_filter": {
+    "description": "Mismo filtro de estado/devolución vía dim_estado_documento (C-1). Política de nulos de costo a decidir explícitamente en el contrato: con el nuevo EDW, costo_unitario/costo_total/margen_bruto son NULLables reales (cambio C-2) cuando el artículo no tiene ultcos — el fillna(0.0) legacy reintroduciría exactamente el margen-100%-artificial que el EDW acaba de eliminar (H-19). Decisión pendiente: excluir filas sin costo vs. imputar con mediana por producto vs. feature indicadora de nulo.",
+    "sql_condition": "TBD en Fase 2"
+  },
+  "library_versions": {},
+  "data_range": {},
+  "known_serving_mismatch": [
+    "H-04: features de entrenamiento legacy (subtotal_neto, cantidad, costo_total, margen) != features que envía backend/app/repositories/prediction_repository.py::get_transaction_features (discount_pct, total_amount, refund_flag)",
+    "H-04: backend/app/services/prediction_service.py::get_anomaly_status devuelve un score hardcodeado (-0.85/0.15) en vez de decision_function() real — el contrato exige exponer el score real del estimador",
+    "H-19: fillna(0.0) legacy sobre costo_total ahora NULLable (C-2) produce un margen artificial del 100% que el modelo aprende como patrón, no como anomalía"
+  ],
+  "notes": "Contrato en blanco (features=[]) por D-2. pct_margen=0 en cortesías (convención C-3 del EDW nuevo, reemplaza el centinela -9999) es un patrón que el detector verá y debe considerarse al diseñar las features."
+}

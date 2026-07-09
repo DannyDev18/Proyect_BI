@@ -1,0 +1,29 @@
+{
+  "name": "sales",
+  "version": "0.1.0",
+  "task": "regression",
+  "status": "draft",
+  "features": [],
+  "target": {
+    "name": "y_sales_net",
+    "transform": "log1p",
+    "inverse_transform": "expm1",
+    "description": "Venta neta diaria (SUM(subtotal_neto)) agregada por día. El artefacto reconstruido DEBE ser autocontenido (p.ej. sklearn TransformedTargetRegressor) para que predict() devuelva USD directamente, sin que ninguna capa de serving deba 'recordar' aplicar expm1."
+  },
+  "output": {
+    "type": "float",
+    "unit": "USD",
+    "plausible_range": [0, 5000000]
+  },
+  "population_filter": {
+    "description": "Solo documentos con estado resuelto a 'Procesada' (regla de negocio 1, CLAUDE.md); excluir devoluciones. El filtro migra de fact_ventas_detalle.estado_factura/es_devolucion (esquema viejo) a un JOIN con la nueva junk dimension dim_estado_documento (cambio C-1 del EDW).",
+    "sql_condition": "TBD en Fase 2: JOIN edw.dim_estado_documento ON ... WHERE es_procesada AND NOT es_devolucion"
+  },
+  "library_versions": {},
+  "data_range": {},
+  "known_serving_mismatch": [
+    "H-01: backend/app/ml/inference.py:predict_sales consume model.predict() crudo sin expm1 — hoy el forecast de Gerencia muestra ~12 en vez de ~160.000 USD",
+    "H-14b: el modelo entrena con la serie global (todas las sucursales) pero prediction_service.get_sales_forecast_weekly(sucursal=...) lo aplica por sucursal, fuera de la distribución de entrenamiento"
+  ],
+  "notes": "Features planeadas (auditoría 12 §6, ml/src/preprocessor.py::TimeSeriesLagsTransformer): lags 1/7/14/30/90, rolling mean/std/min/max 7-30d, expanding mean, calendario (día de semana, mes, trimestre, inicio/fin de mes, feriado aproximado), exógenas rezagadas 1 día (n_clientes_prev, n_facturas_prev, pct_descuento_prom_prev). Ventana de entrenamiento: últimos 3 años (VENTANA_ENTRENAMIENTO_VENTAS_ANIOS, justificado empíricamente R² -0.03 -> +0.21, no tocar sin razón). Corregir además H-06 (bfill del preprocessor introduce fuga en las primeras filas). Este contrato nace con features=[] porque D-2 prohíbe derivarlo del .pkl legacy (sales_best_model.pkl); se completa en Fase 2/3 al reescribir ml/src/data/make_dataset.py contra el EDW nuevo."
+}

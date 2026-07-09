@@ -1,0 +1,29 @@
+{
+  "name": "churn",
+  "version": "0.1.0",
+  "task": "classification",
+  "status": "draft",
+  "features": [],
+  "target": {
+    "name": "is_churn",
+    "transform": null,
+    "inverse_transform": null,
+    "description": "REDISEÑO METODOLÓGICO OBLIGATORIO (H-05): la etiqueta legacy (recency > 90 días) es circular, derivada del mismo snapshot que las features. El dataset nuevo debe usar corte temporal: features calculadas hasta la fecha T, etiqueta = '¿compró en (T, T+90]?'. Sin este rediseño, el modelo no es defendible metodológicamente."
+  },
+  "output": {
+    "type": "probability",
+    "unit": "",
+    "plausible_range": [0, 1]
+  },
+  "population_filter": {
+    "description": "Mismo filtro de estado/devolución vía dim_estado_documento (C-1); excluir cliente_sk = -1 (H-16, mismo criterio que segmentación).",
+    "sql_condition": "WHERE cliente_sk <> -1 AND <filtro dim_estado_documento>"
+  },
+  "library_versions": {},
+  "data_range": {},
+  "known_serving_mismatch": [
+    "H-03: features de entrenamiento legacy (frequency, monetary_value, average_ticket) != features que envía backend/app/repositories/prediction_repository.py::get_churn_features (inactivity_days, average_ticket, total_orders, discount_ratio) — un único contrato de features debe gobernar ambos lados",
+    "H-05: etiqueta circular (ver target.description) — el AUC alto legacy no refleja capacidad predictiva real"
+  ],
+  "notes": "Contrato en blanco (features=[]) por D-2. Es el único de los 7 modelos donde cambia la DEFINICIÓN del problema (ventana de observación + horizonte de predicción), no solo la plomería de columnas. average_ticket = monetary/frequency es colineal por construcción; evaluar features de tendencia (frecuencia últimos 3m vs histórica) en el rediseño."
+}

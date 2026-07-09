@@ -1,8 +1,7 @@
 import logging
-import os
-import joblib
 import numpy as np
 from src.training.model_selector import find_best_regression_model, evaluate_reg
+from src.utils.model_export import save_artifact
 
 logger = logging.getLogger("ML.DemandForecasting")
 
@@ -18,9 +17,8 @@ def train_demand_forecaster(X_train, y_train, hyperparameter_search=True):
     best_model = find_best_regression_model(X_train, y_train_log, is_log_transformed=True, cv_splits=3)
     return best_model
 
-def save_demand_model(model, filepath=None):
-    if filepath is None:
-        filepath = os.path.join(os.getenv("ML_MODELS_DIR", "./models"), "demand_best_model.pkl")
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    joblib.dump(model, filepath)
-    logger.info(f"Modelo Demanda-Logística guardado en: {filepath}")
+def save_demand_model(model, filepath=None, metrics=None):
+    save_artifact(
+        model, "demand_best_model.pkl", filepath=filepath, metrics=metrics,
+        extra={"problema": "regresion_serie_temporal", "target": "y_quantity (log1p)"},
+    )

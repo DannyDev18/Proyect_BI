@@ -5,6 +5,7 @@ SELECT
     codcli,          -- Cliente
     codalm,          -- Almacén al que devuelve
     fecfac AS fecha_devolucion, -- Fecha devolucion
+    totnet AS total_neto_devolucion, -- Total neto devolución
     totfac AS costo_total_devolucion -- Total devolución
 FROM 
     encabezadodevoluciones

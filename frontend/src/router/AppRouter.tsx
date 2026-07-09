@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import { useAuthStore, type Role } from '../store/authStore.ts';
+import { useAuthStore } from '../store/authStore.ts';
+import { canAccess, type RouteKey } from '../constants/permissions.ts';
 
 // We will create these pages next
 import { Layout } from '../components/layout/Layout.tsx';
@@ -17,17 +18,17 @@ import { UsersManagement } from '../pages/UsersManagement.tsx';
 
 interface ProtectedRouteProps {
   children: ReactNode;
-  allowedRoles?: Role[];
+  routeKey: RouteKey;
 }
 
-const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
+const ProtectedRoute = ({ children, routeKey }: ProtectedRouteProps) => {
   const { isAuthenticated, user } = useAuthStore();
 
   if (!isAuthenticated || !user) {
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
+  if (!canAccess(user.role, routeKey)) {
     return <Navigate to="/access-denied" replace />;
   }
 
@@ -59,46 +60,46 @@ export const AppRouter = () => {
           <Route index element={<RoleBasedRedirect />} />
           
           <Route path="admin" element={
-            <ProtectedRoute allowedRoles={['administrador']}>
+            <ProtectedRoute routeKey="admin">
               <DashboardAdmin />
             </ProtectedRoute>
           } />
-          
+
           <Route path="users" element={
-            <ProtectedRoute allowedRoles={['administrador']}>
+            <ProtectedRoute routeKey="users">
               <UsersManagement />
             </ProtectedRoute>
           } />
-          
+
           <Route path="gerencia">
             <Route index element={
-              <ProtectedRoute allowedRoles={['administrador', 'gerencia']}>
+              <ProtectedRoute routeKey="gerencia">
                 <DashboardGerencia />
               </ProtectedRoute>
             } />
             <Route path="metas" element={
-              <ProtectedRoute allowedRoles={['administrador', 'gerencia']}>
+              <ProtectedRoute routeKey="gerencia.metas">
                 <DashboardMetas />
               </ProtectedRoute>
             } />
           </Route>
 
           <Route path="bodega" element={
-            <ProtectedRoute allowedRoles={['administrador', 'gerencia', 'bodega']}>
+            <ProtectedRoute routeKey="bodega">
               <DashboardBodega />
             </ProtectedRoute>
           } />
 
           <Route path="ventas" element={
-            <ProtectedRoute allowedRoles={['administrador', 'gerencia', 'ventas']}>
+            <ProtectedRoute routeKey="ventas">
               <DashboardVentas />
             </ProtectedRoute>
           } />
-          
+
           <Route path="access-denied" element={<AccessDenied />} />
 
           <Route path="settings" element={
-            <ProtectedRoute>
+            <ProtectedRoute routeKey="settings">
               <Settings />
             </ProtectedRoute>
           } />

@@ -5,33 +5,12 @@ import {
   PieChart, Pie, Cell, Legend
 } from 'recharts';
 import { DollarSign, TrendingUp, ShoppingBag, Target, Filter } from 'lucide-react';
-import { useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores } from '../hooks/useAnalytics';
+import { useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores } from '../hooks/gerencia';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
-
-const fmt = (n?: number | null) => {
-  if (n == null || isNaN(n)) return '—';
-  return n >= 1_000_000
-    ? `$${(n / 1_000_000).toFixed(1)}M`
-    : n >= 1_000
-    ? `$${(n / 1_000).toFixed(0)}k`
-    : `$${n.toFixed(0)}`;
-};
-
-const pct = (n: number) => `${n.toFixed(1)}%`;
-
-const chartTooltipStyle = {
-  contentStyle: {
-    backgroundColor: '#0f172a',
-    borderColor: '#1e293b',
-    borderRadius: '10px',
-    color: '#f1f5f9',
-    fontSize: '12px',
-  },
-};
-
-const COLORS = ['#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316'];
+import { fmt, pct } from '../utils/format';
+import { chartTooltipStyle, COLORS } from '../utils/chartTheme';
 
 export const DashboardGerencia = () => {
   const [filters, setFilters] = useState({
@@ -210,11 +189,12 @@ export const DashboardGerencia = () => {
                     tickFormatter={(v) => `$${v / 1000}k`}
                     width={55}
                   />
-                  <Tooltip {...chartTooltipStyle} formatter={(value: number, name: string) => [`$${value?.toLocaleString(undefined, {minimumFractionDigits: 2})}`, name === 'monto_real' ? 'Real' : name === 'monto_predicho' ? 'Predicho' : name]} />
+                  <Tooltip {...chartTooltipStyle} formatter={(value, name) => [`$${Number(value).toLocaleString(undefined, {minimumFractionDigits: 2})}`, name === 'monto_real' ? 'Real' : name === 'monto_predicho' ? 'Predicho' : name]} />
                   <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }} />
                   
                   {/* Historic Area */}
                   <Area
+                    connectNulls={true}
                     type="monotone"
                     dataKey="monto_real"
                     stroke="#3b82f6"
@@ -227,6 +207,7 @@ export const DashboardGerencia = () => {
                   
                   {/* Prediction Area */}
                   <Area
+                  connectNulls={true}
                     type="monotone"
                     dataKey="monto_predicho"
                     stroke="#06b6d4"

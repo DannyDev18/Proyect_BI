@@ -3,23 +3,8 @@ import {
   Users, UserPlus, Search, Edit2, ShieldAlert, Building,
   CheckCircle2, XCircle, KeyRound 
 } from 'lucide-react';
-import { getUsers, createUser, updateUser, deactivateUser, activateUser, getRoles } from '../services/api';
-
-interface UserData {
-  id: number;
-  nombre: string;
-  email: string;
-  es_activo: boolean;
-  sucursal: string | null;
-  id_vendedor_origen: string | null;
-  role: { id: number; nombre: string };
-  rol_id?: number;
-}
-
-interface RoleData {
-  id: number;
-  nombre: string;
-}
+import { getUsers, createUser, updateUser, deactivateUser, activateUser, getRoles } from '../services/users';
+import type { UserData, RoleData } from '../types/admin';
 
 export const UsersManagement = () => {
   const [users, setUsers] = useState<UserData[]>([]);

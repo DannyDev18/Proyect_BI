@@ -22,10 +22,11 @@ def test_predict_churn_devuelve_probabilidad(fake_model_loader):
     assert result["churn_probability"].iloc[0] == 0.3
 
 
-def test_detect_anomalies_devuelve_serie(fake_model_loader):
+def test_detect_anomalies_devuelve_prediccion_y_score(fake_model_loader):
     X = pd.DataFrame({"a": [1]})
     result = inference.detect_anomalies(fake_model_loader, X)
-    assert result.iloc[0] == 1
+    assert result["is_anomaly_pred"].iloc[0] == 1
+    assert result["anomaly_score"].iloc[0] == 0.2
 
 
 def test_get_recommendations_filtra_por_item_history(fake_model_loader):

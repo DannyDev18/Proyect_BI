@@ -11,6 +11,30 @@ from sqlalchemy.orm import Session
 from app.models.goal import Goal
 
 
+class VendorMonthlySales(NamedTuple):
+    """Un mes de histórico agregado de un vendedor -- insumo de
+    `app.services.goal_calculation_engine.RegistroMensual` (integración ML, Metas y
+    Comisiones)."""
+    anio: int
+    mes: int
+    ventas: float
+    unidades: float
+
+
+class VendorTransactionFeatures(NamedTuple):
+    """Mismas 4 columnas que `ml/contracts/models/anomalies.json` (ver también
+    `PredictionRepository.get_transaction_features`), etiquetadas con anio/mes -- se usa
+    para detectar MESES con transacciones anómalas, no para correr el modelo de
+    anomalías sobre agregados mensuales (el contrato del modelo exige el grano de línea
+    de transacción, no el de mes)."""
+    anio: int
+    mes: int
+    subtotal_neto: float
+    cantidad: float
+    costo_total: float
+    margen: float
+
+
 class VendorSalesTrend(NamedTuple):
     vendedor_origen: str
     sucursal: str
@@ -18,6 +42,7 @@ class VendorSalesTrend(NamedTuple):
     unidades_anterior: float
     ventas_anio_anterior: float
     promedio_movil_3m: float
+    indice_estacional_relativo: float
     vendedor_sk: int
     sucursal_sk: int
 
@@ -47,7 +72,8 @@ class GoalRepository:
                 JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
                 JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
-                WHERE f.estado_factura = 'P'
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                WHERE ed.estado_documento_sk <> -1
                 GROUP BY v.codven, s.nombre_sucursal, d.anio, d.mes
             ),
             PrevMonth AS (
@@ -88,6 +114,23 @@ class GoalRepository:
                     (s.avg_estacional + t.avg_tendencia_sin_max) / 2.0,
                     s.avg_estacional, t.avg_tendencia_sin_max, p.net_sales, 0.0
                 ) AS promedio_movil_3m,
+                -- Índice estacional relativo (H-13, docs/auditoria/11_auditoria_tecnica_modelos_ml.md):
+                -- mismo concepto que ml/src/data/make_dataset.py::fetch_goals_data
+                -- (estacionalidad_mes_objetivo / promedio_movil_3m), aproximado con las
+                -- columnas ya disponibles en esta CTE -- s.avg_estacional YA es la
+                -- estacionalidad histórica del mes objetivo (:mes/:anio, filtrada a
+                -- años anteriores), y se compara contra el mismo promedio_movil_3m
+                -- compuesto de esta consulta (no es una réplica línea a línea del SQL
+                -- de entrenamiento, que calcula el promedio_movil_3m del mes BASE por
+                -- separado; ver docs/ml_contracts.md, known_serving_mismatch de goals).
+                COALESCE(
+                    s.avg_estacional / NULLIF(
+                        COALESCE((s.avg_estacional + t.avg_tendencia_sin_max) / 2.0,
+                                 s.avg_estacional, t.avg_tendencia_sin_max, p.net_sales, 0.0),
+                        0.0
+                    ),
+                    1.0
+                ) AS indice_estacional_relativo,
                 p.vendedor_sk,
                 p.sucursal_sk
             FROM PrevMonth p
@@ -176,6 +219,90 @@ class GoalRepository:
             }
             for row in rows
         ]
+
+    # ── Integración ML (Metas y Comisiones): histórico, anomalías, top productos ──
+    def get_vendor_monthly_history(self, vendedor_origen: str, sucursal: str, meses: int = 24) -> list[VendorMonthlySales]:
+        """Serie mensual agregada de ventas/unidades de un vendedor -- insumo del motor
+        estadístico (`goal_calculation_engine.IQRGoalCalculationEngine`), que a su vez
+        alimenta la meta sugerida por IA junto con el modelo `goals_rf`."""
+        query = text("""
+            SELECT d.anio, d.mes,
+                   COALESCE(SUM(f.subtotal_neto), 0) AS ventas,
+                   COALESCE(SUM(f.cantidad), 0) AS unidades
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+            JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1
+              AND v.codven = :vendedor AND s.nombre_sucursal = :sucursal
+            GROUP BY d.anio, d.mes
+            ORDER BY d.anio DESC, d.mes DESC
+            LIMIT :meses
+        """)
+        rows = self.db.execute(query, {"vendedor": vendedor_origen, "sucursal": sucursal, "meses": meses}).fetchall()
+        return [VendorMonthlySales(anio=int(r[0]), mes=int(r[1]), ventas=float(r[2]), unidades=float(r[3])) for r in rows]
+
+    def get_vendor_transactions_history(self, vendedor_origen: str, sucursal: str, anio_desde: int, mes_desde: int) -> list[VendorTransactionFeatures]:
+        """Todas las líneas de transacción de un vendedor desde `(anio_desde, mes_desde)`
+        en adelante, con las mismas 4 columnas y política de nulos que
+        `ml/contracts/models/anomalies.json` (excluye `costo_total IS NULL`, H-19) --
+        en un solo batch, para correr `inference.detect_anomalies` una sola vez al
+        grano correcto (línea de transacción, no agregado mensual) y luego agrupar por
+        mes en el servicio."""
+        query = text("""
+            SELECT d.anio, d.mes, f.subtotal_neto, f.cantidad, f.costo_total, (f.subtotal_neto - f.costo_total) AS margen
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+            JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1
+              AND v.codven = :vendedor AND s.nombre_sucursal = :sucursal
+              AND (d.anio, d.mes) >= (:anio_desde, :mes_desde)
+              AND f.costo_total IS NOT NULL
+        """)
+        rows = self.db.execute(query, {
+            "vendedor": vendedor_origen, "sucursal": sucursal, "anio_desde": anio_desde, "mes_desde": mes_desde,
+        }).fetchall()
+        return [
+            VendorTransactionFeatures(
+                anio=int(r[0]), mes=int(r[1]), subtotal_neto=float(r[2]), cantidad=float(r[3]),
+                costo_total=float(r[4]), margen=float(r[5]),
+            )
+            for r in rows
+        ]
+
+    def get_vendor_top_products(self, vendedor_origen: str, limit: int = 10) -> list[str]:
+        """`codart` de los productos más vendidos (por monto) del vendedor -- insumo de
+        `inference.get_recommendations` (item_history) para sugerir categorías/productos
+        complementarios que ayuden a alcanzar la meta."""
+        query = text("""
+            SELECT p.codart
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1
+              AND v.codven = :vendedor AND p.producto_sk <> -1
+            GROUP BY p.codart
+            ORDER BY SUM(f.subtotal_neto) DESC
+            LIMIT :limit
+        """)
+        rows = self.db.execute(query, {"vendedor": vendedor_origen, "limit": limit}).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def get_product_categories(self, codarts: list[str]) -> dict[str, str]:
+        """`codart` -> `nombre_clase` (categoría) -- usado para agregar las reglas de
+        recomendación por categoría en el panel gerencial (integración ML)."""
+        if not codarts:
+            return {}
+        query = text("""
+            SELECT codart, nombre_clase FROM edw.dim_producto
+            WHERE codart = ANY(:codarts) AND es_vigente = true
+        """)
+        rows = self.db.execute(query, {"codarts": codarts}).fetchall()
+        return {str(r[0]): (str(r[1]) if r[1] else "Sin categoría") for r in rows}
 
     # ── ORM: público.metas_comerciales_operativas vía modelo Goal ─────────────
     def get_by_id(self, goal_id: int) -> Goal | None:

@@ -58,6 +58,41 @@
 - **Media:** si se amplía el alcance, `analytics_repository.py` y `goal_repository.py` necesitan el mismo cambio de `f.estado_factura = 'P'` a un JOIN con `dim_estado_documento` (semánticamente hoy es un no-op, pero el SQL literal falla en ejecución).
 - **Baja:** quitar el filtro obsoleto `pct_margen > -9999` en `fetch_transactions_for_anomalies` (H13-04).
 
-## Decisión pendiente (bloqueante para continuar la Fase 2)
+## Decisión tomada
 
-El plan de la auditoría 12 acota la Fase 2 a `make_dataset.py` + `dataset_repository.py` + `prediction_repository.py` (contrato ML). Pero `analytics_repository.py` (Gerencia) y `goal_repository.py` (Metas) están **igual de rotos** contra el DDL ya cargado, y no son parte del alcance ML. Ver pregunta al usuario en el mensaje de esta conversación.
+El usuario confirmó ampliar el alcance: corregir tanto los 3 archivos del plan ML (doc 12) como `analytics_repository.py` y `goal_repository.py` en la misma pasada.
+
+## Cambios aplicados
+
+Patrón aplicado uniformemente: `JOIN edw.dim_estado_documento ed ON <alias>.estado_documento_sk = ed.estado_documento_sk` + `WHERE ed.estado_documento_sk <> -1` (reemplaza `estado_factura = 'P'` / `estado_factura != 'I'`; excluye el centinela de resolución fallida, equivalente hoy a "documento válido" porque la única combinación real cargada es `('F', false, 'P')`). Donde el hallazgo original pedía excluir devoluciones explícitamente se agregó `AND NOT ed.es_devolucion` (`fetch_market_basket`). Para el `LEFT JOIN` de `get_sales_performance.query_ranking` (que parte de `dim_vendedor`, no de la fact), el filtro se puso en la condición del `ON` del `LEFT JOIN` a `dim_estado_documento`, no en el `WHERE`, para no convertir el `LEFT JOIN` en un `INNER JOIN` implícito y perder vendedores sin ventas en el período.
+
+| Archivo | Función(es) corregidas |
+|---|---|
+| `ml/src/data/make_dataset.py` | `fetch_daily_sales`, `fetch_sales_by_dimension`, `fetch_rfm_metrics` (+ exclusión `cliente_sk <> -1`, H-16), `fetch_market_basket`, `fetch_transactions_for_anomalies` (se elimina el filtro obsoleto `pct_margen > -9999`, H13-04), `fetch_goals_data` (CTE `MonthlySales`) |
+| `backend/app/repositories/dataset_repository.py` | `get_daily_sales_history`, `get_product_sales_history` |
+| `backend/app/repositories/prediction_repository.py` | `get_churn_features`, `get_transaction_features` (además corrige la referencia a columna sin alias), `get_client_purchase_history`, `get_rfm_features` |
+| `backend/app/repositories/analytics_repository.py` | `_build_ventas_filters` + las 4 queries que la usan (`get_management_kpis` ×3, `get_revenue_by_category`), `get_sales_performance` (`query_actual`, `query_ranking`) |
+| `backend/app/repositories/goal_repository.py` | `get_sales_trend_for_goals` (CTE `VentaMensual`) |
+
+No se tocó `dataset_repository.py::get_daily_sales_history`/`get_product_sales_history` más allá del filtro (no se aplicó aún la unificación completa de población H-15/H-14 con `ml/src/data/make_dataset.py::fetch_daily_sales`, que sigue siendo un hallazgo de Fase 3 del plan ML). `get_latest_edw_period` de `goal_repository.py` no referenciaba las columnas eliminadas y no requirió cambios.
+
+## Validación ejecutada
+
+`py_compile` limpio en los 5 archivos. Se ejecutaron las 12 consultas reescritas (5 de `make_dataset.py`, 7 de los repositorios del backend) directamente contra `bi_postgres_edw` vía `psql` — todas retornan resultados sin error de SQL:
+
+| Consulta | Resultado |
+|---|---|
+| `fetch_daily_sales` | 2.851 días agregados |
+| `fetch_sales_by_dimension` | 271.782 filas fecha×producto |
+| `fetch_rfm_metrics` | 53.812 clientes (excluido el centinela) |
+| `fetch_market_basket` | 100 líneas (LIMIT de prueba) |
+| `fetch_transactions_for_anomalies` | 100 filas (LIMIT de prueba) |
+| `get_daily_sales_history` | 730 días (LIMIT default) |
+| `get_product_sales_history` | 100 días de un producto de muestra |
+| `get_churn_features` / `get_rfm_features` / `get_client_purchase_history` | ejecutan sin error (cliente de prueba inexistente → 0 filas, comportamiento esperado) |
+| `get_transaction_features` | 1 fila de una factura de muestra |
+| `get_management_kpis` / `get_revenue_by_category` | 1 fila agregada / 22 categorías |
+| `get_sales_performance` (actual + ranking) | $384.590,75 / 9 vendedores con ventas > 0 en 2026-01 |
+| `get_sales_trend_for_goals` / `fetch_goals_data` (`MonthlySales`) | 2.971 filas vendedor-sucursal-mes en ambos casos (coinciden, como se espera de la misma agregación base) |
+
+**Estado del hallazgo H13-02:** resuelto para los 5 archivos listados. **H13-04:** resuelto (filtro eliminado). Los hallazgos H-15 (semántica de población totalmente unificada) y H-14 (semántica RFM idéntica entrenamiento↔serving) permanecen abiertos como decisiones de contrato para la Fase 3 del plan ML (`docs/ml_contracts.md`), no como bugs de ejecución.

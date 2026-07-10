@@ -26,3 +26,23 @@ class GoalCommissionReportItem(BaseModel):
 
 class GoalTrackingResponse(BaseModel):
     reporte_cumplimiento: List[GoalCommissionReportItem]
+
+# ── Integración ML: Metas y Comisiones (docs/auditoria/15_...) ──────────────────────
+class VendorRiskItem(BaseModel):
+    nombre: str
+    ventas: float
+    meta: float
+    pct_cumplimiento: float
+    pct_esperado_a_la_fecha: float
+    estado: str
+
+class CategoryRecommendationItem(BaseModel):
+    categoria_origen: str
+    categoria_sugerida: str
+    producto_sugerido: str
+    score_afinidad: float
+
+class GoalsAISummaryResponse(BaseModel):
+    vendedores_en_riesgo: List[VendorRiskItem]
+    vendedores_alta_probabilidad: List[VendorRiskItem]
+    recomendaciones_por_categoria: List[CategoryRecommendationItem]

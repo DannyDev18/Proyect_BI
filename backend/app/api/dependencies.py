@@ -16,6 +16,7 @@ from app.repositories.prediction_repository import PredictionRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.user_repository import UserRepository
 from app.services.analytics_service import AnalyticsService
+from app.services.goal_ml_service import GoalMLService
 from app.services.goals_service import GoalsService
 from app.services.prediction_service import PredictionService
 from app.services.role_service import RoleService
@@ -97,11 +98,24 @@ def get_prediction_service(
     return PredictionService(prediction_repo, dataset_repo, model_loader)
 
 
+def get_goal_ml_service(
+    goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+    dataset_repo: Annotated[DatasetRepository, Depends(get_dataset_repository)],
+    model_loader: ModelLoaderDep,
+    goals_service: Annotated[GoalsService, Depends(get_goals_service)],
+) -> GoalMLService:
+    """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_...): compone
+    `GoalRepository` + `DatasetRepository` + `ModelLoader` + `GoalsService` (reutiliza
+    su capping ya validado, no lo reimplementa)."""
+    return GoalMLService(goal_repo, dataset_repo, model_loader, goals_service)
+
+
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 RoleServiceDep = Annotated[RoleService, Depends(get_role_service)]
 AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]
 GoalsServiceDep = Annotated[GoalsService, Depends(get_goals_service)]
 PredictionServiceDep = Annotated[PredictionService, Depends(get_prediction_service)]
+GoalMLServiceDep = Annotated[GoalMLService, Depends(get_goal_ml_service)]
 
 
 # ── Resolución de sucursal por rol ────────────────────────────────────────────

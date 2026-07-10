@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error al verificar tablas: {e}", exc_info=True)
 
-    app.state.model_loader = ModelLoader(models_dir=settings.ML_MODELS_DIR)
+    app.state.model_loader = ModelLoader(models_dir=settings.ML_MODELS_DIR, contracts_dir=settings.ML_CONTRACTS_DIR)
     app.state.model_loader.load_all()
     app.state.training_service = TrainingService()
 

@@ -65,3 +65,32 @@ class RecomendacionProducto(BaseModel):
 class RecomendacionResponse(BaseModel):
     cliente_id: str
     recomendaciones: List[RecomendacionProducto]
+
+# ── Integración ML: Metas y Comisiones (docs/auditoria/15_...) ──────────────────────
+class ForecastCierreResponse(BaseModel):
+    sucursal: str
+    dias_restantes: int
+    ventas_mes_actual: float
+    proyeccion_cierre: float
+    meta: float
+    pct_cumplimiento_esperado: float
+    probabilidad_alcanzar_meta: Optional[float] = None
+    mae_modelo: Optional[float] = None
+
+class MetaSugeridaResponse(BaseModel):
+    vendedor_origen: str
+    sucursal: str
+    meta_sugerida_ia: Optional[float] = None
+    meta_sugerida_estadistica: float
+    metodo_estadistico: str
+    meses_historico_usados: int
+    valores_atipicos_excluidos: int
+    meses_atipicos_ml_detectados: int
+
+class RecomendacionComercialItem(BaseModel):
+    producto_cod: str
+    score_afinidad: float
+
+class RecomendacionesComercialesResponse(BaseModel):
+    vendedor_origen: str
+    recomendaciones: List[RecomendacionComercialItem]

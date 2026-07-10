@@ -1,6 +1,12 @@
 # backend/app/repositories/prediction_repository.py
 """SQL de features "de un registro vivo" para inferencia puntual: churn, anomalías,
-recomendaciones y segmentación RFM de un cliente/transacción específico."""
+recomendaciones y segmentación RFM de un cliente/transacción específico.
+
+Fase 4 (docs/ml_contracts.md): las columnas y su semántica se alinean EXACTAMENTE con
+el contrato de cada modelo (`ml/contracts/models/*.json`), construido durante el
+entrenamiento (Fase 3) en `ml/src/data/make_dataset.py`. Antes había un mismatch de
+nombres y semántica entre entrenamiento y serving (H-03 churn, H-04 anomalías, H-14
+RFM) que hacía que estos endpoints nunca produjeran una predicción válida."""
 from typing import NamedTuple
 
 from sqlalchemy import text
@@ -8,16 +14,21 @@ from sqlalchemy.orm import Session
 
 
 class ChurnFeatures(NamedTuple):
-    inactivity_days: float
+    """Mismas 3 columnas y semántica que ml/contracts/models/churn.json: frequency =
+    días distintos de compra, monetary_value = SUM(subtotal_neto), average_ticket =
+    monetary_value/frequency -- calculadas 'a fecha de hoy' (T=now()), igual que el
+    entrenamiento las calculaba 'a fecha de corte T' (H-03, cerrado)."""
+    frequency: float
+    monetary_value: float
     average_ticket: float
-    total_orders: float
-    discount_ratio: float
 
 
 class AnomalyFeatures(NamedTuple):
-    discount_pct: float
-    total_amount: float
-    refund_flag: float
+    """Mismas 4 columnas que ml/contracts/models/anomalies.json (H-04, cerrado)."""
+    subtotal_neto: float
+    cantidad: float
+    costo_total: float
+    margen: float
 
 
 class ClientPurchaseHistory(NamedTuple):
@@ -38,44 +49,44 @@ class PredictionRepository:
     def get_churn_features(self, cliente_id: str) -> ChurnFeatures | None:
         query = """
             SELECT
-                COALESCE(EXTRACT(DAY FROM (now() - MAX(f.fecha_completa))), 365) AS inactivity_days,
-                COALESCE(AVG(v.subtotal_neto), 0) AS average_ticket,
-                COUNT(DISTINCT v.num_factura) AS total_orders,
-                COALESCE(SUM(v.valor_descuento) / NULLIF(SUM(v.subtotal_bruto), 0), 0) AS discount_ratio
+                COUNT(DISTINCT f.fecha_completa) AS frequency,
+                COALESCE(SUM(v.subtotal_neto), 0) AS monetary_value
             FROM edw.fact_ventas_detalle v
             JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
             JOIN edw.dim_cliente c ON v.cliente_sk = c.cliente_sk
             JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
+            JOIN edw.dim_estado_documento ed ON v.estado_documento_sk = ed.estado_documento_sk
             WHERE l.id_cliente_transaccional = :cliente_id
-              AND v.estado_factura != 'I'
+              AND ed.estado_documento_sk <> -1
+            GROUP BY l.id_cliente_transaccional
         """
         res = self.db.execute(text(query), {"cliente_id": cliente_id}).fetchone()
         if not res:
             return None
-        return ChurnFeatures(
-            inactivity_days=float(res[0]) if res[0] is not None else 365.0,
-            average_ticket=float(res[1]) if res[1] is not None else 0.0,
-            total_orders=float(res[2]) if res[2] is not None else 0.0,
-            discount_ratio=float(res[3]) if res[3] is not None else 0.0,
-        )
+        frequency = float(res[0]) if res[0] else 0.0
+        monetary_value = float(res[1]) if res[1] is not None else 0.0
+        average_ticket = monetary_value / frequency if frequency > 0 else 0.0
+        return ChurnFeatures(frequency=frequency, monetary_value=monetary_value, average_ticket=average_ticket)
 
     def get_transaction_features(self, transaccion_id: str) -> AnomalyFeatures | None:
         query = """
-            SELECT
-                COALESCE(valor_descuento / NULLIF(subtotal_bruto, 0), 0) AS discount_pct,
-                total_linea AS total_amount,
-                CASE WHEN es_devolucion THEN 1.0 ELSE 0.0 END AS refund_flag
-            FROM edw.fact_ventas_detalle
-            WHERE num_factura = :tx_id
+            SELECT fvd.subtotal_neto, fvd.cantidad, fvd.costo_total,
+                   (fvd.subtotal_neto - fvd.costo_total) AS margen
+            FROM edw.fact_ventas_detalle fvd
+            WHERE fvd.num_factura = :tx_id
             LIMIT 1;
         """
         res = self.db.execute(text(query), {"tx_id": transaccion_id}).fetchone()
-        if not res:
+        if not res or res[2] is None:
+            # costo_total NULL: misma política de nulos del entrenamiento (H-19, cerrado
+            # en Fase 3) -- se excluye en vez de imputar con 0 (reintroduciría el margen
+            # 100% artificial que el EDW nuevo eliminó como centinela).
             return None
         return AnomalyFeatures(
-            discount_pct=float(res[0]),
-            total_amount=float(res[1]),
-            refund_flag=float(res[2]),
+            subtotal_neto=float(res[0]),
+            cantidad=float(res[1]),
+            costo_total=float(res[2]),
+            margen=float(res[3]),
         )
 
     def get_client_purchase_history(self, cliente_id: str, limit: int = 10) -> ClientPurchaseHistory:
@@ -85,8 +96,9 @@ class PredictionRepository:
             JOIN edw.dim_producto p ON v.producto_sk = p.producto_sk
             JOIN edw.dim_cliente c ON v.cliente_sk = c.cliente_sk
             JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
+            JOIN edw.dim_estado_documento ed ON v.estado_documento_sk = ed.estado_documento_sk
             WHERE l.id_cliente_transaccional = :cliente_id
-              AND v.estado_factura != 'I'
+              AND ed.estado_documento_sk <> -1
             ORDER BY v.fecha_sk DESC
             LIMIT :limit;
         """
@@ -97,24 +109,30 @@ class PredictionRepository:
         )
 
     def get_rfm_features(self, cliente_id: str) -> RfmFeatures | None:
+        """frequency = días distintos de compra (COUNT DISTINCT fecha_completa), igual
+        semántica que ml/src/data/make_dataset.py::fetch_rfm_metrics (antes contaba
+        facturas, no días -- H-14 parcialmente cerrado). recency queda relativa a
+        `now()` porque este endpoint sirve el estado ACTUAL del cliente, a diferencia
+        del entrenamiento que usa el máximo del dataset histórico -- esa diferencia es
+        esperable en un sistema en vivo, no un bug."""
         query = """
-            WITH facturas AS (
+            WITH compras_por_dia AS (
                 SELECT
                     v.cliente_sk,
-                    v.num_factura,
                     f.fecha_completa,
-                    SUM(v.subtotal_neto) AS total_factura
+                    SUM(v.subtotal_neto) AS total_dia
                 FROM edw.fact_ventas_detalle v
                 JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
-                WHERE v.estado_factura != 'I'
-                GROUP BY v.cliente_sk, v.num_factura, f.fecha_completa
+                JOIN edw.dim_estado_documento ed ON v.estado_documento_sk = ed.estado_documento_sk
+                WHERE ed.estado_documento_sk <> -1
+                GROUP BY v.cliente_sk, f.fecha_completa
             )
             SELECT
-                COALESCE(EXTRACT(DAY FROM (now() - MAX(fc.fecha_completa))), 365) AS recency,
-                COUNT(DISTINCT fc.num_factura) AS frequency,
-                COALESCE(SUM(fc.total_factura), 0) AS monetary_value
-            FROM facturas fc
-            JOIN edw.dim_cliente c ON fc.cliente_sk = c.cliente_sk
+                COALESCE(EXTRACT(DAY FROM (now() - MAX(cd.fecha_completa))), 365) AS recency,
+                COUNT(DISTINCT cd.fecha_completa) AS frequency,
+                COALESCE(SUM(cd.total_dia), 0) AS monetary_value
+            FROM compras_por_dia cd
+            JOIN edw.dim_cliente c ON cd.cliente_sk = c.cliente_sk
             JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
             WHERE l.id_cliente_transaccional = :cliente_id
             GROUP BY l.id_cliente_transaccional;

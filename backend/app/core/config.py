@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # Montado por Docker en /app/ml_models (docker-compose.yml); fallback local
     # para ejecución fuera de contenedor sin Docker.
     ML_MODELS_DIR: str = os.getenv("ML_MODELS_DIR", "/app/ml_models")
+    # Contratos declarativos (ml/contracts/models/*.json) montados de solo lectura --
+    # NO es el código fuente de ml/ (eso es ML_SOURCE_DIR, ausente en producción). Es la
+    # interfaz declarada entre las dos imágenes Docker (docs/ml_contracts.md): el backend
+    # lee el JSON, nunca importa ml.src.contracts.*.
+    ML_CONTRACTS_DIR: str = os.getenv("ML_CONTRACTS_DIR", "/app/ml_contracts")
     # Ruta al código fuente del pipeline de entrenamiento (ml/), solo presente en
     # entornos de desarrollo (ver docker-compose.override.yml). En producción no
     # existe, y trigger_retraining_pipeline() debe fallar con un mensaje claro.

@@ -7,7 +7,7 @@ export interface RouteConfig {
   nav?: { label: string };
 }
 
-export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'ventas' | 'settings';
+export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'ventas' | 'ventas.metas' | 'settings';
 
 export const ROUTES: Record<RouteKey, RouteConfig> = {
   admin: {
@@ -39,6 +39,11 @@ export const ROUTES: Record<RouteKey, RouteConfig> = {
     path: '/ventas',
     allowedRoles: ['administrador', 'gerencia', 'ventas'],
     nav: { label: 'Gestión Comercial' },
+  },
+  'ventas.metas': {
+    path: '/ventas/metas',
+    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    nav: { label: 'Mi Meta y Comisión' },
   },
   settings: {
     path: '/settings',

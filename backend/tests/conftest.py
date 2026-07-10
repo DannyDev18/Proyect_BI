@@ -63,6 +63,10 @@ class _DummyAnomalyDetector:
         import numpy as np
         return np.array([1] * len(X))  # 1 = normal
 
+    def decision_function(self, X):
+        import numpy as np
+        return np.array([0.2] * len(X))
+
 
 class _DummyClusterer:
     def predict(self, X):
@@ -75,5 +79,7 @@ def _dummy_rules_df():
     return pd.DataFrame({
         "item_A": ["A1", "A2"],
         "item_B": ["B1", "B2"],
-        "score": [0.8, 0.6],
+        "support": [0.1, 0.2],
+        "confidence": [0.5, 0.6],
+        "lift": [0.8, 0.6],
     })

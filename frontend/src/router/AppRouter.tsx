@@ -11,6 +11,7 @@ import { DashboardGerencia } from '../pages/DashboardGerencia.tsx';
 import { DashboardMetas } from '../pages/DashboardMetas.tsx';
 import { DashboardBodega } from '../pages/DashboardBodega.tsx';
 import { DashboardVentas } from '../pages/DashboardVentas.tsx';
+import { DashboardMetasVendedor } from '../pages/DashboardMetasVendedor.tsx';
 import { AccessDenied } from '../pages/AccessDenied.tsx';
 import { Settings } from '../pages/Settings.tsx';
 import { NotFound } from '../pages/NotFound.tsx';
@@ -90,11 +91,18 @@ export const AppRouter = () => {
             </ProtectedRoute>
           } />
 
-          <Route path="ventas" element={
-            <ProtectedRoute routeKey="ventas">
-              <DashboardVentas />
-            </ProtectedRoute>
-          } />
+          <Route path="ventas">
+            <Route index element={
+              <ProtectedRoute routeKey="ventas">
+                <DashboardVentas />
+              </ProtectedRoute>
+            } />
+            <Route path="metas" element={
+              <ProtectedRoute routeKey="ventas.metas">
+                <DashboardMetasVendedor />
+              </ProtectedRoute>
+            } />
+          </Route>
 
           <Route path="access-denied" element={<AccessDenied />} />
 

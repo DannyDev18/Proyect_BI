@@ -37,7 +37,7 @@ class GoalsService:
         registros_afectados = 0
 
         for t in tendencias:
-            meta_monto = self._predict_goal_amount(t, anio_ant, mes_ant, factor_presion)
+            meta_monto = self.predict_goal_amount(t, anio_ant, mes_ant, factor_presion)
             meta_unidades = max(0.0, float(t.unidades_anterior or 0.0) * factor_presion)
 
             existing = self.goal_repo.find_proposal(anio, mes, t.vendedor_origen, t.sucursal)
@@ -51,7 +51,10 @@ class GoalsService:
         self.goal_repo.commit()
         return registros_afectados
 
-    def _predict_goal_amount(self, t: VendorSalesTrend, anio_ant: int, mes_ant: int, factor_presion: float) -> float:
+    def predict_goal_amount(self, t: VendorSalesTrend, anio_ant: int, mes_ant: int, factor_presion: float) -> float:
+        """Público (no `_privado`): reutilizado también por `GoalMLService` (integración
+        Metas y Comisiones) para mostrar la meta sugerida por IA junto a la estadística,
+        sin reimplementar el capping 0.8-1.2 aquí documentado."""
         ventas_ant = float(t.ventas_anterior or 0.0)
         mavg_3m = float(t.promedio_movil_3m or ventas_ant or 0.0)
         ventas_yoy = float(t.ventas_anio_anterior or 0.0)
@@ -60,12 +63,16 @@ class GoalsService:
             # Fallback heurístico si el modelo de metas no está disponible.
             return max(0.0, ventas_ant * factor_presion)
 
+        # 6 features, igual que ml/contracts/models/goals.json (H-13, cerrado): 'anio' se
+        # excluyó del entrenamiento (los árboles no extrapolan a años futuros) y se agregó
+        # 'indice_estacional_relativo' (antes faltaba -- mismatch confirmado en auditoría 11).
         df_pred = pd.DataFrame([{
-            "anio": anio_ant, "mes": mes_ant,
+            "mes": mes_ant,
             "ventas_historicas": ventas_ant,
             "unidades_historicas": float(t.unidades_anterior or 0.0),
             "ventas_anio_anterior": ventas_yoy,
             "promedio_movil_3m": mavg_3m,
+            "indice_estacional_relativo": float(t.indice_estacional_relativo or 1.0),
         }])
         growth_ratio = inference.predict_goal_growth_ratio(self.model_loader, df_pred)
         growth_ratio = max(GROWTH_RATIO_MIN, min(growth_ratio, GROWTH_RATIO_MAX))

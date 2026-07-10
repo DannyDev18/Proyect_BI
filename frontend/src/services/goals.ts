@@ -1,5 +1,5 @@
 import { api } from './http';
-import type { GoalPeriod, GoalProposal } from '../types/goals';
+import type { GoalPeriod, GoalProposal, GoalsAISummary } from '../types/goals';
 
 export const getGoalPeriods = () =>
   api.get<GoalPeriod[]>('/api/v1/gerencia/goals/periods');
@@ -16,3 +16,8 @@ export const generateGoals = (anio: number, mes: number, pressure_factor: number
 
 export const reviewGoal = (id: number, data: { monto_meta: number; estado: 'APROBADA' | 'RECHAZADA'; comision_base_pct: number }) =>
   api.put(`/api/v1/gerencia/goals/${id}/review`, data);
+
+/** Integración ML (docs/auditoria/15_...): metas sugeridas por IA, vendedores en
+ * riesgo/alta probabilidad y recomendaciones comerciales por categoría. */
+export const getGoalsAISummary = () =>
+  api.get<GoalsAISummary>('/api/v1/gerencia/goals/ai-summary');

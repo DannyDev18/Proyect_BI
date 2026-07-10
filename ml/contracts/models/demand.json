@@ -2,29 +2,166 @@
   "name": "demand",
   "version": "0.1.0",
   "task": "regression",
-  "status": "draft",
-  "features": [],
+  "status": "active",
+  "features": [
+    {
+      "name": "lag_1_y_quantity",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Unidades vendidas del día anterior (mismo producto)"
+    },
+    {
+      "name": "lag_7_y_quantity",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Unidades vendidas hace 7 días (mismo producto)"
+    },
+    {
+      "name": "lag_14_y_quantity",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Unidades vendidas hace 14 días (mismo producto)"
+    },
+    {
+      "name": "lag_30_y_quantity",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Unidades vendidas hace 30 días (mismo producto)"
+    },
+    {
+      "name": "lag_90_y_quantity",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Unidades vendidas hace 90 días (mismo producto)"
+    },
+    {
+      "name": "rolling_mean_7d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Media móvil 7 días por producto (shift 1)"
+    },
+    {
+      "name": "rolling_mean_30d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Media móvil 30 días por producto (shift 1)"
+    },
+    {
+      "name": "rolling_std_7d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Desviación estándar móvil 7 días por producto (shift 1)"
+    },
+    {
+      "name": "rolling_min_7d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Mínimo móvil 7 días por producto (shift 1)"
+    },
+    {
+      "name": "rolling_max_7d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Máximo móvil 7 días por producto (shift 1)"
+    },
+    {
+      "name": "expanding_mean",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Media expandida histórica por producto (shift 1)"
+    },
+    {
+      "name": "is_weekend",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "1 si sábado/domingo"
+    },
+    {
+      "name": "day_of_week",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "0=lunes .. 6=domingo"
+    },
+    {
+      "name": "month",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "Mes calendario 1-12"
+    },
+    {
+      "name": "quarter",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "Trimestre 1-4"
+    },
+    {
+      "name": "is_month_start",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "1 si primer día del mes"
+    },
+    {
+      "name": "is_month_end",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "1 si último día del mes"
+    },
+    {
+      "name": "es_feriado",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "1 si feriado Ecuador de fecha fija (aproximación; deuda ETL dim_fecha.es_feriado no poblado)"
+    }
+  ],
   "target": {
     "name": "y_quantity",
     "transform": "log1p",
     "inverse_transform": "expm1",
-    "description": "Unidades vendidas por producto/día. Igual que ventas, requiere artefacto autocontenido (TransformedTargetRegressor) — hoy sufre el mismo bug de escala H-01."
+    "description": "Unidades vendidas por producto/día (llave de negocio codart, no nombre_articulo — H-21 cerrado). El artefacto es un sklearn.compose.TransformedTargetRegressor(func=log1p, inverse_func=expm1) autocontenido: predict() devuelve unidades directamente (H-01, cerrado)."
   },
   "output": {
     "type": "float",
     "unit": "units",
-    "plausible_range": [0, 100000]
+    "plausible_range": [
+      0,
+      100000
+    ]
   },
   "population_filter": {
-    "description": "Mismo filtro de estado/devolución que ventas, vía dim_estado_documento (C-1). Agrupar por la llave de negocio del producto (codart) en vez de nombre_articulo, para no partir series de productos renombrados en dim_producto SCD2 (H-21).",
-    "sql_condition": "TBD en Fase 2: JOIN edw.dim_estado_documento ... WHERE es_procesada AND NOT es_devolucion"
+    "description": "Mismo filtro de estado/devolución que ventas, vía dim_estado_documento (C-1). Agrupado por codart (llave de negocio), no por nombre_articulo, para no partir series de productos renombrados en dim_producto SCD2 (H-21, cerrado). Implementado en Fase 2/3 (docs/auditoria/13_impacto_dim_estado_documento.md): ml/src/data/make_dataset.py::fetch_sales_by_dimension ya usa este JOIN + codart.",
+    "sql_condition": "JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1 -- GROUP BY ... p.codart"
   },
-  "library_versions": {},
-  "data_range": {},
+  "library_versions": {
+    "scikit-learn": "1.9.0",
+    "xgboost": "2.1.4",
+    "lightgbm": "4.6.0",
+    "catboost": "1.2.10"
+  },
+  "data_range": {
+    "desde": "2023-07-10",
+    "hasta": "2026-07-09"
+  },
   "known_serving_mismatch": [
-    "H-01: mismo bug de escala log1p sin expm1 en backend/app/ml/inference.py:predict_demand",
-    "H-08: el entrenamiento legacy no aplica la ventana de 3 años que sí usa ventas, pese a la misma justificación de quiebre estructural del negocio",
-    "H-08b: select_features_and_target elimina la columna 'producto' — el modelo global queda ciego al SKU más allá de sus lags"
+    "H-01/H-07 cerrados en Fase 4: model_loader.py apunta a demand.pkl y predict_demand ya no depende de model.feature_names_in_ (el ganador es CatBoost, que no lo expone) -- usa loader.get_features('demand_rf') del sidecar.",
+    "H-08b (sin cerrar, decisión consciente): el modelo sigue siendo 'global' (columna 'producto'/codart se descarta en select_features_and_target antes de entrenar) — funciona como perfil de serie compartido entre productos vía sus lags/rolling, no distingue SKUs explícitamente. Evaluar target encoding o features estáticas del SKU en una iteración futura si la precisión por producto resulta insuficiente en producción"
   ],
-  "notes": "Features planeadas: mismo pipeline de lags/rolling/calendario que ventas (ml/src/preprocessor.py), evaluando en Fase 3 si conviene codificar el producto (target encoding o features estáticas del SKU) para no perder precisión por artículo. Aplicar VENTANA_ENTRENAMIENTO_VENTAS_ANIOS también aquí (hoy solo se usa en ventas). Contrato en blanco (features=[]) por D-2; se completa en Fase 2/3."
+  "notes": "Reconstruido en Fase 3 (2026-07-09), reentrenado tras cerrar una segunda fuga descubierta durante la reconstrucción de recomendación: fetch_sales_by_dimension no excluía el centinela producto_sk=-1 (58.121 filas, 11.2% del hecho, sin producto real resuelto), que entraba como un pseudo-producto contaminando la serie. Tras excluirlo (regla de negocio 12, CLAUDE.md): ganador CatBoostRegressor (learning_rate=0.05, iterations=200, depth=6), RMSE=172.97 unidades, MAE=5.56 unidades, R2=0.899 (mejoró desde R2=0.866 de la primera corrida con el centinela incluido). Verificado manualmente que predict() devuelve unidades en rango plausible, no log1p. Nota operativa: se detectó y corrigió un deadlock de paralelismo anidado en model_selector.py (LightGBM/CatBoost con n_jobs=-1 propio + RandomizedSearchCV con n_jobs=-1 se colgaban indefinidamente dentro de Docker); el fix (n_jobs=1 en el nivel del search para esos dos algoritmos) aplica a los 7 modelos, no solo a demanda."
 }

@@ -3,10 +3,22 @@ import pandas as pd
 from sqlalchemy import create_engine
 from datetime import datetime
 
-# Regla de negocio: un cliente se considera en abandono (churn) si no compra hace más de
-# 90 días. Umbral acordado como proxy (no existe campo de baja explícito en el origen);
-# ajustable por env var sin tocar código.
+# Regla de negocio: un cliente se considera en abandono (churn) si no vuelve a comprar
+# dentro del horizonte de 90 días siguientes a la fecha de corte. Umbral acordado como
+# proxy (no existe campo de baja explícito en el origen); ajustable por env var sin tocar
+# código.
 CHURN_UMBRAL_DIAS = int(os.getenv("ML_CHURN_UMBRAL_DIAS", "90"))
+
+# H-05 (docs/auditoria/11_auditoria_tecnica_modelos_ml.md): el dataset legacy calculaba
+# recency/frequency y la etiqueta is_churn sobre el MISMO snapshot completo -- circular,
+# el modelo aprendía a reproducir una regla determinista, no a anticipar abandono. El
+# dataset nuevo usa varias fechas de corte T (espaciadas CHURN_ESPACIADO_DIAS entre sí):
+# las features se calculan SOLO con transacciones <= T y la etiqueta observa si el cliente
+# vuelve a comprar en (T, T+CHURN_UMBRAL_DIAS] -- información que en producción no existe
+# todavía en el momento de predecir. Varios cortes (no solo el más reciente) dan más
+# ejemplos de entrenamiento y cubren distintos regímenes de negocio.
+CHURN_N_CORTES = int(os.getenv("ML_CHURN_N_CORTES", "6"))
+CHURN_ESPACIADO_DIAS = int(os.getenv("ML_CHURN_ESPACIADO_DIAS", "90"))
 
 # Tamaños de muestra para los modelos no supervisados. Se muestrean las N líneas MÁS
 # RECIENTES (ORDER BY venta_sk DESC) para que la corrida sea determinista y refleje el
@@ -62,18 +74,25 @@ class SalesTimeSerieExtractor:
         return df
 
     def fetch_sales_by_dimension(self, dimension='producto') -> pd.DataFrame:
+        """`dimension='producto'`: se agrupa por `codart` (llave de negocio), NO por
+        `nombre_articulo`. `dim_producto` es SCD2 (CLAUDE.md regla 7): si un artículo
+        cambia de nombre, agrupar por nombre parte su serie histórica en dos (H-21,
+        docs/auditoria/11_auditoria_tecnica_modelos_ml.md). Excluye el centinela
+        `producto_sk = -1` ('producto desconocido', 58.121 filas / 11.2% del hecho):
+        sin este filtro entra como un pseudo-producto que mezcla demanda de artículos no
+        resueltos (regla de negocio 12, CLAUDE.md)."""
         if dimension == 'producto':
             sql = """
                 SELECT
                     df.fecha_completa as ds,
-                    p.nombre_articulo as producto,
+                    p.codart as producto,
                     SUM(fvd.cantidad) as y_quantity
                 FROM edw.fact_ventas_detalle fvd
                 JOIN edw.dim_fecha df ON fvd.fecha_sk = df.fecha_sk
                 JOIN edw.dim_producto p ON fvd.producto_sk = p.producto_sk
                 JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk
-                WHERE ed.estado_documento_sk <> -1
-                GROUP BY df.fecha_completa, p.nombre_articulo
+                WHERE ed.estado_documento_sk <> -1 AND fvd.producto_sk <> -1
+                GROUP BY df.fecha_completa, p.codart
                 ORDER BY df.fecha_completa;
             """
         else:
@@ -107,11 +126,71 @@ class SalesTimeSerieExtractor:
             df['recency'] = (max_date - pd.to_datetime(df['last_purchase_date'])).dt.days
         return df
 
-    def fetch_churn_data(self) -> pd.DataFrame:
-        df = self.fetch_rfm_metrics()
+    def fetch_customer_transactions(self) -> pd.DataFrame:
+        """Todas las transacciones válidas por cliente (fecha + monto): insumo crudo para
+        construir los snapshots temporales de `fetch_churn_data` (H-05). Se excluye el
+        centinela `cliente_sk = -1` por el mismo motivo que en `fetch_rfm_metrics` (H-16)."""
+        sql = """
+            SELECT fvd.cliente_sk, df.fecha_completa, fvd.subtotal_neto
+            FROM edw.fact_ventas_detalle fvd
+            JOIN edw.dim_fecha df ON fvd.fecha_sk = df.fecha_sk
+            JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1 AND fvd.cliente_sk <> -1;
+        """
+        df = pd.read_sql(sql, self.engine)
         if not df.empty:
-            df['is_churn'] = (df['recency'] > CHURN_UMBRAL_DIAS).astype(int)
+            df['fecha_completa'] = pd.to_datetime(df['fecha_completa'])
         return df
+
+    def fetch_churn_data(
+        self,
+        horizonte_dias: int = CHURN_UMBRAL_DIAS,
+        n_cortes: int = CHURN_N_CORTES,
+        espaciado_dias: int = CHURN_ESPACIADO_DIAS,
+    ) -> pd.DataFrame:
+        """Dataset de churn con corte temporal (H-05, ver constantes arriba). Para cada
+        fecha de corte T: features (recency/frequency/monetary_value/average_ticket)
+        calculadas solo con transacciones <= T; etiqueta is_churn = 1 si el cliente NO
+        vuelve a comprar en (T, T+horizonte_dias]. Reemplaza el dataset legacy (circular:
+        recency y la etiqueta se derivaban del mismo snapshot completo)."""
+        tx = self.fetch_customer_transactions()
+        if tx.empty:
+            return pd.DataFrame()
+
+        max_date = tx['fecha_completa'].max()
+        min_date = tx['fecha_completa'].min()
+        horizonte = pd.Timedelta(days=horizonte_dias)
+
+        cortes = []
+        corte = max_date - horizonte
+        while corte - horizonte >= min_date and len(cortes) < n_cortes:
+            cortes.append(corte)
+            corte = corte - pd.Timedelta(days=espaciado_dias)
+
+        frames = []
+        for corte in cortes:
+            hist = tx[tx['fecha_completa'] <= corte]
+            if hist.empty:
+                continue
+            agg = hist.groupby('cliente_sk').agg(
+                last_purchase=('fecha_completa', 'max'),
+                frequency=('fecha_completa', 'nunique'),
+                monetary_value=('subtotal_neto', 'sum'),
+            )
+            agg['recency'] = (corte - agg['last_purchase']).dt.days
+            agg['average_ticket'] = agg['monetary_value'] / agg['frequency']
+
+            futuro = tx[(tx['fecha_completa'] > corte) & (tx['fecha_completa'] <= corte + horizonte)]
+            clientes_que_vuelven = set(futuro['cliente_sk'].unique())
+            agg['is_churn'] = (~agg.index.isin(clientes_que_vuelven)).astype(int)
+            agg['fecha_corte'] = corte
+            frames.append(agg.reset_index())
+
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)[
+            ['cliente_sk', 'fecha_corte', 'recency', 'frequency', 'monetary_value', 'average_ticket', 'is_churn']
+        ]
 
     def fetch_market_basket(self) -> pd.DataFrame:
         """Líneas de venta más recientes para reglas de asociación. La transacción real
@@ -119,15 +198,19 @@ class SalesTimeSerieExtractor:
         colapsaba varias compras de un mismo cliente-día en una sola canasta. Se
         excluyen devoluciones porque no son 'compras conjuntas'; con el DDL nuevo,
         `es_devolucion` migró de `fact_ventas_detalle` a la junk dimension
-        `dim_estado_documento` (cambio C-1, docs/auditoria/12_fase0_analisis_capa_contratos_ml.md)."""
+        `dim_estado_documento` (cambio C-1, docs/auditoria/12_fase0_analisis_capa_contratos_ml.md).
+        Se usa `codart` (llave de negocio) en vez de `nombre_articulo` (H-10): el backend
+        identifica productos por código, no por nombre a texto libre. Excluye el centinela
+        `producto_sk = -1` ('producto desconocido'): no es un artículo real y no debe
+        entrar a las reglas de asociación (regla de negocio 12, CLAUDE.md)."""
         sql = f"""
             SELECT
                 fvd.num_factura as transaction_id,
-                p.nombre_articulo as product_name
+                p.codart as product_code
             FROM edw.fact_ventas_detalle fvd
             JOIN edw.dim_producto p ON fvd.producto_sk = p.producto_sk
             JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk
-            WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion
+            WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion AND fvd.producto_sk <> -1
             ORDER BY fvd.venta_sk DESC
             LIMIT {MUESTRA_MARKET_BASKET};
         """

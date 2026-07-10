@@ -1,7 +1,7 @@
 # ml/src/training/train_anomaly_detection.py
 import logging
 from sklearn.ensemble import IsolationForest
-from src.utils.model_export import save_artifact
+from src.utils.model_export import library_versions, save_artifact
 
 logger = logging.getLogger("ML.AnomalyDetection")
 
@@ -29,8 +29,15 @@ def train_isolation_forest(X_train, contamination=0.01):
     
     return model
 
-def save_anomaly_model(model, filepath=None, metrics=None):
+def save_anomaly_model(model, filepath=None, metrics=None, features=None, data_range=None):
     save_artifact(
-        model, "isolation_forest_model.pkl", filepath=filepath, metrics=metrics,
+        model, "anomalies.pkl", filepath=filepath, metrics=metrics,
+        algorithm=type(model).__name__,
+        features=features,
+        contract_name="anomalies",
+        contract_version="0.1.0",
+        library_versions_used=library_versions("scikit-learn"),
+        data_range=data_range,
+        population_filter="costo_total IS NOT NULL; estado_documento_sk <> -1",
         extra={"problema": "deteccion_anomalias_no_supervisada"},
     )

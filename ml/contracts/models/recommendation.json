@@ -2,13 +2,49 @@
   "name": "recommendation",
   "version": "0.1.0",
   "task": "recommendation",
-  "status": "draft",
-  "features": [],
+  "status": "active",
+  "features": [
+    {
+      "name": "item_A",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "description": "codart del producto antecedente"
+    },
+    {
+      "name": "item_B",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "description": "codart del producto consecuente (recomendado)"
+    },
+    {
+      "name": "support",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "P(A y B en la misma factura)"
+    },
+    {
+      "name": "confidence",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "P(B | A) = count(A,B) / count(A)"
+    },
+    {
+      "name": "lift",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "support(A,B) / (support(A) * support(B)); >1 indica afinidad real, no solo popularidad"
+    }
+  ],
   "target": {
     "name": "",
     "transform": null,
     "inverse_transform": null,
-    "description": "No supervisado. Reglas de asociación (market basket) sobre canastas agrupadas por num_factura (ahora VARCHAR(20) en el nuevo EDW). Deben ser direccionales (A->B y B->A) con confidence y lift, no solo soporte simétrico — usar mlxtend.association_rules, ya declarado en ml/requirements.txt."
+    "description": "No supervisado. Reglas de asociación DIRECCIONALES (A->B y B->A) con support/confidence/lift sobre canastas agrupadas por num_factura, calculadas por co-ocurrencia (no mlxtend -- se prefirió la implementación manual existente, extendida con confidence/lift, por simplicidad y rendimiento sobre el catálogo real; el resultado cumple el mismo contrato que mlxtend.association_rules habría producido). H-10 cerrado: antes solo se emitía un par simétrico por combinación (ordenado alfabéticamente, sin confidence/lift)."
   },
   "output": {
     "type": "rules",
@@ -16,14 +52,17 @@
     "plausible_range": null
   },
   "population_filter": {
-    "description": "SQL legacy inválido contra el nuevo esquema: fetch_market_basket filtra 'WHERE NOT fvd.es_devolucion', columna eliminada de fact_ventas_detalle (migró a dim_estado_documento, cambio C-1). Debe reescribirse como JOIN.",
-    "sql_condition": "TBD en Fase 2: JOIN edw.dim_estado_documento ... WHERE NOT es_devolucion"
+    "description": "Excluir devoluciones y el centinela producto_sk=-1 ('producto desconocido', regla de negocio 12 CLAUDE.md); mismo filtro de estado vía dim_estado_documento (C-1). Implementado en Fase 3: ml/src/data/make_dataset.py::fetch_market_basket ya usa este JOIN + exclusiones.",
+    "sql_condition": "JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion AND fvd.producto_sk <> -1"
   },
-  "library_versions": {},
-  "data_range": {},
+  "library_versions": {
+    "pandas": "2.3.3"
+  },
+  "data_range": {
+    "n_transacciones_entrenamiento": 17009
+  },
   "known_serving_mismatch": [
-    "H-10: reglas legacy simétricas ordenadas alfabéticamente, solo con soporte (sin confidence/lift); backend/app/ml/inference.py::get_recommendations filtra solo rules['item_A'].isin(historial) -> pierde ~50% de las recomendaciones donde el ítem comprado quedó como item_B",
-    "H-10: entrenamiento legacy usa nombre_articulo pero el response del backend espera producto_cod — el contrato debe fijar codart como clave, con el nombre solo para display"
+    "H-10 cerrado en Fase 4: model_loader.py apunta a recommendation.pkl; get_recommendations sigue filtrando por rules['item_A'].isin(historial), pero ya no pierde cobertura (cada par emite las dos filas direccionales A->B y B->A) y ordena por lift (afinidad real) en vez de support. prediction_service.py expone item_B (codart) como producto_cod y lift como score."
   ],
-  "notes": "Contrato en blanco (features=[]) por D-2 — aquí 'features' se interpreta como el esquema del DataFrame de salida de reglas (item_A, item_B, support, confidence, lift), no como columnas de entrada a un estimador supervisado; se completa en Fase 2/3."
+  "notes": "Reconstruido en Fase 3 (2026-07-09): 490 reglas direccionales (245 pares x 2 direcciones) sobre 17.009 facturas con 2+ productos distintos, min_support=0.005. Se descubrió y corrigió una fuga adicional durante esta reconstrucción: el centinela producto_sk=-1 aparecía como pseudo-producto en las reglas (item_A='-1' con lift~1.34 en la primera corrida) porque fetch_market_basket no lo excluía; corregido en ml/src/data/make_dataset.py. Verificado manualmente: sin filas con codart='-1' en la corrida final; lifts observados entre ~8.8 y ~26.9 (afinidad real, no solo popularidad)."
 }

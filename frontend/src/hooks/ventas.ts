@@ -1,5 +1,8 @@
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { getSalesGoals, getChurnRisk, getRecommendations, getCustomerSegment } from '../services/ventas';
+import {
+  getSalesGoals, getMyGoalTracking, getChurnRisk, getRecommendations, getCustomerSegment,
+  getGoalForecastCierre, getMetaSugerida, getGoalRecommendations,
+} from '../services/ventas';
 import { qk } from '../constants/queryKeys';
 
 const errorMessage = (error: unknown): string | null =>
@@ -11,6 +14,43 @@ export const useSalesGoals = () => {
     queryFn: () => getSalesGoals().then((r) => r.data),
   });
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
+};
+
+/** Dashboard vendedor: cumplimiento de meta del período vigente, vía el mismo endpoint
+ * de `useSalesGoals` pero tipado según el contrato real del backend. */
+export const useMyGoalTracking = () => {
+  const query = useQuery({
+    queryKey: qk.ventas.myGoalTracking(),
+    queryFn: () => getMyGoalTracking().then((r) => r.data),
+  });
+  return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
+};
+
+/** Integración ML (docs/auditoria/15_...): pronóstico de cierre del mes en curso. */
+export const useGoalForecastCierre = () => {
+  const query = useQuery({
+    queryKey: qk.ventas.forecastCierre(),
+    queryFn: () => getGoalForecastCierre().then((r) => r.data),
+  });
+  return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error) };
+};
+
+/** Meta sugerida por IA (goals_rf) y por el motor estadístico (IQR + anomalías). */
+export const useMetaSugerida = () => {
+  const query = useQuery({
+    queryKey: qk.ventas.metaSugerida(),
+    queryFn: () => getMetaSugerida().then((r) => r.data),
+  });
+  return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error) };
+};
+
+/** Productos recomendados (reglas de asociación) para ayudar a cerrar la meta. */
+export const useGoalRecommendations = () => {
+  const query = useQuery({
+    queryKey: qk.ventas.goalRecommendations(),
+    queryFn: () => getGoalRecommendations().then((r) => r.data),
+  });
+  return { data: query.data?.recomendaciones ?? [], loading: query.isLoading, error: errorMessage(query.error) };
 };
 
 export const useChurnRisk = () => {

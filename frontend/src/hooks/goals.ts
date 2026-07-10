@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getGoalPeriods, getGoalsTracking, generateGoals, reviewGoal } from '../services/goals';
+import { getGoalPeriods, getGoalsTracking, generateGoals, reviewGoal, getGoalsAISummary } from '../services/goals';
 import { qk } from '../constants/queryKeys';
-import type { GoalPeriod, GoalProposal } from '../types/goals';
+import type { GoalPeriod, GoalProposal, GoalsAISummary } from '../types/goals';
 
 const errorMessage = (error: unknown): string | null =>
   error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
@@ -9,6 +9,7 @@ const errorMessage = (error: unknown): string | null =>
 // Stable references so effects keyed on `.data` don't re-fire every render while loading.
 const EMPTY_PERIODS: GoalPeriod[] = [];
 const EMPTY_PROPOSALS: GoalProposal[] = [];
+const EMPTY_AI_SUMMARY: GoalsAISummary = { vendedores_en_riesgo: [], vendedores_alta_probabilidad: [], recomendaciones_por_categoria: [] };
 
 export const usePeriods = () => {
   const query = useQuery({
@@ -34,6 +35,14 @@ export const useGenerateGoals = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['goals', 'tracking'] }),
   });
   return { generate: mutation.mutateAsync, loading: mutation.isPending };
+};
+
+export const useGoalsAISummary = () => {
+  const query = useQuery({
+    queryKey: qk.goals.aiSummary(),
+    queryFn: () => getGoalsAISummary().then((r) => r.data),
+  });
+  return { data: query.data ?? EMPTY_AI_SUMMARY, loading: query.isLoading, error: errorMessage(query.error) };
 };
 
 export const useReviewGoal = () => {

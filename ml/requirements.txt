@@ -1,9 +1,16 @@
-pandas>=2.0.0
+# H-20 (docs/auditoria/11_auditoria_tecnica_modelos_ml.md), confirmado en la práctica en
+# Fase 4: los .pkl acoplan versiones entre ml/ y backend/ (joblib.load() requiere la
+# MISMA librería mayor que los serializó). pandas>=2.0.0 sin techo resolvió 3.0.3 aquí
+# mientras el backend fija <3.0.0 -- pandas 3.0 cambia el dtype de string por defecto
+# (StringDtype) y rompe el unpickle de artefactos que serializan un DataFrame crudo
+# (ml/models/recommendation.pkl). Los techos de abajo replican exactamente los de
+# backend/requirements.txt para las 5 librerías que participan en la serialización.
+pandas>=2.0.0,<3.0.0
 numpy>=1.26.0
-scikit-learn>=1.3.0
-xgboost>=2.0.0
-lightgbm>=4.0.0
-catboost>=1.2.0
+scikit-learn>=1.3.0,<2.0.0
+xgboost>=2.0.0,<3.0.0
+lightgbm>=4.0.0,<5.0.0
+catboost>=1.2.0,<2.0.0
 optuna>=3.5.0
 mlxtend>=0.23.0
 matplotlib>=3.7.1
@@ -13,4 +20,4 @@ ipykernel>=6.25.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 python-dotenv>=1.0.0
-joblib>=1.3.2
+joblib>=1.3.2,<2.0.0

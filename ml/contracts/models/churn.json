@@ -2,28 +2,60 @@
   "name": "churn",
   "version": "0.1.0",
   "task": "classification",
-  "status": "draft",
-  "features": [],
+  "status": "active",
+  "features": [
+    {
+      "name": "frequency",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Días distintos de compra hasta la fecha de corte T"
+    },
+    {
+      "name": "monetary_value",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "SUM(subtotal_neto) acumulado hasta T"
+    },
+    {
+      "name": "average_ticket",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "monetary_value / frequency hasta T (colineal por construcción, aceptado como en el legacy)"
+    }
+  ],
   "target": {
     "name": "is_churn",
     "transform": null,
     "inverse_transform": null,
-    "description": "REDISEÑO METODOLÓGICO OBLIGATORIO (H-05): la etiqueta legacy (recency > 90 días) es circular, derivada del mismo snapshot que las features. El dataset nuevo debe usar corte temporal: features calculadas hasta la fecha T, etiqueta = '¿compró en (T, T+90]?'. Sin este rediseño, el modelo no es defendible metodológicamente."
+    "description": "REDISEÑO METODOLÓGICO APLICADO (H-05, cerrado): para varias fechas de corte T (6 cortes espaciados 90 días), las features se calculan SOLO con transacciones <= T; is_churn = 1 si el cliente NO vuelve a comprar en (T, T+90]. Ya no es circular (antes recency/frequency y la etiqueta se derivaban del mismo snapshot completo)."
   },
   "output": {
     "type": "probability",
     "unit": "",
-    "plausible_range": [0, 1]
+    "plausible_range": [
+      0,
+      1
+    ]
   },
   "population_filter": {
-    "description": "Mismo filtro de estado/devolución vía dim_estado_documento (C-1); excluir cliente_sk = -1 (H-16, mismo criterio que segmentación).",
-    "sql_condition": "WHERE cliente_sk <> -1 AND <filtro dim_estado_documento>"
+    "description": "Excluir cliente_sk = -1 (H-16); mismo filtro de estado/devolución vía dim_estado_documento (C-1). Implementado en Fase 3 (ml/src/data/make_dataset.py::fetch_customer_transactions / fetch_churn_data).",
+    "sql_condition": "JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1 AND fvd.cliente_sk <> -1"
   },
-  "library_versions": {},
-  "data_range": {},
+  "library_versions": {
+    "scikit-learn": "1.9.0",
+    "xgboost": "2.1.4",
+    "lightgbm": "4.6.0",
+    "catboost": "1.2.10"
+  },
+  "data_range": {
+    "desde": "2025-01-15",
+    "hasta": "2026-04-10"
+  },
   "known_serving_mismatch": [
-    "H-03: features de entrenamiento legacy (frequency, monetary_value, average_ticket) != features que envía backend/app/repositories/prediction_repository.py::get_churn_features (inactivity_days, average_ticket, total_orders, discount_ratio) — un único contrato de features debe gobernar ambos lados",
-    "H-05: etiqueta circular (ver target.description) — el AUC alto legacy no refleja capacidad predictiva real"
+    "H-03 cerrado en Fase 4: get_churn_features ahora devuelve (frequency, monetary_value, average_ticket) con la MISMA semántica del entrenamiento (frequency = días distintos de compra), calculadas 'a fecha de hoy' (T=now()) en vez de a una fecha de corte histórica -- diferencia esperada en un sistema en vivo, no un bug residual. model_loader.py apunta a churn.pkl."
   ],
-  "notes": "Contrato en blanco (features=[]) por D-2. Es el único de los 7 modelos donde cambia la DEFINICIÓN del problema (ventana de observación + horizonte de predicción), no solo la plomería de columnas. average_ticket = monetary/frequency es colineal por construcción; evaluar features de tendencia (frecuencia últimos 3m vs histórica) en el rediseño."
+  "notes": "Reconstruido en Fase 3 (2026-07-09): dataset con 6 cortes temporales (2025-01-15 a 2026-04-10, espaciados 90 días), 296.981 filas cliente×corte. Fuerte desbalance de clases observado (94.8% is_churn=1 / 5.2%=0): con una ventana de repetición de 90 días, la mayoría de clientes no vuelve a comprar en ese plazo (consistente con un negocio de compra infrecuente/B2B). Ganador CatBoostClassifier (learning_rate=0.1, iterations=100, depth=4) con class_weight/auto_class_weights balanceado. ROC-AUC=0.752, accuracy=0.783 (recall clase minoritaria 'no churn'=0.60, precision=0.14 -- esperable dado el desbalance 19:1; no se ajustó el umbral de decisión en esta pasada). Este AUC (0.75) es MENOR que el AUC legacy reportado anteriormente, y eso es la señal correcta: el AUC legacy era alto porque la etiqueta era una función determinista de las mismas features (circular); 0.75 es la capacidad predictiva real del modelo sobre una etiqueta no circular."
 }

@@ -44,6 +44,9 @@ services:
       - "8000:8000"
     volumes:
       - ./ml/models:/app/ml_models:ro
+      # Contratos declarativos (JSON), no código fuente de ml/ -- es la interfaz
+      # documentada entre las dos imágenes Docker (docs/ml_contracts.md).
+      - ./ml/contracts/models:/app/ml_contracts:ro
 
   # ── 3. Frontend React ────────────────────────────────────────────────────────
   frontend:

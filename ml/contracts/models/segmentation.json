@@ -2,29 +2,55 @@
   "name": "segmentation",
   "version": "0.1.0",
   "task": "clustering",
-  "status": "draft",
-  "features": [],
+  "status": "active",
+  "features": [
+    {
+      "name": "recency",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Días desde la última compra hasta la fecha máxima del dataset de entrenamiento"
+    },
+    {
+      "name": "frequency",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Días distintos de compra (COUNT DISTINCT fecha_sk)"
+    },
+    {
+      "name": "monetary_value",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "SUM(subtotal_neto) histórico del cliente"
+    }
+  ],
   "target": {
     "name": "",
     "transform": null,
     "inverse_transform": null,
-    "description": "No supervisado. K-Means, K=4 (RFM: recency, frequency, monetary_value), escalado con StandardScaler."
+    "description": "No supervisado. sklearn.pipeline.Pipeline(StandardScaler + KMeans(n_clusters=4)) autocontenido: predict(X) escala y clasifica en una sola llamada (H-02, cerrado)."
   },
   "output": {
     "type": "cluster_id",
     "unit": "",
-    "plausible_range": [0, 3]
+    "plausible_range": [
+      0,
+      3
+    ]
   },
   "population_filter": {
-    "description": "Excluir cliente_sk = -1 (centinela 'desconocido'): hoy entra al RFM como un pseudo-cliente de valor monetario enorme y distorsiona los centroides (H-16, regla 12 de CLAUDE.md — los centinelas son para integridad referencial, no para análisis). Mismo filtro de estado/devolución vía dim_estado_documento (C-1).",
-    "sql_condition": "WHERE cliente_sk <> -1 AND <filtro dim_estado_documento>"
+    "description": "Excluir cliente_sk = -1 (centinela 'desconocido'): sin este filtro entra al RFM como un pseudo-cliente de valor monetario enorme y distorsiona los centroides (H-16, cerrado). Mismo filtro de estado/devolución vía dim_estado_documento (C-1). Implementado en Fase 2 (docs/auditoria/13_impacto_dim_estado_documento.md): ml/src/data/make_dataset.py::fetch_rfm_metrics ya usa este JOIN + exclusión.",
+    "sql_condition": "JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1 AND fvd.cliente_sk <> -1"
   },
-  "library_versions": {},
+  "library_versions": {
+    "scikit-learn": "1.9.0"
+  },
   "data_range": {},
   "known_serving_mismatch": [
-    "H-02: el .pkl legacy es un dict {'model': KMeans, 'scaler': StandardScaler}; el backend llama .predict() sobre el dict -> AttributeError en el 100% de las llamadas. El artefacto reconstruido DEBE ser un único objeto sklearn.Pipeline([('scaler', StandardScaler()), ('kmeans', KMeans(...))]) con predict() autocontenido",
-    "H-12: K=4 fijo sin selección justificada más allá de silhouette logueado; las etiquetas de K-Means son arbitrarias entre corridas — el mapeo cluster_id -> nombre de negocio debe recalcularse ordenando por centroides (p.ej. monetary desc / recency asc) y persistirse en el meta.json, no hardcodearse en el backend",
-    "H-14: semántica RFM distinta entre entrenamiento (frequency = días distintos de compra, recency vs max del dataset) y serving (frequency = nº de facturas, recency vs now()) — debe unificarse en una sola definición compartida"
+    "H-02/H-12 cerrados en Fase 4: model_loader.py apunta a segmentation.pkl; prediction_service.py::get_customer_segment ya no usa un dict SEGMENTOS hardcodeado -- lee cluster_to_segment del sidecar vía inference.get_cluster_to_segment().",
+    "H-14 mayormente cerrado: get_rfm_features ahora calcula frequency = días distintos de compra (COUNT DISTINCT fecha_completa), igual semántica que el entrenamiento (antes contaba facturas). recency queda relativa a now() en vez del máximo histórico del dataset de entrenamiento -- diferencia esperada en un sistema en vivo (se predice 'hoy', no una fecha de corte pasada), no un bug residual."
   ],
-  "notes": "Contrato en blanco (features=[]) por D-2; en Fase 2/3 se fija la semántica RFM única y se documenta la elección de K (silhouette/elbow) en el reporte de reconstrucción."
+  "notes": "Reconstruido en Fase 3 (2026-07-09): Pipeline(StandardScaler+KMeans, K=4, random_state=42, n_init=10), silhouette=0.6079 sobre 53.812 clientes (tras excluir cliente_sk=-1). Verificado: pipeline.predict(DataFrame) funciona con un solo objeto sin desempaquetar dict. Centroides reales muy dispersos (monetary_value desde ~$400 hasta ~$1.75M) -- la base de clientes incluye cuentas B2B/mayoristas con montos varios órdenes de magnitud por encima del cliente típico; el mapeo cluster_to_segment ordena por (monetary desc, recency asc) así que sigue siendo correcto pese a la dispersión."
 }

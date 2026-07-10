@@ -15,5 +15,6 @@ services:
     volumes:
       - ./backend:/app
       - ./ml/models:/app/ml_models:ro
+      - ./ml/contracts/models:/app/ml_contracts:ro
       - ./ml:/app/ml_src:ro
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

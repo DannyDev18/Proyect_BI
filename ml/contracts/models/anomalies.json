@@ -2,29 +2,64 @@
   "name": "anomalies",
   "version": "0.1.0",
   "task": "anomaly_detection",
-  "status": "draft",
-  "features": [],
+  "status": "active",
+  "features": [
+    {
+      "name": "subtotal_neto",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Subtotal neto de la línea de venta"
+    },
+    {
+      "name": "cantidad",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Cantidad vendida en la línea"
+    },
+    {
+      "name": "costo_total",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Costo total de la línea; filas con NULL se excluyen del entrenamiento (H-19)"
+    },
+    {
+      "name": "margen",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "subtotal_neto - costo_total"
+    }
+  ],
   "target": {
     "name": "",
     "transform": null,
     "inverse_transform": null,
-    "description": "No supervisado, IsolationForest. contamination=0.01 es un supuesto de negocio sin validar; contrastar contra casos conocidos de fact_logs_auditoria en Fase 3."
+    "description": "No supervisado, IsolationForest(n_estimators=200, contamination=0.01, random_state=42)."
   },
   "output": {
     "type": "score",
     "unit": "",
-    "plausible_range": [-1, 1]
+    "plausible_range": [
+      -1,
+      1
+    ]
   },
   "population_filter": {
-    "description": "Mismo filtro de estado/devolución vía dim_estado_documento (C-1). Política de nulos de costo a decidir explícitamente en el contrato: con el nuevo EDW, costo_unitario/costo_total/margen_bruto son NULLables reales (cambio C-2) cuando el artículo no tiene ultcos — el fillna(0.0) legacy reintroduciría exactamente el margen-100%-artificial que el EDW acaba de eliminar (H-19). Decisión pendiente: excluir filas sin costo vs. imputar con mediana por producto vs. feature indicadora de nulo.",
-    "sql_condition": "TBD en Fase 2"
+    "description": "Excluir filas con costo_total NULL (H-19, cerrado): con el EDW nuevo costo_unitario/costo_total/margen_bruto son NULLables reales (cambio C-2); imputar con 0.0 reintroduciría el 'margen 100% artificial' que el EDW acaba de eliminar como centinela, y el modelo lo aprendería como patrón normal en vez de anomalía. Se excluyen en vez de imputar (17.8% de la muestra en el entrenamiento de referencia) por falta de evidencia para asumir una mediana por producto. Mismo filtro de estado/devolución vía dim_estado_documento, ya aplicado en la extracción (Fase 2).",
+    "sql_condition": "costo_total IS NOT NULL AND margen IS NOT NULL (aplicado en pandas tras el JOIN a dim_estado_documento en ml/src/data/make_dataset.py::fetch_transactions_for_anomalies)"
   },
-  "library_versions": {},
-  "data_range": {},
+  "library_versions": {
+    "scikit-learn": "1.9.0"
+  },
+  "data_range": {
+    "n_filas_entrenamiento": 16449,
+    "n_excluidas_sin_costo": 3551
+  },
   "known_serving_mismatch": [
-    "H-04: features de entrenamiento legacy (subtotal_neto, cantidad, costo_total, margen) != features que envía backend/app/repositories/prediction_repository.py::get_transaction_features (discount_pct, total_amount, refund_flag)",
-    "H-04: backend/app/services/prediction_service.py::get_anomaly_status devuelve un score hardcodeado (-0.85/0.15) en vez de decision_function() real — el contrato exige exponer el score real del estimador",
-    "H-19: fillna(0.0) legacy sobre costo_total ahora NULLable (C-2) produce un margen artificial del 100% que el modelo aprende como patrón, no como anomalía"
+    "H-04 cerrado en Fase 4: get_transaction_features ahora devuelve (subtotal_neto, cantidad, costo_total, margen), las mismas 4 columnas del contrato; excluye la transacción si costo_total es NULL (misma política H-19 del entrenamiento). get_anomaly_status ya no devuelve un score hardcodeado -- usa model.decision_function(X) real vía inference.detect_anomalies(). model_loader.py apunta a anomalies.pkl."
   ],
-  "notes": "Contrato en blanco (features=[]) por D-2. pct_margen=0 en cortesías (convención C-3 del EDW nuevo, reemplaza el centinela -9999) es un patrón que el detector verá y debe considerarse al diseñar las features."
+  "notes": "Reconstruido en Fase 3 (2026-07-09): 16.449 filas de entrenamiento (de una muestra de 20.000 transacciones recientes, tras excluir 3.551 filas -17.8%- sin costo_total real, H-19 cerrado). pct_flagged_outlier=1.00% (coincide exactamente con contamination=0.01, esperado). decision_function_mean=0.291, std=0.077 -- quedan como valores de referencia para detectar drift en reentrenamientos futuros. contamination=0.01 sigue siendo un supuesto de negocio sin contrastar contra fact_logs_auditoria (pendiente, hallazgo de higiene, no bloqueante)."
 }

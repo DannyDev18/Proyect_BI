@@ -32,3 +32,9 @@ class ModelNotLoadedError(DomainError):
 class ExternalDataError(DomainError):
     """Fallo real de acceso a datos externos (EDW, filesystem de modelos, subprocess de
     entrenamiento) que no debe tragarse en silencio ni devolver un valor por defecto mudo."""
+
+
+class ModelContractError(DomainError):
+    """Una inferencia violó el contrato ML declarado (features faltantes o predicción
+    fuera del rango plausible) para un contrato en estado 'active'. Ver
+    app/ml/contract_validation.py -- responde 400 vía el handler catch-all de DomainError."""

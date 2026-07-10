@@ -9,7 +9,7 @@ import { useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategorie
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
-import { fmt, pct } from '../utils/format';
+import { fmt, fmtFull, fmtMoney, pct } from '../utils/format';
 import { chartTooltipStyle, COLORS } from '../utils/chartTheme';
 
 export const DashboardGerencia = () => {
@@ -117,8 +117,8 @@ export const DashboardGerencia = () => {
         ) : (
           <>
             <KpiCard
-              title="Ingresos Totales (Globales)"
-              value={kpi.data ? fmt(ingresosTotales) : '—'}
+              title="Ingresos Totales (ventas-devoluciones)"
+              value={kpi.data ? fmtMoney(ingresosTotales) : '—'}
               icon={DollarSign}
               trend="neutral"
               animDelay={0}

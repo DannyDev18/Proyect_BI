@@ -14,8 +14,9 @@ import pandas as pd
 
 from app.core.exceptions import ExternalDataError
 from app.ml import inference
+from app.ml.forecasting import walk_forward_forecast
 from app.ml.model_loader import ModelLoader
-from app.ml.preprocessing import TimeSeriesLagsTransformer, build_preprocessing_pipeline, select_features_and_target
+from app.ml.preprocessing import build_preprocessing_pipeline, select_features_and_target
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.prediction_repository import PredictionRepository
 
@@ -52,25 +53,12 @@ class PredictionService:
         df_hist_raw = df_hist_raw.resample("D").sum().fillna(0)
 
         try:
-            # Simulación día a día: cada predicción se re-inyecta como "historia" para
-            # poder generar los lags/rolling del día siguiente (walk-forward).
-            pipeline = build_preprocessing_pipeline("y_sales_net")
-            df_sim = df_hist_raw.copy()
-            generated_preds: list[tuple[pd.Timestamp, float]] = []
+            generated_preds = walk_forward_forecast(
+                self.model_loader, df_hist_raw, "y_sales_net", DIAS_A_PROYECTAR_VENTAS, inference.predict_sales,
+            )
 
-            for _ in range(DIAS_A_PROYECTAR_VENTAS):
-                next_day = df_sim.index[-1] + pd.Timedelta(days=1)
-                df_sim.loc[next_day] = 0.0
-
-                df_feat = pipeline.fit_transform(df_sim.copy())
-                X, _ = select_features_and_target(df_feat, "y_sales_net")
-                X_live = X.iloc[[-1]]
-
-                y_p = max(0.0, float(inference.predict_sales(self.model_loader, X_live).iloc[0]))
-                df_sim.loc[next_day, "y_sales_net"] = y_p
-                generated_preds.append((next_day, y_p))
-
-            resultado = self._build_forecast_series(df_hist_raw, generated_preds)
+            mae_real = self.model_loader.get_meta("sales_rf").get("metrics", {}).get("MAE")
+            resultado = self._build_forecast_series(df_hist_raw, generated_preds, mae_real)
             metricas = self._build_forecast_metrics(df_hist_raw, generated_preds)
             insights = self._build_forecast_insights(metricas)
         except Exception as e:
@@ -87,7 +75,12 @@ class PredictionService:
         }
 
     @staticmethod
-    def _build_forecast_series(df_hist_raw: pd.DataFrame, generated_preds: list[tuple]) -> list[dict]:
+    def _build_forecast_series(df_hist_raw: pd.DataFrame, generated_preds: list[tuple], mae: float | None = None) -> list[dict]:
+        # H-09 (docs/auditoria/11_auditoria_tecnica_modelos_ml.md): el intervalo ya no es
+        # un +-15% fijo fabricado -- se usa el MAE real del holdout de entrenamiento
+        # (sidecar sales.meta.json). Si no hay MAE disponible (modelo no cargado), se
+        # cae al +-15% como aproximación explícita, no silenciosa.
+        margen = mae if mae is not None else None
         resultado = []
         # Solo se envían al dashboard los últimos N días de historial (el modelo usa
         # hasta 730 días para entrenar/predecir, pero graficar todo sería ilegible).
@@ -106,12 +99,18 @@ class PredictionService:
             resultado[-1]["monto_predicho"] = resultado[-1]["monto_real"]
 
         for p_date, val in generated_preds:
+            if margen is not None:
+                intervalo_superior = val + margen
+                intervalo_inferior = max(0.0, val - margen)
+            else:
+                intervalo_superior = val * 1.15
+                intervalo_inferior = val * 0.85
             resultado.append({
                 "fecha": p_date.strftime("%Y-%m-%d"),
                 "monto_real": None,
                 "monto_predicho": round(val, 2),
-                "intervalo_superior": round(val * 1.15, 2),
-                "intervalo_inferior": round(val * 0.85, 2),
+                "intervalo_superior": round(intervalo_superior, 2),
+                "intervalo_inferior": round(intervalo_inferior, 2),
             })
         return resultado
 
@@ -134,6 +133,15 @@ class PredictionService:
         mejor_mes = df_mensual["y_sales_net"].idxmax().strftime("%B %Y").title() if not df_mensual.empty else ""
         peor_mes = df_mensual["y_sales_net"].idxmin().strftime("%B %Y").title() if not df_mensual.empty else ""
 
+        # H-09 (cerrado): mae_modelo/r2_modelo vienen del holdout real de entrenamiento
+        # (sales.meta.json), no de valores fabricados. nivel_confianza es un PROXY
+        # basado en R2 (no un intervalo de confianza estadístico estricto) -- se declara
+        # así explícitamente en vez de presentar un 95% fijo sin respaldo.
+        metrics_entrenamiento = self.model_loader.get_meta("sales_rf").get("metrics", {})
+        mae_modelo = metrics_entrenamiento.get("MAE")
+        r2_modelo = metrics_entrenamiento.get("R2")
+        nivel_confianza = round(max(0.0, min(r2_modelo, 1.0)) * 100, 1) if r2_modelo is not None else None
+
         return {
             "ventas_acumuladas": round(total_historico, 2),
             "venta_esperada": round(ventas_futuras, 2),
@@ -141,8 +149,9 @@ class PredictionService:
             "mes_mayor_venta": mejor_mes,
             "mes_menor_venta": peor_mes,
             "promedio_mensual": round(float(df_mensual["y_sales_net"].mean()) if not df_mensual.empty else 0.0, 2),
-            "mae_modelo": 165842.12,
-            "nivel_confianza": 95.0,
+            "mae_modelo": round(mae_modelo, 2) if mae_modelo is not None else None,
+            "r2_modelo": round(r2_modelo, 4) if r2_modelo is not None else None,
+            "nivel_confianza": nivel_confianza,
             "fecha_entrenamiento": self.model_loader.get_training_date("sales_rf"),
         }
 
@@ -158,7 +167,9 @@ class PredictionService:
             insights.append("Las predicciones sugieren estabilidad lateral sin saltos bruscos en el horizonte.")
         if metricas.get("mes_mayor_venta"):
             insights.append(f"Históricamente el negocio ha dependido fuerte de estacionalidades; el top del periodo es {metricas['mes_mayor_venta']}.")
-        insights.append(f"El intervalo de confianza predice un +-15% de variabilidad a lo esperado según el riesgo ({DIAS_A_PROYECTAR_VENTAS} días).")
+        mae = metricas.get("mae_modelo")
+        if mae is not None:
+            insights.append(f"El intervalo mostrado usa el error absoluto medio real del modelo (+-${mae:,.0f}/día) sobre el horizonte de {DIAS_A_PROYECTAR_VENTAS} días.")
         return insights
 
     # ── Caso de uso: Predicción de demanda logística (Bodega) ─────────────────
@@ -199,10 +210,9 @@ class PredictionService:
             prob = float(preds["churn_probability"].iloc[0])
             return {"probabilidad_abandono": round(prob * 100, 2), "riesgo_alto": prob > 0.5}
         except Exception as e:
-            # Bug conocido preexistente: `churn_best_classifier.pkl` fue entrenado con un
-            # esquema de features distinto al que produce `get_churn_features` (mismatch
-            # de columnas), independiente de este refactor -- ver ml/ para corregirlo.
-            # Se degrada con gracia en vez de romper el dashboard con un 500.
+            # H-03 cerrado en Fase 4: get_churn_features ahora produce las mismas 3
+            # columnas/semántica que el contrato de entrenamiento (ml/contracts/models/churn.json).
+            # Se sigue degradando con gracia ante cualquier otro fallo inesperado.
             logger.error(f"Fallo inferencia de churn para cliente_id={cliente_id}: {e}")
             return {"probabilidad_abandono": 0.0, "riesgo_alto": False}
 
@@ -214,9 +224,12 @@ class PredictionService:
 
         df_live = pd.DataFrame([features._asdict()])
         try:
-            preds = inference.detect_anomalies(self.model_loader, df_live)
-            is_anom = int(preds.iloc[0]) == -1
-            return {"score": -0.85 if is_anom else 0.15, "es_anomalia": is_anom}
+            # H-04 cerrado en Fase 4: score real de decision_function(), ya no un valor
+            # hardcodeado (-0.85/0.15).
+            result = inference.detect_anomalies(self.model_loader, df_live)
+            is_anom = int(result["is_anomaly_pred"].iloc[0]) == -1
+            score = float(result["anomaly_score"].iloc[0])
+            return {"score": round(score, 4), "es_anomalia": is_anom}
         except Exception as e:
             logger.error(f"Fallo detección de anomalías para transaccion_id={transaccion_id}: {e}")
             return {"score": 0.0, "es_anomalia": False}
@@ -225,12 +238,11 @@ class PredictionService:
     def get_product_recommendations(self, cliente_id: str) -> dict[str, Any]:
         historial = self.prediction_repo.get_client_purchase_history(cliente_id)
         try:
+            # H-10 cerrado en Fase 4: item_B ya es codart (no nombre_articulo), y el
+            # score expuesto es 'lift' (afinidad real), no 'support' (popularidad bruta).
             recs_df = inference.get_recommendations(self.model_loader, historial.ultimos_items or None)
             recomendaciones = [
-                {
-                    "producto_cod": str(row["item_B"] if "item_B" in row else row.iloc[1]),
-                    "score": float(row["score"] if "score" in row else row["support"]),
-                }
+                {"producto_cod": str(row["item_B"]), "score": float(row["lift"])}
                 for _, row in recs_df.iterrows()
             ]
             return {"nombre_cliente": historial.nombre_cliente, "recomendaciones": recomendaciones}
@@ -240,12 +252,6 @@ class PredictionService:
 
     # ── Caso de uso: Segmentación RFM interactiva ─────────────────────────────
     def get_customer_segment(self, cliente_id: str) -> dict[str, Any]:
-        SEGMENTOS = {
-            0: "En Riesgo / Inactivo",
-            1: "Clientes Ocasionales",
-            2: "Clientes Constantes",
-            3: "Campeones / Alto Valor",
-        }
         features = self.prediction_repo.get_rfm_features(cliente_id)
         if features is None:
             return {"segmento": -1, "nombre_segmento": "Sin historial"}
@@ -253,7 +259,12 @@ class PredictionService:
         df_rfm = pd.DataFrame([features._asdict()])
         try:
             cluster_id = int(inference.predict_segmentation(self.model_loader, df_rfm).iloc[0])
-            return {"segmento": cluster_id, "nombre_segmento": SEGMENTOS.get(cluster_id, f"Segmento {cluster_id}")}
+            # H-12 cerrado en Fase 4: el mapeo cluster_id -> nombre de negocio se lee del
+            # sidecar (persistido al entrenar, ordenado por centroides), no de un dict
+            # hardcodeado que quedaba desalineado tras cada reentrenamiento.
+            cluster_to_segment = inference.get_cluster_to_segment(self.model_loader)
+            nombre = cluster_to_segment.get(str(cluster_id), f"Segmento {cluster_id}")
+            return {"segmento": cluster_id, "nombre_segmento": nombre}
         except Exception as e:
             logger.error(f"Fallo segmentación RFM para cliente_id={cliente_id}: {e}")
             return {"segmento": -1, "nombre_segmento": "Error"}

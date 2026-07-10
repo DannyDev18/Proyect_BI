@@ -2,28 +2,188 @@
   "name": "sales",
   "version": "0.1.0",
   "task": "regression",
-  "status": "draft",
-  "features": [],
+  "status": "active",
+  "features": [
+    {
+      "name": "lag_1_y_sales_net",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Venta neta del día anterior"
+    },
+    {
+      "name": "lag_7_y_sales_net",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Venta neta hace 7 días"
+    },
+    {
+      "name": "lag_14_y_sales_net",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Venta neta hace 14 días"
+    },
+    {
+      "name": "lag_30_y_sales_net",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Venta neta hace 30 días"
+    },
+    {
+      "name": "lag_90_y_sales_net",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Venta neta hace 90 días"
+    },
+    {
+      "name": "rolling_mean_7d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Media móvil 7 días (shift 1)"
+    },
+    {
+      "name": "rolling_mean_30d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Media móvil 30 días (shift 1)"
+    },
+    {
+      "name": "rolling_std_7d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Desviación estándar móvil 7 días (shift 1)"
+    },
+    {
+      "name": "rolling_min_7d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Mínimo móvil 7 días (shift 1)"
+    },
+    {
+      "name": "rolling_max_7d",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Máximo móvil 7 días (shift 1)"
+    },
+    {
+      "name": "expanding_mean",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Media expandida histórica (shift 1)"
+    },
+    {
+      "name": "is_weekend",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "1 si sábado/domingo"
+    },
+    {
+      "name": "day_of_week",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "0=lunes .. 6=domingo"
+    },
+    {
+      "name": "month",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "Mes calendario 1-12"
+    },
+    {
+      "name": "quarter",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "Trimestre 1-4"
+    },
+    {
+      "name": "is_month_start",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "1 si primer día del mes"
+    },
+    {
+      "name": "is_month_end",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "1 si último día del mes"
+    },
+    {
+      "name": "es_feriado",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "1 si feriado Ecuador de fecha fija (aproximación; deuda ETL dim_fecha.es_feriado no poblado)"
+    },
+    {
+      "name": "n_clientes_prev",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Clientes distintos del día anterior (exógena rezagada 1 día)"
+    },
+    {
+      "name": "n_facturas_prev",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Facturas distintas del día anterior (exógena rezagada 1 día)"
+    },
+    {
+      "name": "pct_descuento_prom_prev",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "% descuento promedio del día anterior (exógena rezagada 1 día)"
+    }
+  ],
   "target": {
     "name": "y_sales_net",
     "transform": "log1p",
     "inverse_transform": "expm1",
-    "description": "Venta neta diaria (SUM(subtotal_neto)) agregada por día. El artefacto reconstruido DEBE ser autocontenido (p.ej. sklearn TransformedTargetRegressor) para que predict() devuelva USD directamente, sin que ninguna capa de serving deba 'recordar' aplicar expm1."
+    "description": "Venta neta diaria (SUM(subtotal_neto)) agregada por día. El artefacto es un sklearn.compose.TransformedTargetRegressor(func=log1p, inverse_func=expm1) autocontenido: predict() devuelve USD directamente, sin que ninguna capa de serving deba 'recordar' aplicar expm1 (H-01, cerrado)."
   },
   "output": {
     "type": "float",
     "unit": "USD",
-    "plausible_range": [0, 5000000]
+    "plausible_range": [
+      0,
+      5000000
+    ]
   },
   "population_filter": {
-    "description": "Solo documentos con estado resuelto a 'Procesada' (regla de negocio 1, CLAUDE.md); excluir devoluciones. El filtro migra de fact_ventas_detalle.estado_factura/es_devolucion (esquema viejo) a un JOIN con la nueva junk dimension dim_estado_documento (cambio C-1 del EDW).",
-    "sql_condition": "TBD en Fase 2: JOIN edw.dim_estado_documento ON ... WHERE es_procesada AND NOT es_devolucion"
+    "description": "Solo documentos con estado resuelto a 'Procesada' (regla de negocio 1, CLAUDE.md); excluir devoluciones. El filtro migra de fact_ventas_detalle.estado_factura/es_devolucion (esquema viejo) a un JOIN con la nueva junk dimension dim_estado_documento (cambio C-1 del EDW). Implementado en Fase 2 (docs/auditoria/13_impacto_dim_estado_documento.md): ml/src/data/make_dataset.py y los repositorios del backend ya usan este JOIN.",
+    "sql_condition": "JOIN edw.dim_estado_documento ed ON <alias>.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1"
   },
-  "library_versions": {},
-  "data_range": {},
+  "library_versions": {
+    "scikit-learn": "1.9.0",
+    "xgboost": "2.1.4",
+    "lightgbm": "4.6.0",
+    "catboost": "1.2.10"
+  },
+  "data_range": {
+    "desde": "2023-07-10",
+    "hasta": "2026-07-09"
+  },
   "known_serving_mismatch": [
-    "H-01: backend/app/ml/inference.py:predict_sales consume model.predict() crudo sin expm1 — hoy el forecast de Gerencia muestra ~12 en vez de ~160.000 USD",
-    "H-14b: el modelo entrena con la serie global (todas las sucursales) pero prediction_service.get_sales_forecast_weekly(sucursal=...) lo aplica por sucursal, fuera de la distribución de entrenamiento"
+    "H-01 cerrado en Fase 4: backend/app/ml/model_loader.py apunta a sales.pkl (no al legacy sales_best_model.pkl) y backend/app/ml/inference.py::predict_sales ya no hace X[model.feature_names_in_] -- usa loader.get_features('sales_rf') leído del sidecar .meta.json (H-07, robusto a estimadores que no exponen feature_names_in_).",
+    "H-09 cerrado en Fase 4: prediction_service.py lee mae_modelo/r2_modelo reales de este sidecar (antes hardcodeados 165842.12/95.0); el intervalo del forecast usa +-MAE real en vez de un +-15% fijo.",
+    "H-14b (sin cerrar): el modelo entrena con la serie global (todas las sucursales) pero prediction_service.get_sales_forecast_weekly(sucursal=...) lo sigue aplicando por sucursal, fuera de la distribución de entrenamiento -- pendiente de decisión (reentrenar por sucursal o restringir el endpoint al agregado global)."
   ],
-  "notes": "Features planeadas (auditoría 12 §6, ml/src/preprocessor.py::TimeSeriesLagsTransformer): lags 1/7/14/30/90, rolling mean/std/min/max 7-30d, expanding mean, calendario (día de semana, mes, trimestre, inicio/fin de mes, feriado aproximado), exógenas rezagadas 1 día (n_clientes_prev, n_facturas_prev, pct_descuento_prom_prev). Ventana de entrenamiento: últimos 3 años (VENTANA_ENTRENAMIENTO_VENTAS_ANIOS, justificado empíricamente R² -0.03 -> +0.21, no tocar sin razón). Corregir además H-06 (bfill del preprocessor introduce fuga en las primeras filas). Este contrato nace con features=[] porque D-2 prohíbe derivarlo del .pkl legacy (sales_best_model.pkl); se completa en Fase 2/3 al reescribir ml/src/data/make_dataset.py contra el EDW nuevo."
+  "notes": "Reconstruido en Fase 3 (2026-07-09): ganador RandomForestRegressor, RMSE=6639.33 USD, MAE=3826.67 USD, R2=0.2128 (holdout cronológico 20%, consistente con el R2 documentado de +0.21 en ml/REPORTE_MEJORA_MODELOS.md — la ventana de 3 años y el resto de la metodología no cambiaron, solo H-01/H-06). Verificado manualmente que predict() devuelve USD en rango plausible (~7.800-40.000 en una muestra de 10 días reales, dentro de [0, 5000000])."
 }

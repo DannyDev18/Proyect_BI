@@ -22,26 +22,18 @@ from src.contracts.model_contract import ModelContract, contracts_dir
 
 # Hallazgo (auditoría 11) que documenta por qué el .pkl legacy de cada
 # modelo no puede pasar su contrato todavía.
-LEGACY_XFAIL_REASON = {
-    "sales": "H-01: predicción en escala log1p servida sin expm1",
-    "demand": "H-01 + H-08: escala log1p + sin ventana de 3 años",
-    "segmentation": "H-02: artefacto serializado como dict {model, scaler}, no como Pipeline",
-    "churn": "H-03 + H-05: features de serving distintas a las de entrenamiento + etiqueta circular",
-    "anomalies": "H-04: features de serving distintas a las de entrenamiento + score ficticio",
-    "recommendation": "H-10: reglas sin confianza/lift, filtro asimétrico item_A/item_B",
-    "goals": "H-13: 7 features en entrenamiento vs 6 en goals_service.py",
-}
+LEGACY_XFAIL_REASON: dict[str, str] = {}
 
 # Patrón de archivo legacy en ml/models/ para cada contrato (los nombres
 # legacy no siempre coinciden con el nombre del contrato nuevo).
 LEGACY_ARTIFACT_GLOB = {
     "sales": "sales*.pkl",
     "demand": "demand*.pkl",
-    "segmentation": "kmeans_rfm_model.pkl",
-    "churn": "churn*.pkl",
-    "anomalies": "isolation_forest_model.pkl",
-    "recommendation": "association_rules.pkl",
-    "goals": "goals*.pkl",
+    "segmentation": "segmentation*.pkl",
+    "churn": "churn.pkl",
+    "anomalies": "anomalies.pkl",
+    "recommendation": "recommendation.pkl",
+    "goals": "goals.pkl",
 }
 
 

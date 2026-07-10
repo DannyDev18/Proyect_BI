@@ -79,9 +79,15 @@ class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
                 X_out[f'{col}_prev'] = X_out[col].shift(1)
                 X_out.drop(columns=[col], inplace=True)
 
-        # Imputar los NaN resultantes del shift manteniendo soporte para groupbys temporales
-        X_out = X_out.bfill().fillna(0)
-            
+        # Imputar los NaN resultantes del shift/rolling con 0, NUNCA con bfill(): rellenar
+        # hacia atrás usa valores FUTUROS para las primeras filas de cada serie, lo cual es
+        # fuga de datos real (H-06, docs/auditoria/11_auditoria_tecnica_modelos_ml.md). En el
+        # dataset de demanda (multi-producto, ordenado por fecha) un bfill global además podía
+        # cruzar filas de OTRO producto. fillna(0) es conservador: las primeras filas de cada
+        # serie quedan con lags/rolling en 0 en vez de con información que el modelo no tendría
+        # disponible en producción.
+        X_out = X_out.fillna(0)
+
         return X_out
 
 def build_preprocessing_pipeline(target_col='y_sales_net') -> Pipeline:

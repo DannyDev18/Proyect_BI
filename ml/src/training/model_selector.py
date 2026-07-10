@@ -37,7 +37,7 @@ def find_best_regression_model(X_train, y_train, is_log_transformed=False, cv_sp
             'max_depth': [3, 5, 7],
             'subsample': [0.8, 1.0]
         }),
-        "LightGBM": (lgb.LGBMRegressor(random_state=42, n_jobs=-1), {
+        "LightGBM": (lgb.LGBMRegressor(random_state=42, n_jobs=-1, verbose=-1), {
             'n_estimators': [100, 200, 300],
             'learning_rate': [0.01, 0.05, 0.1],
             'num_leaves': [31, 50, 100],
@@ -60,6 +60,12 @@ def find_best_regression_model(X_train, y_train, is_log_transformed=False, cv_sp
 
     for name, (model, params) in models.items():
         logger.info(f"Evaluando {name} con RandomizedSearchCV...")
+        # CatBoost y LightGBM ya paralelizan internamente (thread_count/n_jobs=-1 en el
+        # propio estimador); si RandomizedSearchCV TAMBIÉN paraleliza con n_jobs=-1, las dos
+        # capas de threads compiten por los mismos núcleos y el fit puede quedarse colgado
+        # indefinidamente dentro de Docker (deadlock de paralelismo anidado, observado en la
+        # reconstrucción del modelo de demanda: RandomForest/XGBoost tardaron segundos,
+        # LightGBM no retornó tras 10+ minutos). Para ambos, el nivel externo va secuencial.
         search = RandomizedSearchCV(
             estimator=model,
             param_distributions=params,
@@ -67,7 +73,7 @@ def find_best_regression_model(X_train, y_train, is_log_transformed=False, cv_sp
             cv=tscv,
             scoring='neg_root_mean_squared_error',
             random_state=42,
-            n_jobs=-1 if name != "CatBoost" else 1
+            n_jobs=1 if name in ("CatBoost", "LightGBM") else -1
         )
         try:
             search.fit(X_train, y_train)
@@ -98,7 +104,7 @@ def find_best_classification_model(X_train, y_train, cv_splits=3):
             'learning_rate': [0.01, 0.1],
             'max_depth': [3, 5]
         }),
-        "LightGBM": (lgb.LGBMClassifier(random_state=42, class_weight='balanced'), {
+        "LightGBM": (lgb.LGBMClassifier(random_state=42, class_weight='balanced', verbose=-1), {
             'n_estimators': [100, 200],
             'learning_rate': [0.01, 0.1],
             'num_leaves': [31, 50]
@@ -115,6 +121,9 @@ def find_best_classification_model(X_train, y_train, cv_splits=3):
 
     for name, (model, params) in models.items():
         logger.info(f"Evaluando {name}...")
+        # Ver comentario equivalente en find_best_regression_model: CatBoost/LightGBM
+        # paralelizan internamente, así que el search debe ir secuencial para evitar el
+        # deadlock de paralelismo anidado dentro de Docker.
         search = RandomizedSearchCV(
             estimator=model,
             param_distributions=params,
@@ -122,7 +131,7 @@ def find_best_classification_model(X_train, y_train, cv_splits=3):
             cv=cv,
             scoring='roc_auc',
             random_state=42,
-            n_jobs=-1 if name != "CatBoost" else 1
+            n_jobs=1 if name in ("CatBoost", "LightGBM") else -1
         )
         try:
             search.fit(X_train, y_train)

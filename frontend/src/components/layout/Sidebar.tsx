@@ -24,6 +24,7 @@ const NAV_ICONS: Partial<Record<RouteKey, ReactNode>> = {
 };
 const SUB_NAV_ICONS: Partial<Record<RouteKey, ReactNode>> = {
   'gerencia.metas': <Target size={16} />,
+  'ventas.metas': <Target size={16} />,
 };
 
 export const Sidebar = () => {

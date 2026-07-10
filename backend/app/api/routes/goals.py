@@ -1,13 +1,16 @@
 # backend/app/api/routes/goals.py
 from fastapi import APIRouter, Depends, status
 
-from app.api.dependencies import GoalsServiceDep
+from app.api.dependencies import AnalyticsServiceDep, GoalMLServiceDep, GoalsServiceDep, resolve_sucursal_filter
 from app.core.deps import CurrentUserDep, PermissionChecker
-from app.schemas.goal import GoalReviewPayload, GoalTrackingResponse
+from app.schemas.goal import (
+    CategoryRecommendationItem, GoalReviewPayload, GoalsAISummaryResponse, GoalTrackingResponse, VendorRiskItem,
+)
 
 router = APIRouter()
 
 only_management = PermissionChecker(allowed_roles=["gerencia", "administrador"])
+sucursal_gerencia = resolve_sucursal_filter(allow_override=True)
 
 
 @router.get(
@@ -34,6 +37,32 @@ def get_goals_periods(goals_service: GoalsServiceDep):
 def generate_goals(anio: int, mes: int, pressure_factor: float, goals_service: GoalsServiceDep):
     creados = goals_service.generate_proposals(anio=anio, mes=mes, factor_presion=pressure_factor)
     return {"registros_creados": creados, "message": "Generación completada exitosamente"}
+
+
+@router.get(
+    "/ai-summary", response_model=GoalsAISummaryResponse, dependencies=[Depends(only_management)],
+    summary="Metas sugeridas por IA, vendedores en riesgo/alta probabilidad, recomendaciones por categoría",
+)
+def get_goals_ai_summary(
+    goal_ml_service: GoalMLServiceDep,
+    analytics_service: AnalyticsServiceDep,
+    sucursal_filtro: str | None = Depends(sucursal_gerencia),
+) -> GoalsAISummaryResponse:
+    """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_...): compone
+    `ranking_vendedores` real (ventas vs. meta del período vigente) con una
+    clasificación de ritmo, y las reglas de recomendación agregadas por categoría."""
+    kpis = analytics_service.get_sales_kpis(sucursal=sucursal_filtro)
+    clasificacion = goal_ml_service.classify_vendor_risk(kpis["ranking_vendedores"])
+    recomendaciones = goal_ml_service.get_category_recommendations()
+
+    en_riesgo = [c for c in clasificacion if c.estado == "en_riesgo"]
+    alta_probabilidad = [c for c in clasificacion if c.estado == "alta_probabilidad"]
+
+    return GoalsAISummaryResponse(
+        vendedores_en_riesgo=[VendorRiskItem(**c.__dict__) for c in en_riesgo],
+        vendedores_alta_probabilidad=[VendorRiskItem(**c.__dict__) for c in alta_probabilidad],
+        recomendaciones_por_categoria=[CategoryRecommendationItem(**r.__dict__) for r in recomendaciones],
+    )
 
 
 @router.put(

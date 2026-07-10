@@ -8,8 +8,9 @@ cross-boundary vía volumen Docker montado). El trade-off es que ambas copias
 pueden desincronizarse si se cambia el feature engineering de entrenamiento sin
 actualizar esta -- es un riesgo real y documentado, no un descuido: si cambia
 `ml/src/features/build_features.py`, hay que revisar si este archivo necesita el
-mismo cambio, porque `model.feature_names_in_` debe coincidir exactamente con lo
-que este módulo genera (ver `app/ml/inference.py`).
+mismo cambio, porque las columnas que genera deben coincidir exactamente con las
+declaradas en el sidecar `<modelo>.meta.json` (contrato ML, ver
+`app/ml/model_loader.py::get_features` y `app/ml/inference.py`).
 """
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -76,14 +77,17 @@ class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
                 X_out[f'{col}_prev'] = X_out[col].shift(1)
                 X_out.drop(columns=[col], inplace=True)
 
-        X_out = X_out.bfill().fillna(0)
+        # fillna(0), NUNCA bfill(): rellenar hacia atrás usaría valores FUTUROS para las
+        # primeras filas de cada serie -- fuga de datos (H-06, mismo fix aplicado en
+        # ml/src/features/build_features.py; ambas copias deben coincidir).
+        X_out = X_out.fillna(0)
         return X_out
 
 
 def build_preprocessing_pipeline(target_col='y_sales_net') -> Pipeline:
     """Pipeline de sklearn (Strategy: cada Transformer es intercambiable) con los mismos
-    lags usados en entrenamiento -- deben coincidir para que `feature_names_in_` del
-    modelo encuentre todas sus columnas en tiempo de inferencia."""
+    lags usados en entrenamiento -- deben coincidir para que las columnas declaradas en
+    el contrato (sidecar `.meta.json`) estén todas presentes en tiempo de inferencia."""
     return Pipeline([
         ('ts_features', TimeSeriesLagsTransformer(target_col=target_col, lags=(1, 7, 14, 30, 90))),
     ])

@@ -20,9 +20,14 @@ class AnalyticsRepository:
         end_date: str | None = None, categoria: str | None = None, vendedor: str | None = None,
     ) -> dict[str, Any]:
         where_v, params = self._build_ventas_filters(sucursal, start_date, end_date, categoria, vendedor)
+        
+        # Construir filtros para devoluciones (sin categoría porque no existe en dim_producto)
+        where_d, params_d = self._build_devoluciones_filters(sucursal, start_date, end_date, vendedor)
+        # Combinar parámetros
+        params.update(params_d)
 
         query_ventas = f"""
-            WITH sales_agg AS (
+            WITH ventas_agg AS (
                 SELECT
                     SUM(CASE WHEN f.subtotal_neto > 0 THEN f.subtotal_neto ELSE 0 END) as net_sales,
                     SUM(CASE WHEN f.subtotal_neto > 0 THEN f.costo_total ELSE 0 END) as net_cost,
@@ -31,49 +36,91 @@ class AnalyticsRepository:
                 JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
                 JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
                 {where_v}
+            ),
+            devoluciones_agg AS (
+                SELECT
+                    COALESCE(SUM(dev.total_linea_devolucion), 0) as total_devoluciones
+                FROM edw.fact_devoluciones dev
+                JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
+                JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
+                LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                {where_d}
             )
             SELECT
-                COALESCE(sa.net_sales, 0.0) as total_ventas,
-                COALESCE(sa.net_sales, 0.0) / NULLIF(sa.cnt_facturas, 0) as ticket_promedio,
-                ((COALESCE(sa.net_sales, 0.0)) - (COALESCE(sa.net_cost, 0.0))) / NULLIF(COALESCE(sa.net_sales, 0.0), 0.0) * 100.0 as margen_promedio
-            FROM sales_agg sa
+                COALESCE(v.net_sales, 0.0) - d.total_devoluciones as total_ventas_netas,
+                (COALESCE(v.net_sales, 0.0) - d.total_devoluciones) / NULLIF(v.cnt_facturas, 0) as ticket_promedio,
+                CASE 
+                    WHEN COALESCE(v.net_sales, 0.0) - d.total_devoluciones = 0 THEN 0
+                    ELSE ((COALESCE(v.net_sales, 0.0) - d.total_devoluciones) - COALESCE(v.net_cost, 0.0)) / (COALESCE(v.net_sales, 0.0) - d.total_devoluciones) * 100.0
+                END as margen_promedio
+            FROM ventas_agg v
+            CROSS JOIN devoluciones_agg d
         """
+        
         query_sucursales = f"""
-            WITH sales_agg AS (
-                SELECT f.sucursal_sk, SUM(f.subtotal_neto) as net_sales
+            WITH ventas_sucursal AS (
+                SELECT f.sucursal_sk, COALESCE(SUM(f.subtotal_neto), 0) as net_sales
                 FROM edw.fact_ventas_detalle f
                 JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
                 JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
                 {where_v}
                 GROUP BY f.sucursal_sk
+            ),
+            devoluciones_sucursal AS (
+                SELECT dev.sucursal_sk, COALESCE(SUM(dev.total_linea_devolucion), 0) as total_devoluciones
+                FROM edw.fact_devoluciones dev
+                JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
+                JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
+                LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                {where_d}
+                GROUP BY dev.sucursal_sk
             )
-            SELECT s.nombre_sucursal, COALESCE(sa.net_sales, 0.0) as net_sales
+            SELECT s.nombre_sucursal, 
+                v.net_sales - COALESCE(d.total_devoluciones, 0) as net_sales
             FROM edw.dim_sucursal s
-            LEFT JOIN sales_agg sa ON s.sucursal_sk = sa.sucursal_sk
-            WHERE sa.net_sales IS NOT NULL
+            LEFT JOIN ventas_sucursal v ON s.sucursal_sk = v.sucursal_sk
+            LEFT JOIN devoluciones_sucursal d ON s.sucursal_sk = d.sucursal_sk
+            WHERE v.net_sales - COALESCE(d.total_devoluciones, 0) != 0
+            ORDER BY net_sales DESC
         """
+        
         query_vendedores = f"""
-            WITH sales_agg AS (
-                SELECT f.vendedor_sk, SUM(f.subtotal_neto) as net_sales
+            WITH ventas_vendedor AS (
+                SELECT f.vendedor_sk, COALESCE(SUM(f.subtotal_neto), 0) as net_sales
                 FROM edw.fact_ventas_detalle f
                 JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
                 JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
                 {where_v}
                 GROUP BY f.vendedor_sk
+            ),
+            devoluciones_vendedor AS (
+                SELECT dev.vendedor_sk, COALESCE(SUM(dev.total_linea_devolucion), 0) as total_devoluciones
+                FROM edw.fact_devoluciones dev
+                JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
+                JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
+                LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                {where_d}
+                GROUP BY dev.vendedor_sk
             )
-            SELECT v.nombre_vendedor, COALESCE(sa.net_sales, 0.0) as net_sales
+            SELECT v.nombre_vendedor,
+                ventas.net_sales - COALESCE(devoluciones.total_devoluciones, 0) as net_sales
             FROM edw.dim_vendedor v
-            LEFT JOIN sales_agg sa ON v.vendedor_sk = sa.vendedor_sk
-            WHERE sa.net_sales IS NOT NULL
+            LEFT JOIN ventas_vendedor ventas ON v.vendedor_sk = ventas.vendedor_sk
+            LEFT JOIN devoluciones_vendedor devoluciones ON v.vendedor_sk = devoluciones.vendedor_sk
+            WHERE ventas.net_sales - COALESCE(devoluciones.total_devoluciones, 0) != 0
             ORDER BY net_sales DESC
             LIMIT 15
         """
+        
         res_v = self.db.execute(text(query_ventas), params).fetchone()
         res_s = self.db.execute(text(query_sucursales), params).fetchall()
         res_vend = self.db.execute(text(query_vendedores), params).fetchall()
@@ -91,20 +138,42 @@ class AnalyticsRepository:
         end_date: str | None = None, vendedor: str | None = None,
     ) -> list[dict[str, Any]]:
         where_v, params = self._build_ventas_filters(sucursal, start_date, end_date, None, vendedor, require_clase=True)
+        where_d, params_d = self._build_devoluciones_filters(sucursal, start_date, end_date, vendedor)
+        params.update(params_d)
+    
         query = f"""
-            WITH sales_agg AS (
-                SELECT p.clase as categoria, SUM(f.subtotal_neto) as net_sales
+            WITH ventas_por_categoria AS (
+                SELECT 
+                    p.clase as categoria,
+                    COALESCE(SUM(f.subtotal_neto), 0) as total_ventas
                 FROM edw.fact_ventas_detalle f
                 JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
                 JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
                 {where_v}
                 GROUP BY p.clase
+            ),
+            devoluciones_por_categoria AS (
+                SELECT 
+                    p.clase as categoria,
+                    COALESCE(SUM(dev.total_linea_devolucion), 0) as total_devoluciones
+                FROM edw.fact_devoluciones dev
+                JOIN edw.dim_producto p ON dev.producto_sk = p.producto_sk
+                JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
+                JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
+                LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                {where_d}
+                GROUP BY p.clase
             )
-            SELECT sa.categoria, COALESCE(sa.net_sales, 0.0) as net_sales
-            FROM sales_agg sa
-            WHERE sa.categoria IS NOT NULL
+            SELECT 
+                COALESCE(v.categoria, d.categoria) as categoria,
+                v.total_ventas - COALESCE(d.total_devoluciones, 0) as net_sales
+            FROM ventas_por_categoria v
+            FULL OUTER JOIN devoluciones_por_categoria d 
+                ON v.categoria = d.categoria
+            WHERE COALESCE(v.categoria, d.categoria) IS NOT NULL
             ORDER BY net_sales DESC
             LIMIT 10
         """
@@ -130,11 +199,35 @@ class AnalyticsRepository:
         return [str(row[0]) for row in res]
 
     @staticmethod
+    def _build_devoluciones_filters(sucursal, start_date, end_date, vendedor):
+        """Construye filtros específicos para la tabla de devoluciones"""
+        start_date = sanitize_date_str(start_date)
+        end_date = sanitize_date_str(end_date)
+
+        filtros = []
+        params: dict[str, Any] = {}
+        
+        if sucursal:
+            filtros.append("s.nombre_sucursal = :sucursal")
+            params["sucursal"] = sucursal
+        if vendedor:
+            filtros.append("v.nombre_vendedor = :vendedor")
+            params["vendedor"] = vendedor
+        if start_date:
+            filtros.append("d.fecha_completa >= :start_date")
+            params["start_date"] = start_date
+        if end_date:
+            filtros.append("d.fecha_completa <= :end_date")
+            params["end_date"] = end_date
+
+        return ("WHERE " + " AND ".join(filtros)) if filtros else "", params
+
+    @staticmethod
     def _build_ventas_filters(sucursal, start_date, end_date, categoria, vendedor, require_clase=False):
         start_date = sanitize_date_str(start_date)
         end_date = sanitize_date_str(end_date)
 
-        filtros = ["f.estado_factura = 'P'"]
+        filtros = ["ed.estado_documento_sk <> -1"]
         params: dict[str, Any] = {}
         if require_clase:
             filtros.append("p.clase IS NOT NULL")
@@ -256,7 +349,8 @@ class AnalyticsRepository:
             FROM edw.fact_ventas_detalle f
             JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
             JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
-            WHERE d.anio = :anio AND d.mes = :mes AND f.estado_factura = 'P' {filtro_suc_v}
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE d.anio = :anio AND d.mes = :mes AND ed.estado_documento_sk <> -1 {filtro_suc_v}
         """
         query_ranking = f"""
             SELECT v.nombre_vendedor,
@@ -265,7 +359,8 @@ class AnalyticsRepository:
             FROM edw.dim_vendedor v
             LEFT JOIN edw.fact_ventas_detalle f ON f.vendedor_sk = v.vendedor_sk
                 AND f.fecha_sk IN (SELECT fecha_sk FROM edw.dim_fecha WHERE anio = :anio AND mes = :mes)
-                AND f.estado_factura = 'P'
+            LEFT JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                AND ed.estado_documento_sk <> -1
             LEFT JOIN public.metas_comerciales_operativas m ON m.id_vendedor_origen = v.codven
                 AND m.anio = :anio AND m.mes = :mes
             GROUP BY v.nombre_vendedor

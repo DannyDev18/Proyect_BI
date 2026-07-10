@@ -40,9 +40,10 @@ def test_predict_goal_amount_usa_fallback_heuristico_sin_modelo(goal_repo):
 
     trend = VendorSalesTrend(
         vendedor_origen="V1", sucursal="Quito", ventas_anterior=1000.0, unidades_anterior=10.0,
-        ventas_anio_anterior=900.0, promedio_movil_3m=950.0, vendedor_sk=1, sucursal_sk=1,
+        ventas_anio_anterior=900.0, promedio_movil_3m=950.0, indice_estacional_relativo=1.0,
+        vendedor_sk=1, sucursal_sk=1,
     )
-    monto = service._predict_goal_amount(trend, anio_ant=2025, mes_ant=6, factor_presion=1.1)
+    monto = service.predict_goal_amount(trend, anio_ant=2025, mes_ant=6, factor_presion=1.1)
 
     assert monto == pytest.approx(1000.0 * 1.1)
 
@@ -53,7 +54,7 @@ def test_predict_goal_amount_aplica_capping_al_growth_ratio(goal_repo):
     import numpy as np
 
     class DummyModel:
-        feature_names_in_ = np.array(["anio", "mes", "ventas_historicas", "unidades_historicas", "ventas_anio_anterior", "promedio_movil_3m"])
+        feature_names_in_ = np.array(["mes", "ventas_historicas", "unidades_historicas", "ventas_anio_anterior", "promedio_movil_3m", "indice_estacional_relativo"])
         def predict(self, X):
             return np.array([42.0])
 
@@ -63,9 +64,10 @@ def test_predict_goal_amount_aplica_capping_al_growth_ratio(goal_repo):
 
     trend = VendorSalesTrend(
         vendedor_origen="V1", sucursal="Quito", ventas_anterior=1000.0, unidades_anterior=10.0,
-        ventas_anio_anterior=900.0, promedio_movil_3m=950.0, vendedor_sk=1, sucursal_sk=1,
+        ventas_anio_anterior=900.0, promedio_movil_3m=950.0, indice_estacional_relativo=1.0,
+        vendedor_sk=1, sucursal_sk=1,
     )
-    monto = service._predict_goal_amount(trend, anio_ant=2025, mes_ant=6, factor_presion=1.0)
+    monto = service.predict_goal_amount(trend, anio_ant=2025, mes_ant=6, factor_presion=1.0)
 
     # Con growth_ratio acotado a GROWTH_RATIO_MAX=1.2, el monto no debe explotar
     # descontroladamente por la predicción cruda de 42.0.

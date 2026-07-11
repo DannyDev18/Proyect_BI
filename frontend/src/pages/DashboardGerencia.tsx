@@ -5,11 +5,11 @@ import {
   PieChart, Pie, Cell, Legend
 } from 'recharts';
 import { DollarSign, TrendingUp, ShoppingBag, Target, Filter } from 'lucide-react';
-import { useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores } from '../hooks/gerencia';
+import { useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores, useAlmacenes } from '../hooks/gerencia';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
-import { fmt, fmtFull, fmtMoney, pct } from '../utils/format';
+import { fmt, fmtFull, fmtMoney, formatEjeFecha, pct } from '../utils/format';
 import { chartTooltipStyle, COLORS } from '../utils/chartTheme';
 
 export const DashboardGerencia = () => {
@@ -18,13 +18,16 @@ export const DashboardGerencia = () => {
     end_date: '',
     categoria: '',
     vendedor: '',
+    almacen: '',
   });
+  const [granularidad, setGranularidad] = useState<'semana' | 'mes'>('semana');
 
   const kpi  = useGerenciaKPIs(filters);
-  const pred = useSalesPrediction();
+  const pred = useSalesPrediction({ granularidad, vendedor: filters.vendedor, almacen: filters.almacen });
   const revCat = useRevenueByCategory(filters);
   const { data: categoriasLista } = useCategories();
   const { data: vendedoresLista } = useVendedores();
+  const { data: almacenesLista } = useAlmacenes();
 
   // Calcular ingresos totales sumando todas las sucursales si existen
   const ingresosTotales = kpi.data?.ventas_por_sucursal 
@@ -52,7 +55,9 @@ export const DashboardGerencia = () => {
           <h1 className="text-3xl font-display font-semibold text-slate-100">Visión Ejecutiva</h1>
           <p className="text-sm text-slate-500 mt-0.5">Datos consolidados del Data Warehouse · Modo tiempo real</p>
         </div>
-        <AlertBadge variant="info" dot>Modelo Gradient Boosting activo</AlertBadge>
+        <AlertBadge variant="info" dot>
+          Modelo {pred.data?.metricas.algoritmo ?? 'ML'} activo
+        </AlertBadge>
       </div>
 
       {/* Filter Bar */}
@@ -99,6 +104,17 @@ export const DashboardGerencia = () => {
             <option key={cat} value={cat}>{cat}</option>
           ))}
         </select>
+
+        <select
+          value={filters.almacen}
+          onChange={(e) => setFilters(f => ({ ...f, almacen: e.target.value }))}
+          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus:outline-none focus:border-teal-400 min-w-[150px]"
+        >
+          <option value="">Todos los Almacenes</option>
+          {almacenesLista?.map(alm => (
+            <option key={alm} value={alm}>{alm}</option>
+          ))}
+        </select>
       </div>
 
       {/* KPI Row */}
@@ -131,7 +147,7 @@ export const DashboardGerencia = () => {
               animDelay={60}
             />
             <KpiCard
-              title="Ticket Promedio"
+              title="FACTURA Promedio"
               value={kpi.data ? fmt(kpi.data.ticket_promedio) : '—'}
               icon={ShoppingBag}
               trend="neutral"
@@ -154,7 +170,23 @@ export const DashboardGerencia = () => {
           <div className="col-span-1 md:col-span-2">
             <ChartCard
               title="Histórico y Predicción de Ventas (ML)"
-              badge={{ label: 'Gradient Boosting', variant: 'ml' }}
+              badge={{ label: pred.data.metricas.algoritmo ?? 'ML', variant: 'ml' }}
+              actions={
+                <div className="flex items-center gap-1 bg-slate-800/70 border border-slate-700/50 rounded-full p-0.5">
+                  {(['semana', 'mes'] as const).map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => setGranularidad(g)}
+                      className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+                        granularidad === g ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {g === 'semana' ? 'Semanas' : 'Meses'}
+                    </button>
+                  ))}
+                </div>
+              }
             >
               <ResponsiveContainer width="100%" height={380}>
                 <AreaChart
@@ -178,7 +210,7 @@ export const DashboardGerencia = () => {
                     tick={{ fill: '#64748b', fontSize: 11 }}
                     tickLine={false}
                     axisLine={false}
-                    tickFormatter={(v) => v?.slice(5) ?? v}
+                    tickFormatter={(v) => formatEjeFecha(v, granularidad)}
                     minTickGap={30}
                   />
                   <YAxis
@@ -246,24 +278,34 @@ export const DashboardGerencia = () => {
                 ))}
               </ul>
               
+              {/* metricas llega vacía (todo null) cuando la serie filtrada no tiene datos:
+                  el backend degrada con gracia en vez de responder 500 (doc 22). */}
               <div className="mt-6 pt-6 border-t border-slate-700/50 grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-xs text-slate-500 mb-1">Crecimiento Est.</div>
-                  <div className={`text-lg font-semibold ${pred.data.metricas.crecimiento_esperado > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {pred.data.metricas.crecimiento_esperado > 0 ? '+' : ''}{pred.data.metricas.crecimiento_esperado.toFixed(1)}%
+                  <div className={`text-lg font-semibold ${(pred.data.metricas.crecimiento_esperado ?? 0) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {pred.data.metricas.crecimiento_esperado != null
+                      ? `${pred.data.metricas.crecimiento_esperado > 0 ? '+' : ''}${pred.data.metricas.crecimiento_esperado.toFixed(1)}%`
+                      : '—'}
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-slate-500 mb-1">Proyección ({pred.data.dias_proyectados}d)</div>
-                  <div className="text-lg font-semibold text-sky-400">{fmt(pred.data.metricas.venta_esperada)}</div>
+                  <div className="text-xs text-slate-500 mb-1">
+                    Proyección ({pred.data.periodos_proyectados} {granularidad === 'semana' ? 'sem' : 'meses'})
+                  </div>
+                  <div className="text-lg font-semibold text-sky-400">
+                    {pred.data.metricas.venta_esperada != null ? fmt(pred.data.metricas.venta_esperada) : '—'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-slate-500 mb-1">Mes Mayor Venta</div>
-                  <div className="text-sm font-medium text-slate-200">{pred.data.metricas.mes_mayor_venta}</div>
+                  <div className="text-sm font-medium text-slate-200">{pred.data.metricas.mes_mayor_venta ?? '—'}</div>
                 </div>
                 <div>
                   <div className="text-xs text-slate-500 mb-1">Error MAE (ML)</div>
-                  <div className="text-sm font-medium text-slate-200">± {fmt(pred.data.metricas.mae_modelo)}</div>
+                  <div className="text-sm font-medium text-slate-200">
+                    {pred.data.metricas.mae_modelo != null ? `± ${fmt(pred.data.metricas.mae_modelo)}` : '—'}
+                  </div>
                 </div>
               </div>
             </div>

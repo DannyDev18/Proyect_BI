@@ -62,8 +62,6 @@ export interface ForecastCierre {
 
 export interface MetaSugerida {
   vendedor_origen: string;
-  sucursal: string;
-  meta_sugerida_ia: number | null;
   meta_sugerida_estadistica: number;
   metodo_estadistico: string;
   meses_historico_usados: number;
@@ -79,4 +77,34 @@ export interface RecomendacionComercialItem {
 export interface RecomendacionesComerciales {
   vendedor_origen: string;
   recomendaciones: RecomendacionComercialItem[];
+}
+
+// ── Comisiones (docs/modulo_metas.md, docs/auditoria/17_...) ────────────────────────
+export type NivelComision = 'EXCELENTE' | 'META' | 'CERCA' | 'LEJOS';
+
+export interface MiComision {
+  vendedor_origen: string;
+  anio: number;
+  mes: number;
+  monto_meta: number;
+  venta_real: number;
+  pct_cumplimiento: number;
+  nivel: NivelComision;
+  tasa_aplicada_pct: number;
+  bono_aplicado: number;
+  comision_devengada: number;
+  dias_restantes_mes: number;
+  en_alerta_cierre: boolean;
+  mensaje_alerta: string | null;
+}
+
+export interface PostGoalInvoiceItem {
+  num_factura: string;
+  fecha: string;
+  monto_factura: number;
+  acumulado_venta: number;
+}
+
+export interface PostGoalInvoicesResponse {
+  facturas: PostGoalInvoiceItem[];
 }

@@ -33,7 +33,6 @@ def fake_model_loader():
         "anomaly": _DummyAnomalyDetector(),
         "segmentation": _DummyClusterer(),
         "association": _dummy_rules_df(),
-        "goals_rf": _DummyRegressor(feature_names=["anio", "mes"]),
     }
     return loader
 

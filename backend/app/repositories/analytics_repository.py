@@ -18,11 +18,12 @@ class AnalyticsRepository:
     def get_management_kpis(
         self, sucursal: str | None = None, start_date: str | None = None,
         end_date: str | None = None, categoria: str | None = None, vendedor: str | None = None,
+        almacen: str | None = None,
     ) -> dict[str, Any]:
-        where_v, params = self._build_ventas_filters(sucursal, start_date, end_date, categoria, vendedor)
-        
+        where_v, params = self._build_ventas_filters(sucursal, start_date, end_date, categoria, vendedor, almacen=almacen)
+
         # Construir filtros para devoluciones (sin categoría porque no existe en dim_producto)
-        where_d, params_d = self._build_devoluciones_filters(sucursal, start_date, end_date, vendedor)
+        where_d, params_d = self._build_devoluciones_filters(sucursal, start_date, end_date, vendedor, almacen=almacen)
         # Combinar parámetros
         params.update(params_d)
 
@@ -38,6 +39,7 @@ class AnalyticsRepository:
                 JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
                 JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON f.almacen_sk = al.almacen_sk
                 {where_v}
             ),
             devoluciones_agg AS (
@@ -47,6 +49,7 @@ class AnalyticsRepository:
                 JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
                 LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON dev.almacen_sk = al.almacen_sk
                 {where_d}
             )
             SELECT
@@ -69,6 +72,7 @@ class AnalyticsRepository:
                 JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
                 JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON f.almacen_sk = al.almacen_sk
                 {where_v}
                 GROUP BY f.sucursal_sk
             ),
@@ -78,6 +82,7 @@ class AnalyticsRepository:
                 JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
                 LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON dev.almacen_sk = al.almacen_sk
                 {where_d}
                 GROUP BY dev.sucursal_sk
             )
@@ -99,6 +104,7 @@ class AnalyticsRepository:
                 JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
                 JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON f.almacen_sk = al.almacen_sk
                 {where_v}
                 GROUP BY f.vendedor_sk
             ),
@@ -108,6 +114,7 @@ class AnalyticsRepository:
                 JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
                 LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON dev.almacen_sk = al.almacen_sk
                 {where_d}
                 GROUP BY dev.vendedor_sk
             )
@@ -135,15 +142,17 @@ class AnalyticsRepository:
 
     def get_revenue_by_category(
         self, sucursal: str | None = None, start_date: str | None = None,
-        end_date: str | None = None, vendedor: str | None = None,
+        end_date: str | None = None, vendedor: str | None = None, almacen: str | None = None,
     ) -> list[dict[str, Any]]:
-        where_v, params = self._build_ventas_filters(sucursal, start_date, end_date, None, vendedor, require_clase=True)
-        where_d, params_d = self._build_devoluciones_filters(sucursal, start_date, end_date, vendedor)
+        where_v, params = self._build_ventas_filters(
+            sucursal, start_date, end_date, None, vendedor, require_clase=True, almacen=almacen,
+        )
+        where_d, params_d = self._build_devoluciones_filters(sucursal, start_date, end_date, vendedor, almacen=almacen)
         params.update(params_d)
-    
+
         query = f"""
             WITH ventas_por_categoria AS (
-                SELECT 
+                SELECT
                     p.clase as categoria,
                     COALESCE(SUM(f.subtotal_neto), 0) as total_ventas
                 FROM edw.fact_ventas_detalle f
@@ -152,11 +161,12 @@ class AnalyticsRepository:
                 JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
                 JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON f.almacen_sk = al.almacen_sk
                 {where_v}
                 GROUP BY p.clase
             ),
             devoluciones_por_categoria AS (
-                SELECT 
+                SELECT
                     p.clase as categoria,
                     COALESCE(SUM(dev.total_linea_devolucion), 0) as total_devoluciones
                 FROM edw.fact_devoluciones dev
@@ -164,6 +174,7 @@ class AnalyticsRepository:
                 JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
                 JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
                 LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON dev.almacen_sk = al.almacen_sk
                 {where_d}
                 GROUP BY p.clase
             )
@@ -193,26 +204,41 @@ class AnalyticsRepository:
         return [str(row[0]) for row in res]
 
     def get_vendedores(self) -> list[str]:
+        # Excluir el registro centinela -1 ("desconocido", regla de negocio 12 del CLAUDE.md):
+        # no es un vendedor real y ofrecerlo como filtro del dashboard producía series
+        # vacías/500 en /gerencia/sales-prediction (hallazgo de la verificación del doc 22).
         res = self.db.execute(text(
-            "SELECT DISTINCT nombre_vendedor FROM edw.dim_vendedor WHERE nombre_vendedor IS NOT NULL ORDER BY nombre_vendedor"
+            "SELECT DISTINCT nombre_vendedor FROM edw.dim_vendedor "
+            "WHERE nombre_vendedor IS NOT NULL AND vendedor_sk <> -1 ORDER BY nombre_vendedor"
+        )).fetchall()
+        return [str(row[0]) for row in res]
+
+    def get_almacenes(self) -> list[str]:
+        # Mismo criterio que get_vendedores: centinela -1 fuera del catálogo de filtros.
+        res = self.db.execute(text(
+            "SELECT DISTINCT nombre_almacen FROM edw.dim_almacen "
+            "WHERE nombre_almacen IS NOT NULL AND almacen_sk <> -1 ORDER BY nombre_almacen"
         )).fetchall()
         return [str(row[0]) for row in res]
 
     @staticmethod
-    def _build_devoluciones_filters(sucursal, start_date, end_date, vendedor):
+    def _build_devoluciones_filters(sucursal, start_date, end_date, vendedor, almacen=None):
         """Construye filtros específicos para la tabla de devoluciones"""
         start_date = sanitize_date_str(start_date)
         end_date = sanitize_date_str(end_date)
 
         filtros = []
         params: dict[str, Any] = {}
-        
+
         if sucursal:
             filtros.append("s.nombre_sucursal = :sucursal")
             params["sucursal"] = sucursal
         if vendedor:
             filtros.append("v.nombre_vendedor = :vendedor")
             params["vendedor"] = vendedor
+        if almacen:
+            filtros.append("al.nombre_almacen = :almacen")
+            params["almacen"] = almacen
         if start_date:
             filtros.append("d.fecha_completa >= :start_date")
             params["start_date"] = start_date
@@ -223,7 +249,7 @@ class AnalyticsRepository:
         return ("WHERE " + " AND ".join(filtros)) if filtros else "", params
 
     @staticmethod
-    def _build_ventas_filters(sucursal, start_date, end_date, categoria, vendedor, require_clase=False):
+    def _build_ventas_filters(sucursal, start_date, end_date, categoria, vendedor, require_clase=False, almacen=None):
         start_date = sanitize_date_str(start_date)
         end_date = sanitize_date_str(end_date)
 
@@ -237,6 +263,9 @@ class AnalyticsRepository:
         if vendedor:
             filtros.append("v.nombre_vendedor = :vendedor")
             params["vendedor"] = vendedor
+        if almacen:
+            filtros.append("al.nombre_almacen = :almacen")
+            params["almacen"] = almacen
         if start_date:
             filtros.append("d.fecha_completa >= :start_date")
             params["start_date"] = start_date

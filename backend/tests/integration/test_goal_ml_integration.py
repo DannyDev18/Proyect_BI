@@ -1,8 +1,11 @@
 # backend/tests/integration/test_goal_ml_integration.py
-"""Integración ML del módulo Metas y Comisiones (docs/auditoria/15_...). A diferencia de
-`test_goals_generation.py` (que ESCRIBE en `metas_comerciales_operativas`), estas pruebas
-son de solo lectura: validan el flujo completo ModelLoader -> ContractValidator ->
-Modelo -> validación de salida -> GoalMLService contra el EDW y los `.pkl` reales."""
+"""Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_...md). A
+diferencia de `test_goals_generation.py` (removido: probaba el generador `goals_rf`
+decomisionado), estas pruebas son de solo lectura: validan el flujo completo
+ModelLoader -> ContractValidator -> Modelo -> validación de salida -> GoalMLService
+contra el EDW y los `.pkl` reales de los modelos que SÍ sigue usando Metas y Comisiones
+(`anomaly`, `association`, `sales_rf` para el pronóstico de cierre) -- ya no `goals_rf`,
+decomisionado: la meta oficial es 100% estadística (`IQRGoalCalculationEngine`)."""
 import pytest
 
 from app.database.session import SessionLocal
@@ -10,16 +13,14 @@ from app.ml.model_loader import ModelLoader
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository
 from app.services.goal_ml_service import GoalMLService
-from app.services.goals_service import GoalsService
 
 pytestmark = pytest.mark.integration
 
 MODELS_DIR = "c:/Proyect_BI/ml/models"
 CONTRACTS_DIR = "c:/Proyect_BI/ml/contracts/models"
-# Vendedor/sucursal reales verificados contra el EDW en la auditoría 14
+# Vendedor real verificado contra el EDW en la auditoría 14
 # (docs/auditoria/14_fase0_analisis_modulo_metas_comisiones.md, §3).
 VENDEDOR_ORIGEN = "VEN01"
-SUCURSAL = "SUC. EL REY"
 
 
 @pytest.fixture
@@ -35,35 +36,32 @@ def goal_ml_service(loader):
     try:
         goal_repo = GoalRepository(db)
         dataset_repo = DatasetRepository(db)
-        goals_service = GoalsService(goal_repo, loader)
-        yield GoalMLService(goal_repo, dataset_repo, loader, goals_service)
+        yield GoalMLService(goal_repo, dataset_repo, loader)
     finally:
         db.close()
 
 
-def test_model_loader_carga_los_7_modelos_y_sus_contratos(loader):
-    for key in ["sales_rf", "demand_rf", "churn_rf", "segmentation", "association", "anomaly", "goals_rf"]:
+def test_model_loader_carga_los_6_modelos_y_sus_contratos(loader):
+    for key in ["sales_rf", "demand_rf", "churn_rf", "segmentation", "association", "anomaly"]:
         assert loader.is_loaded(key), f"Modelo '{key}' no cargó desde {MODELS_DIR}"
         contrato = loader.get_contract(key)
         assert contrato is not None, f"Contrato de '{key}' no cargó desde {CONTRACTS_DIR}"
         assert contrato.is_active, f"Contrato de '{key}' debería estar 'active' (Fase 3 de la reconstrucción ML)"
+    assert not loader.is_loaded("goals_rf"), "goals_rf fue decomisionado (docs/auditoria/20_...md), no debe cargar"
 
 
 def test_suggest_goal_devuelve_meta_estadistica_y_trazabilidad(goal_ml_service):
-    resultado = goal_ml_service.suggest_goal(VENDEDOR_ORIGEN, SUCURSAL)
+    resultado = goal_ml_service.suggest_goal(VENDEDOR_ORIGEN)
 
     assert resultado.vendedor_origen == VENDEDOR_ORIGEN
     assert resultado.meta_sugerida_estadistica >= 0
-    assert resultado.meses_historico_usados >= 3
+    assert resultado.meses_historico_usados >= 1
     assert resultado.metodo_estadistico in ("estadistico_iqr_v1", "estadistico_iqr_ml_v1")
-    # meta_sugerida_ia puede ser None si el trend no resuelve para el próximo período,
-    # pero si el modelo está cargado (verificado arriba) no debe lanzar excepción.
 
 
 def test_forecast_cierre_pasa_por_contrato_y_devuelve_prediccion_en_rango_plausible(goal_ml_service):
-    resultado = goal_ml_service.forecast_cierre(sucursal=SUCURSAL, meta_mensual=50000.0)
+    resultado = goal_ml_service.forecast_cierre(sucursal=None, meta_mensual=50000.0)
 
-    assert resultado.sucursal == SUCURSAL
     assert resultado.dias_restantes >= 0
     # Si contract_validation.py NO hubiera bloqueado una predicción fuera de rango
     # (ml/contracts/models/sales.json: plausible_range=[0, 5000000]), esta aserción

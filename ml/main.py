@@ -10,7 +10,6 @@ from src.training.train_churn_prediction import train_churn_model, evaluate_chur
 from src.training.train_recommendation_engine import train_association_rules, save_recommendation_rules
 from src.training.train_demand_forecasting import train_demand_forecaster, evaluate_demand_model, save_demand_model
 from src.training.train_anomaly_detection import train_isolation_forest, save_anomaly_model
-from src.training.train_goals_prediction import train_goals_prediction, save_goals_model
 
 # Formato estandar MLOps
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -204,34 +203,17 @@ def train_anomaly_detection(extractor: SalesTimeSerieExtractor):
     logger.info("Detector de Anomalías guardado con éxito.\n")
 
 
-def train_goals_prediction_pipeline(extractor: SalesTimeSerieExtractor):
-    logger.info("=== 7. ENTRENANDO PREDICCION DE METAS (GERENCIA) ===")
-    df_raw = extractor.fetch_goals_data()
-    if df_raw.empty or len(df_raw) < 10:
-        logger.error("Data insuficiente para modelo de metas.")
-        return
-
-    model, metrics, features = train_goals_prediction(df_raw)
-    save_goals_model(
-        model,
-        metrics=metrics,
-        features=features,
-        data_range={"anio_min": int(df_raw['anio'].min()), "anio_max": int(df_raw['anio'].max())},
-    )
-
-
 def run_ml_pipeline():
     logger.info("=== INICIANDO EXPERIMENTO ML OPS ORQUESTADO ===")
     extractor = SalesTimeSerieExtractor()
-    
+
     train_general_sales_prediction(extractor)
     train_demand_forecasting(extractor)
     train_customer_segmentation(extractor)
     train_customer_churn(extractor)
     train_recommendations(extractor)
     train_anomaly_detection(extractor)
-    train_goals_prediction_pipeline(extractor)
-    
+
     logger.info("=== ML PIPELINE ORQUESTADO COMPLETADO EXITOSAMENTE ===")
 
 

@@ -43,3 +43,13 @@ export const fmtMoney = (n?: number | null): string => {
     maximumFractionDigits: 2,
   }).format(n);
 };
+
+// Etiqueta del eje X del gráfico de predicción de ventas: 'semana' muestra el inicio de
+// semana (MM-DD, igual al formato diario previo), 'mes' muestra "Mes AAAA" abreviado.
+export const formatEjeFecha = (fecha?: string, granularidad: 'semana' | 'mes' = 'semana'): string => {
+  if (!fecha) return '';
+  if (granularidad === 'semana') return fecha.slice(5);
+  const [anio, mes] = fecha.split('-');
+  const nombre = new Date(Number(anio), Number(mes) - 1, 1).toLocaleDateString('es-EC', { month: 'short' });
+  return `${nombre} ${anio}`;
+};

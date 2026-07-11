@@ -1,6 +1,7 @@
 interface ChartCardProps {
   title: string;
   badge?: { label: string; variant?: 'live' | 'ml' | 'hist' };
+  actions?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
   height?: string;
@@ -21,17 +22,20 @@ const ChartSkeleton = ({ height }: { height: string }) => (
 );
 
 export const ChartCard = ({
-  title, badge, children, className = '', height = 'h-[320px]', loading = false,
+  title, badge, actions, children, className = '', height = 'h-[320px]', loading = false,
 }: ChartCardProps) => (
   <div className={`card p-6 animate-fade-in ${className}`}>
-    <div className="flex items-center justify-between mb-6">
+    <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
       <h3 className="text-base font-semibold text-slate-200 font-sans">{title}</h3>
-      {badge && (
-        <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${badgeStyles[badge.variant ?? 'hist']}`}>
-          {badge.variant === 'live' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 mr-1.5 animate-pulse-slow" />}
-          {badge.label}
-        </span>
-      )}
+      <div className="flex items-center gap-2">
+        {actions}
+        {badge && (
+          <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${badgeStyles[badge.variant ?? 'hist']}`}>
+            {badge.variant === 'live' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 mr-1.5 animate-pulse-slow" />}
+            {badge.label}
+          </span>
+        )}
+      </div>
     </div>
     <div className={height}>
       {loading ? <ChartSkeleton height={height} /> : children}

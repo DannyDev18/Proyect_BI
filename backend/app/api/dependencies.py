@@ -16,6 +16,7 @@ from app.repositories.prediction_repository import PredictionRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.user_repository import UserRepository
 from app.services.analytics_service import AnalyticsService
+from app.services.commission_service import CommissionService
 from app.services.goal_ml_service import GoalMLService
 from app.services.goals_service import GoalsService
 from app.services.prediction_service import PredictionService
@@ -85,9 +86,8 @@ def get_analytics_service(
 
 def get_goals_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
-    model_loader: ModelLoaderDep,
 ) -> GoalsService:
-    return GoalsService(goal_repo, model_loader)
+    return GoalsService(goal_repo)
 
 
 def get_prediction_service(
@@ -102,12 +102,19 @@ def get_goal_ml_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
     dataset_repo: Annotated[DatasetRepository, Depends(get_dataset_repository)],
     model_loader: ModelLoaderDep,
-    goals_service: Annotated[GoalsService, Depends(get_goals_service)],
 ) -> GoalMLService:
-    """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_...): compone
-    `GoalRepository` + `DatasetRepository` + `ModelLoader` + `GoalsService` (reutiliza
-    su capping ya validado, no lo reimplementa)."""
-    return GoalMLService(goal_repo, dataset_repo, model_loader, goals_service)
+    """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_...md):
+    compone `GoalRepository` + `DatasetRepository` + `ModelLoader` (para `anomaly` y
+    `sales_rf`, no para metas -- `goals_rf` fue decomisionado)."""
+    return GoalMLService(goal_repo, dataset_repo, model_loader)
+
+
+def get_commission_service(
+    goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+) -> CommissionService:
+    """Liquidación de comisiones (docs/modulo_metas.md): reutiliza `GoalRepository`
+    (venta real vs. meta) -- no necesita un repositorio propio."""
+    return CommissionService(goal_repo)
 
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
@@ -116,6 +123,7 @@ AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)
 GoalsServiceDep = Annotated[GoalsService, Depends(get_goals_service)]
 PredictionServiceDep = Annotated[PredictionService, Depends(get_prediction_service)]
 GoalMLServiceDep = Annotated[GoalMLService, Depends(get_goal_ml_service)]
+CommissionServiceDep = Annotated[CommissionService, Depends(get_commission_service)]
 
 
 # ── Resolución de sucursal por rol ────────────────────────────────────────────

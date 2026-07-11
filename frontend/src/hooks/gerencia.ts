@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import {
-  getGerenciaKPIs, getRevenueByCategory, getCategories, getSucursales, getVendedores, getSalesPrediction,
+  getGerenciaKPIs, getRevenueByCategory, getCategories, getSucursales, getVendedores, getAlmacenes, getSalesPrediction,
 } from '../services/gerencia';
 import { qk } from '../constants/queryKeys';
 
@@ -50,10 +50,20 @@ export const useVendedores = () => {
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };
 
-export const useSalesPrediction = () => {
+export const useAlmacenes = () => {
   const query = useQuery({
-    queryKey: qk.gerencia.salesPrediction(),
-    queryFn: () => getSalesPrediction().then((r) => r.data),
+    queryKey: qk.gerencia.almacenes(),
+    queryFn: () => getAlmacenes().then((r) => r.data),
+  });
+  return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
+};
+
+type SalesPredictionParams = Parameters<typeof getSalesPrediction>[0];
+
+export const useSalesPrediction = (params: SalesPredictionParams) => {
+  const query = useQuery({
+    queryKey: qk.gerencia.salesPrediction(params),
+    queryFn: () => getSalesPrediction(params).then((r) => r.data),
   });
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };

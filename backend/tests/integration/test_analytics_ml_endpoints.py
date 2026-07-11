@@ -14,6 +14,21 @@ def test_sales_prediction_gerencia(client, auth_headers):
     body = r.json()
     assert "metricas" in body
     assert "historial_y_prediccion" in body
+    assert body["granularidad"] == "semana"
+    assert body["periodos_proyectados"] > 0
+    assert "algoritmo" in body["metricas"]
+
+
+def test_sales_prediction_gerencia_granularidad_mes(client, auth_headers):
+    r = client.get(
+        "/api/v1/analytics/gerencia/sales-prediction",
+        params={"granularidad": "mes"},
+        headers=auth_headers("gerencia"),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["granularidad"] == "mes"
+    assert body["periodos_proyectados"] > 0
 
 
 def test_demand_forecasting_bodega(client, auth_headers):

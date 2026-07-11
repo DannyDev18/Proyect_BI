@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from app.core.exceptions import ExternalDataError, ModelContractError, ValidationError
-from app.repositories.goal_repository import VendorMonthlySales, VendorTransactionFeatures
+from app.repositories.goal_repository import VendorMonthlySales, VendorRecentSales, VendorTransactionFeatures
 from app.services.goal_ml_service import GoalMLService
 
 
@@ -20,15 +20,10 @@ def dataset_repo():
 
 
 @pytest.fixture
-def goals_service():
-    return MagicMock()
-
-
-@pytest.fixture
-def service(goal_repo, dataset_repo, goals_service):
+def service(goal_repo, dataset_repo):
     loader = MagicMock()
     loader.is_loaded.return_value = False  # sin modelos cargados salvo que un test lo cambie
-    return GoalMLService(goal_repo, dataset_repo, loader, goals_service)
+    return GoalMLService(goal_repo, dataset_repo, loader)
 
 
 def _historial(n=12, base=1000.0):
@@ -38,18 +33,16 @@ def _historial(n=12, base=1000.0):
 def test_suggest_goal_lanza_validation_error_sin_historico(service, goal_repo):
     goal_repo.get_vendor_monthly_history.return_value = []
     with pytest.raises(ValidationError):
-        service.suggest_goal("VEN01", "SUC1")
+        service.suggest_goal("VEN01")
 
 
 def test_suggest_goal_calcula_sin_senal_ml_si_anomaly_no_esta_cargado(service, goal_repo):
     goal_repo.get_vendor_monthly_history.return_value = _historial()
-    goal_repo.get_latest_edw_period.return_value = None  # sin meta IA
 
-    resultado = service.suggest_goal("VEN01", "SUC1")
+    resultado = service.suggest_goal("VEN01")
 
     assert resultado.meta_sugerida_estadistica == pytest.approx(1000.0)
     assert resultado.meses_atipicos_ml_detectados == 0
-    assert resultado.meta_sugerida_ia is None
     goal_repo.get_vendor_transactions_history.assert_not_called()
 
 
@@ -61,7 +54,7 @@ def test_detectar_meses_atipicos_continua_sin_senal_si_contrato_falla(service, g
     ]
 
     with patch("app.services.goal_ml_service.inference.detect_anomalies", side_effect=ModelContractError("boom")):
-        atipicos = service._detectar_meses_atipicos("VEN01", "SUC1", _historial(n=3))
+        atipicos = service._detectar_meses_atipicos("VEN01", _historial(n=3))
 
     assert atipicos == frozenset()  # no bloquea el cálculo de meta, solo omite la señal
 
@@ -71,9 +64,42 @@ def test_detectar_meses_atipicos_devuelve_vacio_sin_transacciones(service, goal_
     loader.is_loaded.return_value = True
     goal_repo.get_vendor_transactions_history.return_value = []
 
-    atipicos = service._detectar_meses_atipicos("VEN01", "SUC1", _historial(n=3))
+    atipicos = service._detectar_meses_atipicos("VEN01", _historial(n=3))
 
     assert atipicos == frozenset()
+
+
+# ── Generación OFICIAL de metas (docs/auditoria/19_/20_...md): grano vendedor, IQR puro ──
+def _vendor(vendedor: str, unidades_anterior: float = 20.0) -> VendorRecentSales:
+    return VendorRecentSales(vendedor_origen=vendedor, unidades_anterior=unidades_anterior)
+
+
+def test_generate_proposals_una_fila_por_vendedor_sin_sucursal(service, goal_repo):
+    """Antes de la corrección, la consulta de tendencias traía una fila por
+    vendedor×sucursal y se insertaba una meta por cada una -- duplicando registros para
+    un mismo vendedor. Ahora es una fila por vendedor (docs/auditoria/19_...md)."""
+    goal_repo.get_vendors_with_recent_sales.return_value = [_vendor("VEN01"), _vendor("VEN02")]
+    goal_repo.get_vendor_monthly_history.return_value = _historial()
+    goal_repo.find_proposal.return_value = None
+
+    creados = service.generate_proposals(anio=2026, mes=7, factor_presion=1.1)
+
+    assert creados == 2
+    assert goal_repo.insert_proposal.call_count == 2
+    inserted_vendedores = {call.args[2] for call in goal_repo.insert_proposal.call_args_list}
+    assert inserted_vendedores == {"VEN01", "VEN02"}
+
+
+def test_generate_proposals_actualiza_propuesta_existente_sin_tocar_aprobada(service, goal_repo):
+    goal_repo.get_vendors_with_recent_sales.return_value = [_vendor("VEN01")]
+    goal_repo.get_vendor_monthly_history.return_value = _historial()
+    goal_repo.find_proposal.return_value = (7, "APROBADA")
+
+    creados = service.generate_proposals(anio=2026, mes=7)
+
+    assert creados == 0
+    goal_repo.insert_proposal.assert_not_called()
+    goal_repo.update_proposal_amounts.assert_not_called()
 
 
 def test_forecast_cierre_propaga_external_data_error_si_falla_el_repo(service, dataset_repo):

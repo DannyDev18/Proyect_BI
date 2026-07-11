@@ -30,7 +30,6 @@ class Goal(Base):
     mes = Column(Integer, nullable=False)
 
     id_vendedor_origen = Column(String(15), nullable=True)
-    sucursal = Column(String(100), nullable=False)
 
     monto_meta = Column(Numeric(15, 4), nullable=False, default=0.0000)
     unidades_meta = Column(Numeric(15, 4), nullable=False, default=0.0000)

@@ -25,14 +25,15 @@ PRODUCTO_COD = "2 608 690 573"
 TRANSACCION_ID = "A0040030"
 SUCURSAL = "SUC. EL REY"
 
-print("\n=== 1. Ventas (forecast semanal) ===")
+print("\n=== 1. Ventas (forecast semana/mes) ===")
 service, db = new_service()
-r = service.get_sales_forecast_weekly(sucursal=None)
-print("dias_proyectados:", r["dias_proyectados"])
+r = service.get_sales_forecast(sucursal=None, granularidad="semana")
+print("periodos_proyectados:", r["periodos_proyectados"])
 print("metricas:", r["metricas"])
 print("insights:", r["insights"])
-assert r["dias_proyectados"] == 14
+assert r["periodos_proyectados"] > 0
 assert r["metricas"].get("mae_modelo") is not None, "mae_modelo debe venir del sidecar real (H-09)"
+assert r["metricas"].get("algoritmo"), "algoritmo debe venir del sidecar real (H-21-1)"
 ultimo_pred = [d for d in r["historial_y_prediccion"] if d["monto_predicho"] is not None][-1]
 print("ultimo monto_predicho (USD, debe ser miles, no ~12):", ultimo_pred["monto_predicho"])
 assert ultimo_pred["monto_predicho"] > 100, "H-01: la predicción debe estar en escala USD real, no log1p"

@@ -1,5 +1,5 @@
 import { api } from './http';
-import type { GoalPeriod, GoalProposal, GoalsAISummary } from '../types/goals';
+import type { GoalPeriod, GoalProposal, GoalsAISummary, VendorCommissionRow } from '../types/goals';
 
 export const getGoalPeriods = () =>
   api.get<GoalPeriod[]>('/api/v1/gerencia/goals/periods');
@@ -21,3 +21,11 @@ export const reviewGoal = (id: number, data: { monto_meta: number; estado: 'APRO
  * riesgo/alta probabilidad y recomendaciones comerciales por categoría. */
 export const getGoalsAISummary = () =>
   api.get<GoalsAISummary>('/api/v1/gerencia/goals/ai-summary');
+
+/** Comisiones (docs/modulo_metas.md): cumplimiento real (Venta Neta) y comisión
+ * devengada por vendedor en el período -- cierra el hallazgo R-1 de
+ * docs/auditoria/14_...md (antes solo se mostraba la meta configurada). */
+export const getCommissionTracking = (anio: number, mes: number) =>
+  api.get<{ comisiones: VendorCommissionRow[] }>('/api/v1/gerencia/goals/commissions', {
+    params: { anio, mes },
+  });

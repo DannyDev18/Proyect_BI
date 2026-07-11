@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getGoalPeriods, getGoalsTracking, generateGoals, reviewGoal, getGoalsAISummary } from '../services/goals';
+import { getGoalPeriods, getGoalsTracking, generateGoals, reviewGoal, getGoalsAISummary, getCommissionTracking } from '../services/goals';
 import { qk } from '../constants/queryKeys';
-import type { GoalPeriod, GoalProposal, GoalsAISummary } from '../types/goals';
+import type { GoalPeriod, GoalProposal, GoalsAISummary, VendorCommissionRow } from '../types/goals';
 
 const errorMessage = (error: unknown): string | null =>
   error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
@@ -10,6 +10,7 @@ const errorMessage = (error: unknown): string | null =>
 const EMPTY_PERIODS: GoalPeriod[] = [];
 const EMPTY_PROPOSALS: GoalProposal[] = [];
 const EMPTY_AI_SUMMARY: GoalsAISummary = { vendedores_en_riesgo: [], vendedores_alta_probabilidad: [], recomendaciones_por_categoria: [] };
+const EMPTY_COMMISSIONS: VendorCommissionRow[] = [];
 
 export const usePeriods = () => {
   const query = useQuery({
@@ -43,6 +44,16 @@ export const useGoalsAISummary = () => {
     queryFn: () => getGoalsAISummary().then((r) => r.data),
   });
   return { data: query.data ?? EMPTY_AI_SUMMARY, loading: query.isLoading, error: errorMessage(query.error) };
+};
+
+/** Comisiones (docs/modulo_metas.md): cumplimiento real + comisión devengada por
+ * vendedor en el período, para el panel gerencial. */
+export const useCommissionTracking = (anio: number, mes: number) => {
+  const query = useQuery({
+    queryKey: qk.goals.commissionTracking(anio, mes),
+    queryFn: () => getCommissionTracking(anio, mes).then((r) => r.data.comisiones),
+  });
+  return { data: query.data ?? EMPTY_COMMISSIONS, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };
 
 export const useReviewGoal = () => {

@@ -51,7 +51,7 @@ Esta guía provee las credenciales sembradas nativamente en la base de datos (me
 > Fuerza Comercial Desplegada Sectorizada
 
 - **Email Autenticador:** `ventas_gye@empresa.com`
-- **Contraseña:** `Admin2024!Seguro`
+- **Contraseña:** `eno`
 - **Sucursal Parametrizada:** "Sucursal Guayaquil"
 - **Codven SAP Emulado:** ID=`102` (Vincula este hash analítico a su billetera de comisiones).
 - **Permisos de Pantalla (Rutas Accesibles):**

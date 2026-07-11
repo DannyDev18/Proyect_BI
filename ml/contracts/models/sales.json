@@ -1,6 +1,6 @@
 {
   "name": "sales",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "task": "regression",
   "status": "active",
   "features": [
@@ -124,11 +124,39 @@
       "description": "1 si último día del mes"
     },
     {
+      "name": "dow_sin",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Codificación cíclica seno del día de semana (2*pi*day_of_week/7)"
+    },
+    {
+      "name": "dow_cos",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Codificación cíclica coseno del día de semana (2*pi*day_of_week/7)"
+    },
+    {
+      "name": "month_sin",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Codificación cíclica seno del mes (2*pi*month/12)"
+    },
+    {
+      "name": "month_cos",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Codificación cíclica coseno del mes (2*pi*month/12)"
+    },
+    {
       "name": "es_feriado",
       "dtype": "int",
       "required": true,
       "nullable": false,
-      "description": "1 si feriado Ecuador de fecha fija (aproximación; deuda ETL dim_fecha.es_feriado no poblado)"
+      "description": "1 si feriado Ecuador (fecha fija + móviles: Viernes Santo y Carnaval calculados por offset desde Pascua). Aproximación; deuda ETL dim_fecha.es_feriado no poblado."
     },
     {
       "name": "n_clientes_prev",
@@ -150,6 +178,13 @@
       "required": true,
       "nullable": false,
       "description": "% descuento promedio del día anterior (exógena rezagada 1 día)"
+    },
+    {
+      "name": "ticket_promedio_prev",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Ticket promedio (y_sales_net/n_facturas) del día anterior (exógena rezagada 1 día)"
     }
   ],
   "target": {
@@ -178,12 +213,14 @@
   },
   "data_range": {
     "desde": "2023-07-10",
-    "hasta": "2026-07-09"
+    "hasta": "2026-07-10"
   },
   "known_serving_mismatch": [
     "H-01 cerrado en Fase 4: backend/app/ml/model_loader.py apunta a sales.pkl (no al legacy sales_best_model.pkl) y backend/app/ml/inference.py::predict_sales ya no hace X[model.feature_names_in_] -- usa loader.get_features('sales_rf') leído del sidecar .meta.json (H-07, robusto a estimadores que no exponen feature_names_in_).",
     "H-09 cerrado en Fase 4: prediction_service.py lee mae_modelo/r2_modelo reales de este sidecar (antes hardcodeados 165842.12/95.0); el intervalo del forecast usa +-MAE real en vez de un +-15% fijo.",
-    "H-14b (sin cerrar): el modelo entrena con la serie global (todas las sucursales) pero prediction_service.get_sales_forecast_weekly(sucursal=...) lo sigue aplicando por sucursal, fuera de la distribución de entrenamiento -- pendiente de decisión (reentrenar por sucursal o restringir el endpoint al agregado global)."
+    "H-14b (sin cerrar): el modelo entrena con la serie global (todas las sucursales) pero prediction_service.get_sales_forecast_weekly(sucursal=...) lo sigue aplicando por sucursal, fuera de la distribución de entrenamiento -- pendiente de decisión (reentrenar por sucursal o restringir el endpoint al agregado global).",
+    "v0.2.0 (docs/auditoria/21_...md): agrega ticket_promedio_prev, dow_sin/cos, month_sin/cos y feriados móviles de Ecuador. Backtest cronológico contra la línea base v0.1.0 (R2=0.2128, MAE=3826.67, RMSE=6639.33): R2=0.2045, MAE=3819.69, RMSE=6686.95 -- resultado mixto (MAE, la métrica mostrada al usuario en USD, mejora; R2/RMSE empeoran marginalmente), tratado como neutro dentro del ruido esperable de una sola corrida de RandomizedSearchCV sin semilla fija entre corridas. status=active porque no hay degradación clara. El endpoint /gerencia/sales-prediction ahora también soporta granularidad semana/mes bucketizando el forecast diario (sin cambios en este modelo ni en walk_forward_forecast).",
+    "H-14b ampliado (docs/auditoria/21_...md §3.4, decisión de negocio 2026-07-10): el endpoint /gerencia/sales-prediction ahora también acepta filtros vendedor/almacen (antes solo sucursal), aplicados tanto al histórico real como a la predicción -- el modelo sigue siendo el mismo entrenado sobre la serie GLOBAL, así que filtrar por un solo vendedor/almacén lo aleja aún más de su distribución de entrenamiento (series más dispersas, más días en 0) que filtrar por sucursal. Trade-off aceptado explícitamente por el usuario por consistencia con el comportamiento ya existente; no hay un modelo por-vendedor/almacén. Sin cambios en v0.3.0: el modelo sigue siendo global y diario; los filtros y la granularidad semana/mes se resuelven en el serving (dataset_repository + prediction_service)."
   ],
-  "notes": "Reconstruido en Fase 3 (2026-07-09): ganador RandomForestRegressor, RMSE=6639.33 USD, MAE=3826.67 USD, R2=0.2128 (holdout cronológico 20%, consistente con el R2 documentado de +0.21 en ml/REPORTE_MEJORA_MODELOS.md — la ventana de 3 años y el resto de la metodología no cambiaron, solo H-01/H-06). Verificado manualmente que predict() devuelve USD en rango plausible (~7.800-40.000 en una muestra de 10 días reales, dentro de [0, 5000000])."
+  "notes": "v0.1.0 (Fase 3, 2026-07-09): ganador RandomForestRegressor, RMSE=6639.33 USD, MAE=3826.67 USD, R2=0.2128 (holdout cronológico 20%). v0.2.0 (docs/auditoria/21_...md): features ticket_promedio_prev, dow_sin/cos, month_sin/cos y feriados móviles; R2=0.2045, MAE=3819.69, RMSE=6686.95. v0.3.0 (docs/auditoria/22_plan_mejora_modelo_ventas.md, 2026-07-10): MISMAS 26 features (la Fase 1 descartó con evidencia el set depurado, flags de pico atípico, fact_compras y fact_devoluciones -- todos neutros o peores); cambia el ALGORITMO FINAL fijado con evidencia: RandomForestRegressor(n_estimators=500, defaults, random_state=42) + TransformedTargetRegressor(log1p/expm1). Elegido con el protocolo de 3 corridas por configuración: R2=0.2985±0.0040, MAE=3780.10, RMSE=6279.34 en holdout cronológico 20%, superando a los 5 algoritmos con búsqueda profunda de hiperparámetros (mejor: RF tuneado R2=0.258), a la regresión por cuantiles LightGBM (P50 R2=0.227, cobertura [P10,P90] 59% vs 80% nominal -- descartada por descalibración) y a SARIMAX (R2=+0.31 pero sobre la serie CON días sin venta, no comparable). La competencia RandomizedSearchCV(n_iter=5) del model_selector queda solo como modo opcional (hyperparameter_search=True): con este dataset elige configuraciones que rinden peor en el holdout que el RF con defaults."
 }

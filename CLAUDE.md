@@ -1,11 +1,11 @@
 # CLAUDE.md — Contexto del Proyecto
 
 > **Proyecto:** Plataforma Inteligente de Analítica Empresarial y Predicción de Ventas para Empresas Multisucursal (proyecto de tesis).
-> **Última actualización de este documento:** 2026-07-08 (generado a partir del análisis del repositorio).
+> **Última actualización de este documento:** 2026-07-10 (decomisión de `goals_rf`, ver `docs/auditoria/20_decomision_goals_rf.md`).
 
 ## Descripción del proyecto
 
-Plataforma de Business Intelligence de punta a punta: extrae datos del ERP transaccional (SAP SQL Anywhere 17), los carga en un Enterprise Data Warehouse (EDW) dimensional en PostgreSQL 16, entrena 7 modelos de Machine Learning sobre el EDW y los sirve mediante una API FastAPI con autenticación JWT + RBAC, consumida por una SPA React con dashboards por rol (Gerencia, Ventas, Bodega, Administrador).
+Plataforma de Business Intelligence de punta a punta: extrae datos del ERP transaccional (SAP SQL Anywhere 17), los carga en un Enterprise Data Warehouse (EDW) dimensional en PostgreSQL 16, entrena 6 modelos de Machine Learning sobre el EDW y los sirve mediante una API FastAPI con autenticación JWT + RBAC, consumida por una SPA React con dashboards por rol (Gerencia, Ventas, Bodega, Administrador). El módulo de Metas y Comisiones NO usa ningún modelo ML (el modelo `goals_rf` fue decomisionado, ver `docs/auditoria/20_decomision_goals_rf.md`): la meta se calcula con estadística pura (IQR + tendencia reciente) sobre el histórico de Venta Neta del EDW.
 
 El DW es la **fuente oficial** para:
 
@@ -37,7 +37,7 @@ PostgreSQL 16 "postgres_edw" (Docker, puerto host 5433) — UN solo servidor, 3 
   - ml.*     → vistas para notebooks/entrenamiento (ml.v_ventas_cruzadas_desanonima)
         ▼                                    ▼
 Backend FastAPI (backend/)            Pipeline ML (ml/)
-  - JWT + RBAC (4 roles)                - ml/main.py entrena 7 modelos desde el EDW
+  - JWT + RBAC (4 roles)                - ml/main.py entrena 6 modelos desde el EDW
   - KPIs y analytics por rol            - exporta .pkl a ml/models/
   - inferencia de los .pkl              - publish_models.py reinicia el backend
   - reentrenamiento (admin)               (volumen Docker ./ml/models:/app/ml_models:ro)
@@ -69,7 +69,7 @@ Frontend React 19 + Vite + TS (frontend/, puerto 5173)
 | `etl/` | Pipeline ETL SAP → EDW. `orchestrator.py` (entrypoint), `extractors/*.sql` (24 extractores tokenizados), `transformers/`, `loaders/`, `connectors/`, `config/settings.py`, `tasks/generar_metas_operativas.py`. |
 | `edw/` | DDL del DW en orden de ejecución: `01_schema.sql` … `09_vistas_ml.sql` (esquema, dims, hechos, índices, `etl_control`, verificación, tablas `public.*`, seed de roles/usuarios, vistas ML). |
 | `backend/` | API FastAPI. `app/api/routes/` (routers), `app/services/` (lógica de negocio), `app/repositories/` (acceso a datos), `app/ml/` (carga e inferencia de .pkl), `app/models/` + `app/schemas/`, `app/core/` (config, seguridad, excepciones), `tests/`. |
-| `ml/` | Entrenamiento. `main.py` (orquestador de los 7 modelos), `src/` (data/features/training/prediction/utils), `notebooks/` (EDA y experimentos), `models/` (.pkl publicados), `publish_models.py`, `REPORTE_MEJORA_MODELOS.md`. |
+| `ml/` | Entrenamiento. `main.py` (orquestador de los 6 modelos), `src/` (data/features/training/prediction/utils), `notebooks/` (EDA y experimentos), `models/` (.pkl publicados), `publish_models.py`, `REPORTE_MEJORA_MODELOS.md`. |
 | `frontend/` | SPA React. `src/pages/` (dashboards por rol), `src/services/` (API + interceptores JWT), `src/store/` (Zustand), `src/hooks/`, `src/components/`, `src/router/AppRouter.tsx`. |
 | `docs/` | Documentación: `arquitectura_dw.md` (diseño completo del EDW), `auditoria/` (reportes de auditoría), `features/`, `tesis/`, `matriz_trazabilidad.md`, `identificacion_bd.md`, `hoja_de_ruta_ejecucion.md`. |
 | `.agent/` | Skills y workflows del agente (`workflows/ejecutar-etl.md`, `workflows/configurar-entorno.md`). |
@@ -88,7 +88,7 @@ Validadas contra Producción vía SELECT; detalle completo en [docs/auditoria/02
 7. **Historial:** `Dim_Producto` y `Dim_Cliente` son SCD Tipo 2 (`es_vigente`, `fecha_inicio/fin_vigencia`).
 8. **Anonimización PII:** los clientes se anonimizan con hash + salt (`PII_SALT`); la única tabla con PII real es `public.cliente_lookup`, aislada fuera del esquema `edw` a propósito. El ETL aborta si `PII_SALT` falta o usa el valor inseguro heredado.
 9. **RBAC:** 4 roles fijos de negocio: `gerencia`, `administrador`, `ventas`, `bodega` (catálogo cerrado en `public.roles`; seed en `edw/08_seed_roles_usuarios.sql`). Ventas/bodega ven datos filtrados por su sucursal / código SAP.
-10. **Metas (inferida del código):** las metas operativas viven en `public.metas_comerciales_operativas` (generadas por `etl/tasks/generar_metas_operativas.py` + modelo ML con factor corrector suavizado 80/120 según `docs/matriz_trazabilidad.md`). `edw.fact_metas_comerciales` existe pero está vacía.
+10. **Metas y Comisiones (grano vendedor, 100% estadística, sin ML):** las metas operativas viven en `public.metas_comerciales_operativas` con grano `(anio, mes, id_vendedor_origen)` -- NO por sucursal, porque `edw.dim_vendedor` no tiene sucursal propia y un vendedor transacciona en múltiples sucursales (docs/auditoria/19_...md). Se generan vía `POST /gerencia/goals/generate` → `GoalMLService.generate_proposals`, que usa `IQRGoalCalculationEngine` (24 meses de Venta Neta, recorte de picos por IQR, tendencia rodante de los últimos meses, techo/piso de sanidad contra la tendencia reciente). El modelo `goals_rf` fue decomisionado (docs/auditoria/20_...md): no queda ningún modelo ML en este módulo. `edw.fact_metas_comerciales` existe pero está vacía.
 11. **Ventana de entrenamiento de ventas (inferida, justificada en `ml/main.py`):** el modelo de ventas entrena solo con los últimos 3 años (`VENTANA_ENTRENAMIENTO_VENTAS_ANIOS`) por quiebre estructural del negocio (~31% de crecimiento 2018→2026); mejoró el R² de −0.03 a +0.21 en backtest.
 12. **Registros centinela:** toda dimensión tiene una fila `-1` ("desconocido") usada cuando una llave foránea no resuelve; prohibido el fallback a filas arbitrarias (`LIMIT 1`), eliminado en auditoría 04.
 
@@ -160,8 +160,8 @@ Validaciones existentes:
 - **Tablas `public.*`:** `roles`, `usuarios` (auth de la plataforma), `cliente_lookup` (única tabla con PII real), `metas_comerciales_operativas`.
 - **Vistas:** `ml.v_ventas_cruzadas_desanonima` (une ventas con identidad real vía lookup, para notebooks); origen ERP: `vi_mv_existencias`.
 - **Control:** `edw.etl_control` (idempotencia/auditoría del ETL).
-- **Pipelines / entrypoints:** `etl/orchestrator.py` (ETL completo), `ml/main.py` (entrena los 7 modelos), `ml/publish_models.py` (recarga el backend), `etl/tasks/generar_metas_operativas.py`.
-- **Modelos ML (7, en `ml/models/*.pkl`, servidos por `backend/app/ml/`):** `sales_rf_model` / `sales_best_model` (predicción de ventas — Gerencia), `demand_rf_model` / `demand_best_model` (demanda — Bodega), `kmeans_rfm_model` (segmentación RFM, K=4 — Ventas), `churn_classifier` / `churn_best_classifier` (riesgo de fuga), `association_rules` (Apriori, venta cruzada), `isolation_forest_model` (anomalías — Admin), `goals_rf_model` / `goals_best_model` (metas).
+- **Pipelines / entrypoints:** `etl/orchestrator.py` (ETL completo), `ml/main.py` (entrena los 6 modelos), `ml/publish_models.py` (recarga el backend). Las metas comerciales se generan desde el backend (`GoalMLService.generate_proposals`, `POST /gerencia/goals/generate`), no desde un task del ETL -- `docs/matriz_trazabilidad.md`/versiones previas de este documento referenciaban un `etl/tasks/generar_metas_operativas.py` que no existe en el repositorio (inconsistencia ya corregida aquí, ver `docs/auditoria/20_...md`).
+- **Modelos ML (6, en `ml/models/*.pkl`, servidos por `backend/app/ml/`):** `sales_rf_model` / `sales_best_model` (predicción de ventas — Gerencia), `demand_rf_model` / `demand_best_model` (demanda — Bodega), `kmeans_rfm_model` (segmentación RFM, K=4 — Ventas), `churn_classifier` / `churn_best_classifier` (riesgo de fuga), `association_rules` (Apriori, venta cruzada), `isolation_forest_model` (anomalías — Admin). El modelo de metas (`goals_rf`) fue decomisionado (docs/auditoria/20_...md): Metas y Comisiones usa solo estadística pura.
 - **API (prefijo `/api/v1`):** `/auth`, `/users`, `/roles`, `/analytics` (Gerencia), `/analytics/bodega`, `/analytics/ventas`, `/analytics/admin`, `/admin/modelos` (MLOps), `/gerencia/goals`. Salud en `/health`; Swagger en `/docs`.
 
 ## Dependencias

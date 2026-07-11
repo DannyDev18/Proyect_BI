@@ -1,7 +1,7 @@
 import { api } from './http';
 import type {
   VentasKPIs, VentasGoalsTracking, ChurnResponse, RecomendacionResponse, SegmentacionResponse,
-  ForecastCierre, MetaSugerida, RecomendacionesComerciales,
+  ForecastCierre, MetaSugerida, RecomendacionesComerciales, MiComision, PostGoalInvoicesResponse,
 } from '../types/ventas';
 
 export const getSalesGoals = () =>
@@ -12,8 +12,8 @@ export const getSalesGoals = () =>
 export const getMyGoalTracking = () =>
   api.get<VentasGoalsTracking>('/api/v1/analytics/ventas/goals');
 
-/** Integración ML (docs/auditoria/15_...): pronóstico de cierre (modelo `sales_rf`),
- * meta sugerida (IA `goals_rf` + motor estadístico) y recomendaciones comerciales
+/** Integración ML (docs/auditoria/15_.../20_...md): pronóstico de cierre (modelo
+ * `sales_rf`), meta sugerida (motor estadístico, sin ML) y recomendaciones comerciales
  * (reglas de asociación) para el vendedor autenticado. */
 export const getGoalForecastCierre = () =>
   api.get<ForecastCierre>('/api/v1/analytics/ventas/goals/forecast-cierre');
@@ -23,6 +23,14 @@ export const getMetaSugerida = () =>
 
 export const getGoalRecommendations = () =>
   api.get<RecomendacionesComerciales>('/api/v1/analytics/ventas/goals/recomendaciones');
+
+/** Comisiones (docs/modulo_metas.md): mi cumplimiento real y comisión devengada del
+ * mes en curso, y las facturas emitidas después de alcanzar el 100% de la meta. */
+export const getMyCommission = () =>
+  api.get<MiComision>('/api/v1/analytics/ventas/goals/mi-comision');
+
+export const getPostGoalInvoices = () =>
+  api.get<PostGoalInvoicesResponse>('/api/v1/analytics/ventas/goals/facturas-post-meta');
 
 export const getChurnRisk = (cliente_id: string) =>
   api.get<ChurnResponse>('/api/v1/analytics/ventas/churn-risk', {

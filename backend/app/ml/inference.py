@@ -106,15 +106,3 @@ def get_cluster_to_segment(loader: ModelLoader) -> dict[str, str]:
     antes vivía en prediction_service.py y que quedaba desalineado tras cada
     reentrenamiento (las etiquetas de K-Means son arbitrarias entre corridas)."""
     return loader.get_meta('segmentation').get('cluster_to_segment', {})
-
-
-def predict_goal_growth_ratio(loader: ModelLoader, X: pd.DataFrame) -> float:
-    """Unifica el caso que antes cargaba `goals_rf_model.pkl` con un `joblib.load()`
-    inline dentro de `GoalsAutomationService` -- ahora usa el mismo `ModelLoader` que
-    los otros 6 modelos (clave 'goals_rf')."""
-    model = loader.get('goals_rf')
-    X = _select_features(loader, 'goals_rf', X)
-    _validate_features_or_raise(loader, 'goals_rf', X.columns)
-    value = float(model.predict(X)[0])
-    _validate_prediction_or_raise(loader, 'goals_rf', value)
-    return value

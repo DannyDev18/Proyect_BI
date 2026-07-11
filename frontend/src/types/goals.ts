@@ -1,7 +1,6 @@
 export interface GoalProposal {
   id: number;
   vendedor: string;
-  sucursal: string;
   monto_meta: number;
   comision_base_pct: number;
   estado: string;
@@ -37,4 +36,19 @@ export interface GoalsAISummary {
   vendedores_en_riesgo: VendorRiskItem[];
   vendedores_alta_probabilidad: VendorRiskItem[];
   recomendaciones_por_categoria: CategoryRecommendationItem[];
+}
+
+// ── Comisiones (docs/modulo_metas.md, docs/auditoria/17_...) ────────────────────────
+export type NivelComision = 'EXCELENTE' | 'META' | 'CERCA' | 'LEJOS';
+
+export interface VendorCommissionRow {
+  id: number;
+  vendedor: string;
+  monto_meta: number;
+  venta_real: number;
+  pct_cumplimiento: number;
+  nivel: NivelComision;
+  tasa_aplicada_pct: number;
+  comision_devengada: number;
+  estado: string;
 }

@@ -22,19 +22,27 @@ class VPKPIVentas(BaseModel):
 
 # Respuestas para llamadas directas de Inferencia
 class MetricasPrediccion(BaseModel):
-    ventas_acumuladas: float
-    venta_esperada: float
-    crecimiento_esperado: float
-    mes_mayor_venta: str
-    mes_menor_venta: str
-    promedio_mensual: float
-    mae_modelo: float
-    nivel_confianza: float
-    fecha_entrenamiento: str
+    # Todos opcionales: cuando la serie filtrada (vendedor/almacén/sucursal) queda vacía o
+    # la inferencia falla, el servicio degrada con gracia devolviendo metricas={} -- con
+    # campos obligatorios eso explotaba en la validación de la respuesta (500) en vez de
+    # llegar al frontend como "sin datos" (hallazgo de la verificación del doc 22).
+    ventas_acumuladas: Optional[float] = None
+    venta_esperada: Optional[float] = None
+    crecimiento_esperado: Optional[float] = None
+    mes_mayor_venta: Optional[str] = None
+    mes_menor_venta: Optional[str] = None
+    promedio_mensual: Optional[float] = None
+    mae_modelo: Optional[float] = None
+    # r2_modelo sí lo calcula el servicio (H-09, del sidecar real) pero el schema lo
+    # omitía y Pydantic lo filtraba de la respuesta.
+    r2_modelo: Optional[float] = None
+    nivel_confianza: Optional[float] = None
+    fecha_entrenamiento: Optional[str] = None
+    algoritmo: Optional[str] = None
 
 class PrediccionVentasResponse(BaseModel):
-    horizonte: str
-    dias_proyectados: int
+    granularidad: str
+    periodos_proyectados: int
     historial_y_prediccion: List[Dict[str, Any]]
     metricas: MetricasPrediccion
     insights: List[str]
@@ -79,13 +87,15 @@ class ForecastCierreResponse(BaseModel):
 
 class MetaSugeridaResponse(BaseModel):
     vendedor_origen: str
-    sucursal: str
-    meta_sugerida_ia: Optional[float] = None
     meta_sugerida_estadistica: float
     metodo_estadistico: str
     meses_historico_usados: int
     valores_atipicos_excluidos: int
     meses_atipicos_ml_detectados: int
+    componente_estacional: Optional[float] = None
+    componente_tendencia: float
+    factor_tendencia_aplicado: float
+    coeficiente_variacion: float
 
 class RecomendacionComercialItem(BaseModel):
     producto_cod: str

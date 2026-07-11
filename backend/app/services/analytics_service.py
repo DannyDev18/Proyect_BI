@@ -14,9 +14,10 @@ class AnalyticsService:
     def get_management_kpis(
         self, sucursal: str | None = None, start_date: str | None = None,
         end_date: str | None = None, categoria: str | None = None, vendedor: str | None = None,
+        almacen: str | None = None,
     ) -> dict[str, Any]:
         """Caso de Uso 2 (Gerencia): Índice de Salud Comercial."""
-        data = self.repo.get_management_kpis(sucursal, start_date, end_date, categoria, vendedor)
+        data = self.repo.get_management_kpis(sucursal, start_date, end_date, categoria, vendedor, almacen)
         return {
             "margen_utilidad_neta": round(data["margen"], 2),
             "ticket_promedio": round(data["ticket"], 2),
@@ -27,9 +28,9 @@ class AnalyticsService:
 
     def get_revenue_by_category(
         self, sucursal: str | None = None, start_date: str | None = None,
-        end_date: str | None = None, vendedor: str | None = None,
+        end_date: str | None = None, vendedor: str | None = None, almacen: str | None = None,
     ) -> list[dict[str, Any]]:
-        return self.repo.get_revenue_by_category(sucursal, start_date, end_date, vendedor)
+        return self.repo.get_revenue_by_category(sucursal, start_date, end_date, vendedor, almacen)
 
     def get_categories(self) -> list[str]:
         return self.repo.get_categories()
@@ -39,6 +40,9 @@ class AnalyticsService:
 
     def get_vendedores(self) -> list[str]:
         return self.repo.get_vendedores()
+
+    def get_almacenes(self) -> list[str]:
+        return self.repo.get_almacenes()
 
     def get_warehouse_kpis(self, sucursal: str | None = None) -> dict[str, Any]:
         """Caso de Uso 3 (Bodega): Alertas de Desabastecimiento -- implementación real

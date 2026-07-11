@@ -128,7 +128,7 @@
       "dtype": "int",
       "required": true,
       "nullable": false,
-      "description": "1 si feriado Ecuador de fecha fija (aproximación; deuda ETL dim_fecha.es_feriado no poblado)"
+      "description": "1 si feriado Ecuador de fecha fija (aproximación; deuda ETL dim_fecha.es_feriado no poblado). Nota: los feriados móviles (Viernes Santo, Carnaval) se agregaron solo al modelo de ventas (docs/auditoria/21_...md), no a este -- fuera del alcance aprobado."
     }
   ],
   "target": {

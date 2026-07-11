@@ -68,3 +68,114 @@ El driver real del *growth ratio* (venta del mes siguiente / venta del mes actua
 - **Ventana de 3 años es una heurística**, no un valor optimizado por grid search — quedó documentada como constante nombrada para que sea fácil de ajustar y justificar.
 - El resto de los 5 modelos (demanda, segmentación, churn, cross-selling, anomalías) **no se tocaron** — ya tenían desempeño sólido y no eran el foco elegido.
 - `ml/requirements.txt` sigue sin declarar `lightgbm`/`catboost`/`optuna` (usados por `model_selector.py`) — deuda técnica ya señalada, fuera del alcance elegido para este cambio.
+
+### 2.3 Metas / Growth Ratio sobre Venta Neta (v0.2.0, 2026-07-10)
+
+Regla de negocio nueva (`docs/auditoria/02_reglas_negocio_validadas.md`, §13): la venta real de
+un vendedor debe descontar sus devoluciones del período (`Venta Neta = SUM(subtotal_neto) -
+SUM(total_linea_devolucion)`). Se migró `fetch_goals_data()` (CTE `VentasBrutas` +
+`Devoluciones` → `MonthlySales` neta, patrón de agregados separados por grano distinto) y el
+serving equivalente `goal_repository.py::get_sales_trend_for_goals` en el mismo cambio, para no
+abrir un mismatch entrenamiento/servicio (ver skill `ml-training-pipeline`).
+
+| Versión | Target/features | R² (holdout cronológico) | MAE (espacio ratio) | Ganador |
+|---|---|---|---|---|
+| v0.1.0 (venta bruta) | `y_ventas_futuras` sobre `subtotal_neto` | 0.126 | 0.322 | CatBoostRegressor |
+| v0.2.0 (Venta Neta) | `y_ventas_futuras` sobre venta neta | **0.043** | **0.348** | RandomForestRegressor |
+
+**Backtest empeoró en ambas métricas** (R² -0.083, MAE +0.026) sobre las mismas 2 068 muestras
+vendedor-sucursal-mes. Hipótesis (no confirmada con más experimentos por estar fuera del
+alcance de esta sesión): restar devoluciones agrega varianza mes a mes que no está correlacionada
+con el resto de las features (mes, estacionalidad, tendencia) — las devoluciones dependen más de
+eventos puntuales (garantías, cambios) que del ciclo estacional/tendencia que el modelo ya usa
+para predecir, así que el ratio objetivo se vuelve más ruidoso sin que el modelo tenga una señal
+nueva para explicar ese ruido.
+
+**Decisión aplicada:** `ml/contracts/models/goals.json` se dejó en `status: "draft"` (no bloquea
+inferencia, pero tampoco se considera el contrato validado) hasta que el negocio/equipo decida
+entre: (a) aceptar el R² más bajo porque la Venta Neta es la magnitud correcta para medir
+desempeño real (justificación de negocio, no solo de métrica), (b) agregar `devoluciones_historicas`
+como feature explícita (en vez de solo netear el target) para darle al modelo la señal que hoy
+pierde, o (c) mantener `goals_rf` sirviendo sobre venta bruta y dejar que la Venta Neta solo
+alimente el motor estadístico (`IQRGoalCalculationEngine`, ver `docs/auditoria/16_...md`), que sí
+mejora con ella al no depender de un modelo entrenado. El artefacto `goals.pkl` fue
+sobrescrito por la corrida de reentrenamiento (no versionado en git, `ml/models/` está en
+`.gitignore`) pero el backend **no fue reiniciado** en esta sesión -- sigue sirviendo el modelo en
+memoria cargado en el último arranque hasta el próximo `docker compose restart backend` /
+`publish_models.py`, así que no hay impacto en producción todavía.
+
+**Resolución (mismo día):** el usuario eligió mantener `goals_rf` sobre venta bruta (opción c).
+El experimento se revirtió por completo (`fetch_goals_data`, contrato, `get_sales_trend_for_goals`
+de vuelta al estado original; `goals.pkl` reentrenado sobre la SQL revertida, R²=0.126 confirma
+paridad con el baseline). La Venta Neta se mantiene solo en `IQRGoalCalculationEngine` (motor
+estadístico), que no depende de reentrenar un modelo. Detalle en
+`docs/auditoria/16_venta_neta_y_propuesta_meta_siguiente_mes.md` §7.1.
+
+### 2.4 Ventas — features nuevas v0.2.0 (2026-07-10, docs/auditoria/21_...md)
+
+Motivado por pedido de negocio de mejorar la calidad del forecast de ventas del Dashboard de
+Gerencia. Features agregadas a `build_features.py`/`preprocessing.py` (ver contrato
+`ml/contracts/models/sales.json` v0.2.0): `ticket_promedio_prev` (venta neta / facturas del día
+anterior, rezagada por el mismo motivo que las demás exógenas contemporáneas), `dow_sin/cos` y
+`month_sin/cos` (codificación cíclica del calendario) y feriados móviles de Ecuador (Viernes
+Santo, Carnaval, calculados por offset desde el domingo de Pascua vía computus gregoriano) sumados
+a los feriados de fecha fija ya existentes.
+
+| Métrica | v0.1.0 (línea base) | v0.2.0 (features nuevas) | Δ |
+|---|---|---|---|
+| R² | 0.2128 | 0.2045 | -0.0083 |
+| MAE | 3826.67 | 3819.69 | -6.98 (mejor) |
+| RMSE | 6639.33 | 6686.95 | +47.62 (peor) |
+
+**Resultado mixto, tratado como neutro:** el MAE (la métrica que se muestra al usuario en el
+Dashboard, ±USD) mejora marginalmente; R²/RMSE empeoran marginalmente. La magnitud de ambos
+movimientos es consistente con el ruido esperable de una sola corrida de `RandomizedSearchCV`
+sin semilla fija entre ejecuciones (la línea base tampoco se promedió sobre múltiples corridas).
+No se identificó una feature individual claramente responsable de una mejora o degradación —no se
+hizo ablation test por feature en esta sesión (fuera de presupuesto). **Decisión: se activa el
+contrato v0.2.0** (no hay evidencia de degradación clara, y las features nuevas son razonables de
+mantener por diseño: ticket promedio y feriados móviles son señales de negocio genuinamente
+ausentes antes). Si una futura sesión corre varias repeticiones y confirma degradación real de R²,
+revertir siguiendo el mismo patrón que el experimento de Metas (§2.3).
+
+Cambio adicional en el mismo endpoint (`backend/app/services/prediction_service.py`, sin tocar
+el modelo): `get_sales_forecast_weekly` se renombró a `get_sales_forecast` y ahora soporta
+`granularidad` (semana/mes, bucketizando el walk-forward diario existente) y filtros
+`vendedor`/`almacen` (extensión de H-14b, ver docs/auditoria/21_...md).
+
+**Nota de proceso:** la primera versión de la codificación cíclica se coló al modelo de demanda
+(comparten `TimeSeriesLagsTransformer`) y lo degradó en las 3 métricas (RMSE/MAE/R2); se corrigió
+acotando las features nuevas al dataset de ventas y se reentrenó de nuevo. Detalle completo en
+`docs/auditoria/21_mejora_features_ventas_y_granularidad.md` §5.1.
+
+### 2.5 Ventas — modelo final v0.3.0 fijado con evidencia (2026-07-11, docs/auditoria/22_plan_mejora_modelo_ventas.md)
+
+Ejecución completa del plan 22 (Fases 1-4). Resumen de evidencia (detalle y tablas completas
+en el propio doc 22, secciones 4-6; scripts en `ml/notebooks/eda_22_analisis_variables.py`,
+`exp_22_features.py`, `exp_22_fase3.py`, `exp_22_rf_final.py`, `exp_22_sarimax.py`):
+
+1. **Fase 1 (variables):** la señal la domina el calendario (`day_of_week` concentra 0.339 de
+   importancia por permutación; lags/rolling aportan casi nada individualmente). Aun así,
+   remover las features de importancia ~0 DEGRADA el holdout (R² 0.296→0.234): el RF explota
+   interacciones. Los 4 candidatos nuevos (flags de pico atípico, excluir días pico,
+   `fact_compras`, `fact_devoluciones`) resultaron neutros o peores con el protocolo de 3
+   corridas. **Set final: las mismas 26 features de v0.2.0** (sin tocar `build_features.py`
+   ni `preprocessing.py` del backend — el modelo de demanda queda intacto).
+2. **Fase 3 (algoritmos):** con 793 filas de train, `RandomizedSearchCV` (n_iter=5 y n_iter=25)
+   elige configuraciones que rinden PEOR en el holdout que un RF con defaults. La regresión por
+   cuantiles LightGBM quedó descalibrada (cobertura [P10,P90] 59% vs 80% nominal) y SARIMAX
+   solo compite sobre la serie con días-cero (no comparable; MAE/RMSE peores).
+3. **Fase 4 (final):** `RandomForestRegressor(n_estimators=500, defaults)` + TTR log1p, fijado
+   como `GANADOR_SALES_PARAMS` en `train_sales_prediction.py` (`hyperparameter_search=False`
+   ahora significa "entrenar el ganador fijo"; `True` re-corre la competencia para
+   re-evaluaciones). Contrato `sales` v0.3.0 activo, validador 6/6 OK.
+
+| Métrica (holdout cronológico 20%) | v0.2.0 (anterior) | v0.3.0 (publicado) |
+|---|---|---|
+| R² | 0.2045 | **0.2972** |
+| MAE (USD) | 3819.69 | **3789.68** |
+| RMSE (USD) | 6686.95 | **6285.43** |
+
+Sin cambios en el serving: el gráfico de Gerencia conserva los filtros sucursal/vendedor/
+almacén y la granularidad semana/mes (bucketización del walk-forward diario), que se aplican
+tanto al histórico como a la predicción.

@@ -86,3 +86,15 @@ Esto **descarta** el riesgo de duplicación por JOIN señalado como *[VALIDAR]* 
 ## 9. Costo de artículo (`articulos.ultcos`)
 
 `ultcos` = **último costo** (no promedio). El alias `costo_promedio` del extractor es incorrecto y se renombra a `ultimo_costo`.
+
+## 13. Venta Neta por vendedor (Metas y Comisiones)
+
+**Regla:** `Venta Neta = SUM(fact_ventas_detalle.subtotal_neto) - SUM(fact_devoluciones.total_linea_devolucion)`, agregada por vendedor/mes (ver regla 15 — NO por sucursal). `fact_ventas_detalle` se filtra por `dim_estado_documento.estado_documento_sk <> -1`; `fact_devoluciones` no tiene columna de estado de documento (no aplica ese filtro). Es la base del motor estadístico de propuesta de metas (`IQRGoalCalculationEngine`, ver `docs/auditoria/16_venta_neta_y_propuesta_meta_siguiente_mes.md`), que es el generador OFICIAL de la meta persistida y el ÚNICO motor de Metas y Comisiones: el modelo `goals_rf` fue decomisionado (`docs/auditoria/20_decomision_goals_rf.md`), el módulo no usa ningún modelo ML.
+
+## 14. Tramos de comisión (Metas y Comisiones)
+
+**Regla:** el cumplimiento se mide como `Venta Neta del período / monto_meta`. Cuatro tramos (docs/modulo_metas.md "PROPUESTA IA" Fase 4, prioridad sobre la nota informal del mismo documento que se contradice en el tramo 80-89%): Lejos (<80%) no comisiona; Cerca (80-89%) comisiona `comision_base_pct * 5/7` sin bono; Meta (90-99%) comisiona `comision_base_pct` completo; Excelente (>=100%) comisiona `comision_base_pct + 2pp` más el bono fijo `bono_sobrecumplimiento`. `comision_base_pct`/`bono_sobrecumplimiento` son campos ya existentes y editables por vendedor/meta en `public.metas_comerciales_operativas` (no hardcodeados). Implementado en `backend/app/services/commission_engine.py`, ver `docs/auditoria/17_comisiones_liquidacion.md`.
+
+## 15. Grano de Metas y Comisiones: vendedor, NO vendedor×sucursal
+
+**Regla:** `public.metas_comerciales_operativas` tiene grano `(anio, mes, id_vendedor_origen)`. `edw.dim_vendedor` no tiene una sucursal propia asociada — un vendedor transacciona en múltiples sucursales físicas dentro de `fact_ventas_detalle` (verificado contra el EDW real: `VEN13` transacciona en las 7 sucursales, varios otros vendedores en 5-6). Agrupar por `(vendedor, sucursal)` generaba hasta 7 metas/comisiones duplicadas por vendedor por mes. Toda consulta de `GoalRepository` relacionada con metas/comisiones agrega Venta Neta/ventas de TODAS las sucursales del vendedor. Ver `docs/auditoria/19_grano_vendedor_metas_y_meta_futura_razonable.md`.

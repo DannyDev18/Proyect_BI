@@ -1,10 +1,12 @@
 # backend/app/ml/forecasting.py
 """Simulación walk-forward compartida por los dos consumidores del modelo de ventas:
-`PredictionService.get_sales_forecast_weekly` (Gerencia, horizonte fijo de 14 días) y
-`GoalMLService` (integración Metas y Comisiones -- horizonte variable: días restantes
-del mes en curso, para proyectar el cierre de un vendedor/sucursal). Antes este loop
-vivía duplicado inline en `prediction_service.py`; se extrae aquí para no reimplementarlo
-en la integración de metas (instrucción explícita: no duplicar lógica)."""
+`PredictionService.get_sales_forecast` (Gerencia, horizonte diario interno de 84/180 días
+según la granularidad semana/mes elegida en el dashboard -- ver
+docs/auditoria/21_mejora_features_ventas_y_granularidad.md) y `GoalMLService` (integración
+Metas y Comisiones -- horizonte variable: días restantes del mes en curso, para proyectar
+el cierre de un vendedor/sucursal). Antes este loop vivía duplicado inline en
+`prediction_service.py`; se extrae aquí para no reimplementarlo en la integración de metas
+(instrucción explícita: no duplicar lógica)."""
 from typing import Callable
 
 import pandas as pd

@@ -1,8 +1,11 @@
 # backend/app/api/routes/goals.py
 from fastapi import APIRouter, Depends, status
 
-from app.api.dependencies import AnalyticsServiceDep, GoalMLServiceDep, GoalsServiceDep, resolve_sucursal_filter
+from app.api.dependencies import (
+    AnalyticsServiceDep, CommissionServiceDep, GoalMLServiceDep, GoalsServiceDep, resolve_sucursal_filter,
+)
 from app.core.deps import CurrentUserDep, PermissionChecker
+from app.schemas.commission import CommissionTrackingResponse, VendorCommissionRowResponse
 from app.schemas.goal import (
     CategoryRecommendationItem, GoalReviewPayload, GoalsAISummaryResponse, GoalTrackingResponse, VendorRiskItem,
 )
@@ -34,8 +37,11 @@ def get_goals_periods(goals_service: GoalsServiceDep):
     "/generate", status_code=status.HTTP_200_OK, summary="Genera metas automatizadas",
     dependencies=[Depends(only_management)],
 )
-def generate_goals(anio: int, mes: int, pressure_factor: float, goals_service: GoalsServiceDep):
-    creados = goals_service.generate_proposals(anio=anio, mes=mes, factor_presion=pressure_factor)
+def generate_goals(anio: int, mes: int, pressure_factor: float, goal_ml_service: GoalMLServiceDep):
+    """Generador OFICIAL de metas (docs/auditoria/19_...md): una fila por vendedor
+    (nunca por vendedor×sucursal), usando el motor estadístico IQR sobre Venta Neta
+    (`GoalMLService.generate_proposals`), no `goals_rf`."""
+    creados = goal_ml_service.generate_proposals(anio=anio, mes=mes, factor_presion=pressure_factor)
     return {"registros_creados": creados, "message": "Generación completada exitosamente"}
 
 
@@ -63,6 +69,18 @@ def get_goals_ai_summary(
         vendedores_alta_probabilidad=[VendorRiskItem(**c.__dict__) for c in alta_probabilidad],
         recomendaciones_por_categoria=[CategoryRecommendationItem(**r.__dict__) for r in recomendaciones],
     )
+
+
+@router.get(
+    "/commissions", response_model=CommissionTrackingResponse, dependencies=[Depends(only_management)],
+    summary="Cumplimiento real (Venta Neta) y comisión devengada por vendedor en el período",
+)
+def get_commissions(anio: int, mes: int, commission_service: CommissionServiceDep) -> CommissionTrackingResponse:
+    """Cierra el hallazgo R-1 (`docs/auditoria/14_...md`): `/tracking` solo muestra la
+    meta configurada; este endpoint agrega la venta real del período y el tramo de
+    comisión resultante (`commission_engine.calcular_comision`)."""
+    filas = commission_service.get_commission_tracking(anio=anio, mes=mes)
+    return CommissionTrackingResponse(comisiones=[VendorCommissionRowResponse(**f.__dict__) for f in filas])
 
 
 @router.put(

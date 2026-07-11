@@ -1,5 +1,6 @@
 import { GoalsConsole } from '../components/goals/GoalsConsole';
 import { GoalsAISummaryPanel } from '../components/goals/GoalsAISummaryPanel';
+import { CommissionTracker } from '../components/goals/CommissionTracker';
 
 export const DashboardMetas = () => {
   return (
@@ -14,6 +15,8 @@ export const DashboardMetas = () => {
       <div className="grid grid-cols-1">
           <GoalsConsole />
       </div>
+
+      <CommissionTracker />
 
       <GoalsAISummaryPanel />
     </div>

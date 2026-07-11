@@ -12,6 +12,7 @@ CREATE TABLE edw.Fact_Ventas_Detalle (
     vendedor_sk         INT NOT NULL REFERENCES edw.Dim_Vendedor(vendedor_sk),
     formapago_sk        INT NOT NULL REFERENCES edw.Dim_FormaPago(formapago_sk),
     estado_documento_sk INT NOT NULL REFERENCES edw.Dim_Estado_Documento(estado_documento_sk),
+    almacen_sk          INT NOT NULL REFERENCES edw.Dim_Almacen(almacen_sk),
     num_factura         VARCHAR(20) NOT NULL,
     cantidad            NUMERIC(15,4) NOT NULL,
     precio_unitario     NUMERIC(15,4) NOT NULL,

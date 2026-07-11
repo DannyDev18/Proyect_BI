@@ -12,17 +12,50 @@ mismo cambio, porque las columnas que genera deben coincidir exactamente con las
 declaradas en el sidecar `<modelo>.meta.json` (contrato ML, ver
 `app/ml/model_loader.py::get_features` y `app/ml/inference.py`).
 """
+import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 
 # Feriados nacionales de fecha fija en Ecuador (Dim_Fecha.es_feriado nunca se puebla en el
-# EDW). Los móviles (Carnaval, Viernes Santo) quedan fuera por simplicidad.
+# EDW). Debe coincidir con ml/src/features/build_features.py (ver docstring del módulo).
 FERIADOS_ECUADOR_FECHA_FIJA = {(1, 1), (5, 1), (5, 24), (7, 24), (8, 10), (10, 9), (11, 2), (11, 3), (12, 25)}
+
+
+def _domingo_pascua(anio: int) -> pd.Timestamp:
+    """Algoritmo del computus gregoriano (Gauss) para el domingo de Pascua. Debe
+    coincidir con ml/src/features/build_features.py::_domingo_pascua."""
+    a, b, c = anio % 19, anio // 100, anio % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mes = (h + l - 7 * m + 114) // 31
+    dia = ((h + l - 7 * m + 114) % 31) + 1
+    return pd.Timestamp(year=anio, month=mes, day=dia)
+
+
+def _feriados_movibles_ecuador(anio: int) -> set:
+    """Viernes Santo (Pascua - 2 días) y Carnaval lunes/martes (Pascua - 48/-47 días).
+    Debe coincidir con ml/src/features/build_features.py::_feriados_movibles_ecuador."""
+    pascua = _domingo_pascua(anio)
+    viernes_santo = pascua - pd.Timedelta(days=2)
+    carnaval_lunes = pascua - pd.Timedelta(days=48)
+    carnaval_martes = pascua - pd.Timedelta(days=47)
+    return {
+        (viernes_santo.month, viernes_santo.day),
+        (carnaval_lunes.month, carnaval_lunes.day),
+        (carnaval_martes.month, carnaval_martes.day),
+    }
+
 
 # Columnas exógenas que se calculan del MISMO día que el target (derivadas de las mismas
 # transacciones). Usarlas tal cual sería fuga de datos; se rezagan 1 día.
-COLUMNAS_EXOGENAS_CONTEMPORANEAS = ['n_clientes', 'n_facturas', 'pct_descuento_prom']
+# ticket_promedio se calcula abajo (no viene de la SQL) antes de rezagarla.
+COLUMNAS_EXOGENAS_CONTEMPORANEAS = ['n_clientes', 'n_facturas', 'pct_descuento_prom', 'ticket_promedio']
 
 
 class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
@@ -61,6 +94,16 @@ class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
             X_out['rolling_max_7d'] = y_shift.rolling(window=7, min_periods=1).max()
             X_out['expanding_mean'] = y_shift.expanding().mean()
 
+        # Ver ml/src/features/build_features.py para el porqué de este gate (evita que la
+        # codificación cíclica, pensada solo para ventas, toque el modelo de demanda al
+        # compartir este transformer -- docs/auditoria/21_...md).
+        es_dataset_ventas = 'n_facturas' in X_out.columns
+
+        if es_dataset_ventas and self.target_col in X_out.columns:
+            X_out['ticket_promedio'] = np.where(
+                X_out['n_facturas'] > 0, X_out[self.target_col] / X_out['n_facturas'], 0.0
+            )
+
         if isinstance(X_out.index, pd.DatetimeIndex):
             X_out['is_weekend'] = (X_out.index.dayofweek >= 5).astype(int)
             X_out['day_of_week'] = X_out.index.dayofweek
@@ -68,8 +111,19 @@ class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
             X_out['quarter'] = X_out.index.quarter
             X_out['is_month_start'] = X_out.index.is_month_start.astype(int)
             X_out['is_month_end'] = X_out.index.is_month_end.astype(int)
+            if es_dataset_ventas:
+                X_out['dow_sin'] = np.sin(2 * np.pi * X_out.index.dayofweek / 7)
+                X_out['dow_cos'] = np.cos(2 * np.pi * X_out.index.dayofweek / 7)
+                X_out['month_sin'] = np.sin(2 * np.pi * X_out.index.month / 12)
+                X_out['month_cos'] = np.cos(2 * np.pi * X_out.index.month / 12)
+            feriados_moviles_por_anio = {
+                anio: (_feriados_movibles_ecuador(anio) if es_dataset_ventas else set())
+                for anio in X_out.index.year.unique()
+            }
             X_out['es_feriado'] = [
-                1 if (d.month, d.day) in FERIADOS_ECUADOR_FECHA_FIJA else 0 for d in X_out.index
+                1 if (d.month, d.day) in FERIADOS_ECUADOR_FECHA_FIJA
+                or (d.month, d.day) in feriados_moviles_por_anio[d.year] else 0
+                for d in X_out.index
             ]
 
         for col in COLUMNAS_EXOGENAS_CONTEMPORANEAS:

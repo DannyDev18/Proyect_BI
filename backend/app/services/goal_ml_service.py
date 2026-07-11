@@ -1,12 +1,16 @@
 # backend/app/services/goal_ml_service.py
-"""Integración de modelos ML dentro del módulo Metas y Comisiones
-(docs/auditoria/15_fase_integracion_ml_metas_comisiones.md). Compone modelos YA
-entrenados y publicados (no reentrena nada) con el motor de cálculo estadístico
-(`goal_calculation_engine.py`) y el histórico del EDW:
+"""Integración ML dentro del módulo Metas y Comisiones
+(docs/auditoria/15_fase_integracion_ml_metas_comisiones.md,
+docs/auditoria/20_decomision_goals_rf.md). Compone modelos YA entrenados y publicados (no
+reentrena nada) con el motor de cálculo estadístico (`goal_calculation_engine.py`) y el
+histórico del EDW:
 
-- **Generación de metas**: `goals_rf` (vía `GoalsService.predict_goal_amount`, sin
-  reimplementar su capping) + el motor estadístico IQR, para mostrar ambas
-  sugerencias lado a lado.
+- **Generación de metas**: estadística pura sobre **Venta Neta**
+  (`GoalRepository.get_vendor_monthly_history` = ventas - devoluciones del período) vía
+  `IQRGoalCalculationEngine` -- 24 meses, recorte de picos con IQR, tendencia de los
+  últimos meses. El modelo `goals_rf` fue decomisionado (docs/auditoria/20_...md): no
+  aportaba mejor precisión que el motor estadístico y complicaba sin necesidad la
+  generación de metas realistas.
 - **Detección de valores atípicos**: `anomaly` (IsolationForest) corrido al grano
   correcto (línea de transacción, igual que su contrato) para señalar qué MESES del
   histórico del vendedor tienen comportamiento extraordinario -- esos meses no se
@@ -43,7 +47,6 @@ from app.ml.model_loader import ModelLoader
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository, VendorMonthlySales
 from app.services.goal_calculation_engine import IQRGoalCalculationEngine, RegistroMensual
-from app.services.goals_service import GoalsService
 
 logger = logging.getLogger("Backend.GoalMLService")
 
@@ -58,13 +61,18 @@ FRACCION_MINIMA_ANOMALIA = 0.05
 @dataclass
 class SugerenciaMeta:
     vendedor_origen: str
-    sucursal: str
-    meta_sugerida_ia: float | None
     meta_sugerida_estadistica: float
     metodo_estadistico: str
     meses_historico_usados: int
     valores_atipicos_excluidos: int
     meses_atipicos_ml_detectados: int
+    # Trazabilidad del cálculo de Venta Neta -> propuesta del siguiente mes (ver
+    # `IQRGoalCalculationEngine._calcular_base_siguiente_mes`): permite al panel gerencial
+    # mostrar por qué se sugirió el monto, no solo el número final.
+    componente_estacional: float | None
+    componente_tendencia: float
+    factor_tendencia_aplicado: float
+    coeficiente_variacion: float
 
 
 @dataclass
@@ -119,76 +127,84 @@ class GoalMLService:
         goal_repo: GoalRepository,
         dataset_repo: DatasetRepository,
         model_loader: ModelLoader,
-        goals_service: GoalsService,
         calculation_engine: IQRGoalCalculationEngine | None = None,
     ):
         self.goal_repo = goal_repo
         self.dataset_repo = dataset_repo
         self.model_loader = model_loader
-        self.goals_service = goals_service
         self.calculation_engine = calculation_engine or IQRGoalCalculationEngine()
 
-    # ── Generación de metas (estadística + IA) ────────────────────────────────
+    # ── Generación de metas (estadística pura: IQR sobre Venta Neta, sin ML) ───────────
+    def generate_proposals(self, anio: int, mes: int, factor_presion: float = 1.0) -> int:
+        """Genera/actualiza las metas OFICIALES del período `anio`/`mes` (docs/auditoria/
+        19_.../20_...md): una fila por vendedor (no por vendedor×sucursal, ver
+        `GoalRepository.get_vendors_with_recent_sales`), usando `meta_sugerida_estadistica`
+        (`IQRGoalCalculationEngine` sobre Venta Neta, 24 meses con recorte de picos vía
+        IQR + tendencia de los últimos meses + techo/piso de sanidad contra la tendencia
+        reciente) -- sin ningún modelo ML (`goals_rf` decomisionado).
+
+        `factor_presion` (el mismo slider de "presión comercial" que ya usaba el
+        generador anterior) se pasa como `factor_crecimiento` del motor estadístico --
+        mismo rol: empuje comercial adicional sobre la tendencia ya calculada."""
+        vendedores = self.goal_repo.get_vendors_with_recent_sales(anio, mes)
+        registros_afectados = 0
+
+        for t in vendedores:
+            sugerencia = self.suggest_goal(t.vendedor_origen, factor_crecimiento=factor_presion)
+            meta_monto = sugerencia.meta_sugerida_estadistica
+            meta_unidades = max(0.0, float(t.unidades_anterior or 0.0) * factor_presion)
+
+            existing = self.goal_repo.find_proposal(anio, mes, t.vendedor_origen)
+            if not existing:
+                self.goal_repo.insert_proposal(anio, mes, t.vendedor_origen, meta_monto, meta_unidades)
+                registros_afectados += 1
+            elif existing[1] == "PROPUESTA":
+                self.goal_repo.update_proposal_amounts(existing[0], meta_monto, meta_unidades)
+                registros_afectados += 1
+
+        self.goal_repo.commit()
+        return registros_afectados
+
     def suggest_goal(
-        self, vendedor_origen: str, sucursal: str, factor_estacional: float = 1.0, factor_crecimiento: float = 1.0,
+        self, vendedor_origen: str, factor_estacional: float = 1.0, factor_crecimiento: float = 1.0,
     ) -> SugerenciaMeta:
-        hist = self.goal_repo.get_vendor_monthly_history(vendedor_origen, sucursal)
+        hist = self.goal_repo.get_vendor_monthly_history(vendedor_origen)
         if not hist:
-            raise ValidationError(f"Sin histórico de ventas para vendedor={vendedor_origen}, sucursal={sucursal}.")
+            raise ValidationError(f"Sin histórico de ventas para vendedor={vendedor_origen}.")
 
         registros = [RegistroMensual(anio=h.anio, mes=h.mes, ventas=h.ventas, unidades=h.unidades) for h in hist]
-        meses_atipicos_ml = self._detectar_meses_atipicos(vendedor_origen, sucursal, hist)
+        meses_atipicos_ml = self._detectar_meses_atipicos(vendedor_origen, hist)
 
         resultado = self.calculation_engine.calcular(
-            vendedor_origen, sucursal, registros, factor_estacional, factor_crecimiento,
+            vendedor_origen, registros, factor_estacional, factor_crecimiento,
             meses_atipicos_ml=meses_atipicos_ml,
         )
-        meta_ia = self._meta_sugerida_ia(vendedor_origen, sucursal)
 
         return SugerenciaMeta(
             vendedor_origen=vendedor_origen,
-            sucursal=sucursal,
-            meta_sugerida_ia=meta_ia,
             meta_sugerida_estadistica=resultado.meta_ventas_total,
             metodo_estadistico=resultado.metodo,
             meses_historico_usados=resultado.meses_historico_usados,
             valores_atipicos_excluidos=resultado.valores_atipicos_excluidos,
             meses_atipicos_ml_detectados=resultado.meses_atipicos_ml_detectados,
+            componente_estacional=resultado.componente_estacional,
+            componente_tendencia=resultado.componente_tendencia,
+            factor_tendencia_aplicado=resultado.factor_tendencia_aplicado,
+            coeficiente_variacion=resultado.coeficiente_variacion,
         )
-
-    def _meta_sugerida_ia(self, vendedor_origen: str, sucursal: str, factor_presion: float = 1.0) -> float | None:
-        if not self.model_loader.is_loaded("goals_rf"):
-            return None
-        latest = self.goal_repo.get_latest_edw_period()
-        if not latest:
-            return None
-        anio_ant, mes_ant = latest
-        mes = 1 if mes_ant == 12 else mes_ant + 1
-        anio = anio_ant + 1 if mes_ant == 12 else anio_ant
-
-        tendencias = self.goal_repo.get_sales_trend_for_goals(anio, mes)
-        trend = next((t for t in tendencias if t.vendedor_origen == vendedor_origen and t.sucursal == sucursal), None)
-        if trend is None:
-            return None
-        try:
-            # Reutiliza el capping 0.8-1.2 ya validado de GoalsService -- no se reimplementa.
-            return self.goals_service.predict_goal_amount(trend, anio_ant, mes_ant, factor_presion)
-        except ModelContractError as e:
-            logger.error(f"Contrato del modelo 'goals_rf' violado para {vendedor_origen}/{sucursal}: {e}")
-            return None
 
     # ── Detección de valores atípicos (anomaly, grano de transacción) ─────────
     def _detectar_meses_atipicos(
-        self, vendedor_origen: str, sucursal: str, hist: list[VendorMonthlySales],
+        self, vendedor_origen: str, hist: list[VendorMonthlySales],
     ) -> frozenset[tuple[int, int]]:
         if not hist or not self.model_loader.is_loaded("anomaly"):
             return frozenset()
 
         primero = min(hist, key=lambda h: (h.anio, h.mes))
         try:
-            transacciones = self.goal_repo.get_vendor_transactions_history(vendedor_origen, sucursal, primero.anio, primero.mes)
+            transacciones = self.goal_repo.get_vendor_transactions_history(vendedor_origen, primero.anio, primero.mes)
         except Exception as e:
-            logger.error(f"Fallo consultando transacciones para detección de anomalías ({vendedor_origen}/{sucursal}): {e}")
+            logger.error(f"Fallo consultando transacciones para detección de anomalías ({vendedor_origen}): {e}")
             return frozenset()
         if not transacciones:
             return frozenset()
@@ -211,7 +227,7 @@ class GoalMLService:
         umbral = max(mediana * FACTOR_UMBRAL_ANOMALIA_MENSUAL, FRACCION_MINIMA_ANOMALIA)
         atipicos = frozenset((int(a), int(m)) for (a, m), frac in fracciones.items() if frac > umbral)
         if atipicos:
-            logger.info(f"Meses atípicos detectados (IsolationForest) para {vendedor_origen}/{sucursal}: {sorted(atipicos)}")
+            logger.info(f"Meses atípicos detectados (IsolationForest) para {vendedor_origen}: {sorted(atipicos)}")
         return atipicos
 
     # ── Recomendación comercial ────────────────────────────────────────────────

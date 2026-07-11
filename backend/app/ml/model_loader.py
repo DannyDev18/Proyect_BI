@@ -9,7 +9,7 @@ Reemplaza dos mecanismos previos e inconsistentes:
 Se instancia UNA vez en el `lifespan` de `main.py` y vive en `app.state.model_loader`
 (Singleton gestionado por el ciclo de vida de FastAPI, no por import). El único punto de
 extensión para agregar un modelo nuevo es el diccionario `_MODEL_FILES`: no se justifica
-un Factory Pattern formal porque los 7 modelos son 100% joblib/sklearn-compatible
+un Factory Pattern formal porque los 6 modelos son 100% joblib/sklearn-compatible
 (incluyendo XGBoost/CatBoost/LightGBM vía wrapper sklearn) -- no hay una segunda familia
 de carga (ONNX, etc.) hoy que amerite esa indirection.
 
@@ -42,7 +42,6 @@ _MODEL_FILES: dict[str, str] = {
     'segmentation': 'segmentation.pkl',
     'association': 'recommendation.pkl',
     'anomaly': 'anomalies.pkl',
-    'goals_rf': 'goals.pkl',
 }
 
 

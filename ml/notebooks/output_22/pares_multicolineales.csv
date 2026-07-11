@@ -1,0 +1,4 @@
+feature_a,feature_b,pearson
+n_clientes_prev,n_facturas_prev,0.9891715755552156
+month,quarter,0.9703773815447448
+rolling_std_7d,rolling_max_7d,0.9255684113660275

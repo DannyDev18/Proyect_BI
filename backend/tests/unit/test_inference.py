@@ -40,13 +40,6 @@ def test_get_recommendations_sin_historial_devuelve_top(fake_model_loader):
     assert len(result) == 2
 
 
-def test_predict_goal_growth_ratio_es_float(fake_model_loader):
-    X = pd.DataFrame({"anio": [2026], "mes": [7]})
-    result = inference.predict_goal_growth_ratio(fake_model_loader, X)
-    assert isinstance(result, float)
-    assert result == 42.0
-
-
 def test_model_loader_get_lanza_domain_error_si_no_esta_cargado():
     loader = ModelLoader(models_dir="/nonexistent")
     with pytest.raises(ModelNotLoadedError):

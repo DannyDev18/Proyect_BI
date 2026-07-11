@@ -1,10 +1,14 @@
-import { Target, Wallet, TrendingUp, CalendarClock, Trophy, Sparkles, Brain } from 'lucide-react';
-import { useMyGoalTracking, useGoalForecastCierre, useMetaSugerida, useGoalRecommendations } from '../../hooks/ventas';
+import { Target, Wallet, TrendingUp, CalendarClock, Trophy, Sparkles, Brain, Receipt, Gift } from 'lucide-react';
+import {
+  useMyGoalTracking, useGoalForecastCierre, useMetaSugerida, useGoalRecommendations,
+  useMyCommission, usePostGoalInvoices,
+} from '../../hooks/ventas';
 import { KpiCard, KpiCardSkeleton } from '../ui/KpiCard';
 import { ChartCard } from '../ui/ChartCard';
 import { AlertBadge } from '../ui/AlertBadge';
-import { useAuthStore } from '../../store/authStore';
-import { fmt, pct } from '../../utils/format';
+import { GoalProgressGauge } from './GoalProgressGauge';
+import { fmt, fmtMoney, pct } from '../../utils/format';
+import type { NivelComision } from '../../types/ventas';
 
 type EstadoMeta = 'riesgo' | 'cerca' | 'proxima' | 'alcanzada';
 
@@ -24,26 +28,28 @@ const estadoDeMeta = (cumplimientoPct: number): EstadoMeta => {
   return 'riesgo';
 };
 
-const NoDisponible = ({ motivo }: { motivo: string }) => (
-  <div className="flex flex-col items-center justify-center h-full gap-2 text-center px-4">
-    <AlertBadge variant="neutral">Próximamente</AlertBadge>
-    <p className="text-sm text-slate-500 max-w-sm">{motivo}</p>
-  </div>
-);
+// Mismos 4 niveles que commission_engine.py::NivelCumplimiento -- la fuente de verdad del
+// tramo es el backend, esto solo mapea la etiqueta a mostrar y su color.
+const NIVEL_CONFIG: Record<NivelComision, { label: string; badgeVariant: 'critical' | 'warning' | 'info' | 'success' }> = {
+  LEJOS:     { label: 'Lejos',     badgeVariant: 'critical' },
+  CERCA:     { label: 'Cerca',     badgeVariant: 'warning' },
+  META:      { label: 'Meta',      badgeVariant: 'info' },
+  EXCELENTE: { label: 'Excelente', badgeVariant: 'success' },
+};
 
 export const VendorGoalDashboard = () => {
-  const { user } = useAuthStore();
   const { data, loading, error } = useMyGoalTracking();
   const forecast = useGoalForecastCierre();
   const metaSugerida = useMetaSugerida();
   const recomendaciones = useGoalRecommendations();
+  const comision = useMyCommission();
+  const postMeta = usePostGoalInvoices();
 
   const metaMensual = data?.meta_mensual ?? 0;
   const ventasActuales = data?.cumplimiento_actual ?? 0;
   const cumplimientoPct = metaMensual > 0 ? (ventasActuales / metaMensual) * 100 : 0;
   const restante = Math.max(0, metaMensual - ventasActuales);
   const estado = ESTADO_CONFIG[estadoDeMeta(cumplimientoPct)];
-  const barraAnchoPct = Math.min(100, Math.max(0, cumplimientoPct));
   const metaAlcanzada = cumplimientoPct >= 100;
 
   return (
@@ -52,9 +58,7 @@ export const VendorGoalDashboard = () => {
       <div className="flex flex-wrap justify-between items-center gap-3 animate-fade-in">
         <div>
           <h1 className="text-3xl font-display font-semibold text-slate-100">Mi Meta y Comisión</h1>
-          <p className="text-sm text-slate-500 mt-0.5">
-            Sucursal: <span className="text-slate-300">{user?.sucursalId ?? 'Central'}</span> · Período vigente
-          </p>
+          <p className="text-sm text-slate-500 mt-0.5">Período vigente</p>
         </div>
         <AlertBadge variant="info" dot>Datos en vivo — EDW</AlertBadge>
       </div>
@@ -75,25 +79,19 @@ export const VendorGoalDashboard = () => {
         )}
       </div>
 
-      {/* Barra de progreso */}
+      {/* Medidor de progreso -- D3, tramos = umbrales reales de comisión (commission_engine.py) */}
       <ChartCard title="Progreso hacia la meta" badge={{ label: 'Live', variant: 'live' }} height="h-auto" loading={loading}>
-        <div className="space-y-3 py-2">
-          <div className="flex justify-between items-center">
+        <div className="flex flex-col items-center gap-1 py-2">
+          <GoalProgressGauge pctCumplimiento={cumplimientoPct} />
+          <div className="flex flex-col items-center gap-2 -mt-2">
             <span className="font-mono text-3xl font-semibold text-slate-100">{pct(cumplimientoPct)}</span>
             <AlertBadge variant={estado.badgeVariant}>{estado.label}</AlertBadge>
           </div>
-          <div className="h-3 bg-slate-800 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-700 ${estado.barColor}`}
-              style={{ width: `${barraAnchoPct}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-xs text-slate-500">
-            <span>&lt;80% Riesgo</span>
-            <span>80-89% Cerca</span>
-            <span>90-99% Meta próxima</span>
-            <span>&ge;100% Meta alcanzada</span>
-          </div>
+          {comision.data?.mensaje_alerta && (
+            <p className={`text-sm mt-2 text-center ${comision.data.en_alerta_cierre ? 'text-amber-400' : 'text-green-400'}`}>
+              {comision.data.mensaje_alerta}
+            </p>
+          )}
         </div>
       </ChartCard>
 
@@ -130,28 +128,19 @@ export const VendorGoalDashboard = () => {
           )}
         </ChartCard>
 
-        {/* Meta sugerida por IA vs. motor estadístico */}
-        <ChartCard title="Meta sugerida (próximo período)" badge={{ label: 'IA', variant: 'ml' }} loading={metaSugerida.loading} height="h-[220px]">
+        {/* Meta sugerida (próximo período) -- 100% estadística, sin modelo ML (goals_rf decomisionado) */}
+        <ChartCard title="Meta sugerida (próximo período)" badge={{ label: 'Estadística', variant: 'hist' }} loading={metaSugerida.loading} height="h-[220px]">
           {metaSugerida.error ? (
             <p className="text-red-400 text-sm">{metaSugerida.error}</p>
           ) : (
-            <div className="grid grid-cols-2 gap-4 h-full items-center">
-              <div className="flex flex-col items-center text-center gap-1">
-                <Brain size={20} className="text-amber-400" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">
-                  {metaSugerida.data?.meta_sugerida_ia != null ? fmt(metaSugerida.data.meta_sugerida_ia) : '—'}
-                </span>
-                <span className="text-xs text-slate-500">Sugerida por IA (goals_rf)</span>
-              </div>
-              <div className="flex flex-col items-center text-center gap-1">
-                <Target size={20} className="text-cyan-400" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">
-                  {metaSugerida.data ? fmt(metaSugerida.data.meta_sugerida_estadistica) : '—'}
-                </span>
-                <span className="text-xs text-slate-500">Estadística (IQR + anomalías)</span>
-              </div>
+            <div className="flex flex-col items-center justify-center h-full gap-2">
+              <Target size={20} className="text-cyan-400" />
+              <span className="font-mono text-2xl font-semibold text-slate-100">
+                {metaSugerida.data ? fmt(metaSugerida.data.meta_sugerida_estadistica) : '—'}
+              </span>
+              <span className="text-xs text-slate-500">Histórico limpio de picos (IQR) + tendencia reciente</span>
               {metaSugerida.data && (
-                <p className="col-span-2 text-xs text-slate-500 text-center">
+                <p className="text-xs text-slate-500 text-center">
                   {metaSugerida.data.meses_historico_usados} meses de histórico · {metaSugerida.data.valores_atipicos_excluidos} atípicos excluidos (IQR) · {metaSugerida.data.meses_atipicos_ml_detectados} meses con transacciones atípicas (IsolationForest)
                 </p>
               )}
@@ -161,9 +150,44 @@ export const VendorGoalDashboard = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Comisión -- todavía sin módulo de liquidación */}
-        <ChartCard title="Comisión" badge={{ label: 'Pendiente', variant: 'ml' }} loading={loading} height="h-[220px]">
-          <NoDisponible motivo="El cálculo de comisión estimada, comisión ganada y categorías alcanzadas requiere el módulo de liquidación de comisiones (docs/auditoria/14_fase0_analisis_modulo_metas_comisiones.md, hallazgo R-1). Aún no existe un endpoint que lo entregue." />
+        {/* Comisión -- Venta Neta real vs. meta, tramo y tasa aplicada (commission_engine.py) */}
+        <ChartCard
+          title="Comisión"
+          badge={{ label: comision.data ? NIVEL_CONFIG[comision.data.nivel].label : '—', variant: 'live' }}
+          loading={comision.loading}
+          height="h-[220px]"
+        >
+          {comision.error ? (
+            <p className="text-red-400 text-sm">{comision.error}</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 h-full items-center">
+              <div className="flex flex-col items-center text-center gap-1">
+                <Wallet size={20} className="text-green-400" />
+                <span className="font-mono text-2xl font-semibold text-slate-100">
+                  {comision.data ? fmtMoney(comision.data.comision_devengada) : '—'}
+                </span>
+                <span className="text-xs text-slate-500">Comisión devengada</span>
+              </div>
+              <div className="flex flex-col items-center text-center gap-1">
+                <TrendingUp size={20} className="text-cyan-400" />
+                <span className="font-mono text-2xl font-semibold text-slate-100">
+                  {comision.data ? `${comision.data.tasa_aplicada_pct.toFixed(2)}%` : '—'}
+                </span>
+                <span className="text-xs text-slate-500">Tasa aplicada</span>
+              </div>
+              {comision.data && comision.data.bono_aplicado > 0 && (
+                <div className="col-span-2 flex items-center justify-center gap-2 text-sm text-amber-400">
+                  <Gift size={14} />
+                  <span>Incluye bono de sobrecumplimiento: {fmtMoney(comision.data.bono_aplicado)}</span>
+                </div>
+              )}
+              {comision.data && (
+                <p className="col-span-2 text-xs text-slate-500 text-center">
+                  Venta Neta {fmtMoney(comision.data.venta_real)} de meta {fmtMoney(comision.data.monto_meta)}
+                </p>
+              )}
+            </div>
+          )}
         </ChartCard>
 
         {/* Recomendaciones de productos -- reglas de asociación */}
@@ -192,14 +216,33 @@ export const VendorGoalDashboard = () => {
       {metaAlcanzada && (
         <ChartCard
           title="Facturas post-meta"
-          badge={{ label: 'Pendiente', variant: 'ml' }}
-          loading={loading}
-          height="h-[200px]"
+          badge={{ label: 'Live', variant: 'live' }}
+          loading={postMeta.loading}
+          height="h-[240px]"
         >
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
-            <Trophy size={24} className="text-amber-400" />
-            <AlertBadge variant="success">¡Meta alcanzada este período!</AlertBadge>
-            <NoDisponible motivo="El detalle de facturas emitidas tras alcanzar la meta (factura, producto, categoría, monto y comisión generada) requiere un endpoint de detalle transaccional que aún no existe en el backend." />
+          <div className="flex flex-col h-full gap-3">
+            <div className="flex items-center justify-center gap-2">
+              <Trophy size={20} className="text-amber-400" />
+              <AlertBadge variant="success">¡Meta alcanzada este período!</AlertBadge>
+            </div>
+            {postMeta.error ? (
+              <p className="text-red-400 text-sm text-center">{postMeta.error}</p>
+            ) : postMeta.data.length === 0 ? (
+              <p className="text-slate-500 text-sm text-center mt-4">Aún no hay facturas registradas después de cruzar la meta.</p>
+            ) : (
+              <ul className="space-y-1.5 overflow-auto flex-1">
+                {postMeta.data.map((f) => (
+                  <li key={f.num_factura} className="flex justify-between items-center py-1.5 border-b border-slate-800 last:border-0">
+                    <div className="flex items-center gap-1.5">
+                      <Receipt size={13} className="text-cyan-400" />
+                      <span className="text-sm font-mono text-slate-200">{f.num_factura}</span>
+                      <span className="text-xs text-slate-500">{f.fecha}</span>
+                    </div>
+                    <span className="text-sm font-mono text-slate-300">{fmtMoney(f.monto_factura)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </ChartCard>
       )}

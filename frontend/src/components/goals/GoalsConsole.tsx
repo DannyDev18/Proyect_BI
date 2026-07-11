@@ -148,7 +148,6 @@ export function GoalsConsole() {
               <thead>
                 <tr className="border-b border-slate-700 text-slate-400 font-medium">
                   <th className="p-3">Vendedor</th>
-                  <th className="p-3">Sucursal</th>
                   <th className="p-3">Meta Propuesta ($)</th>
                   <th className="p-3">Comisión (%)</th>
                   <th className="p-3">Estado</th>
@@ -183,9 +182,6 @@ export function GoalsConsole() {
                   >
                     <td className="p-3 font-semibold text-teal-50">
                       {p.vendedor}
-                    </td>
-                    <td className="p-3 text-slate-300">
-                      {p.sucursal}
                     </td>
                     <td className="p-3">
                       <input

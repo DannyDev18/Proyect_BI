@@ -7,7 +7,7 @@ export interface RouteConfig {
   nav?: { label: string };
 }
 
-export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'ventas' | 'ventas.metas' | 'settings';
+export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'ventas' | 'ventas.metas' | 'settings';
 
 export const ROUTES: Record<RouteKey, RouteConfig> = {
   admin: {
@@ -34,6 +34,16 @@ export const ROUTES: Record<RouteKey, RouteConfig> = {
     path: '/bodega',
     allowedRoles: ['administrador', 'gerencia', 'bodega'],
     nav: { label: 'Control de Inventario' },
+  },
+  'bodega.almacenes': {
+    path: '/bodega/almacenes',
+    allowedRoles: ['administrador', 'gerencia', 'bodega'],
+    nav: { label: 'Status por Almacén' },
+  },
+  'bodega.reportes': {
+    path: '/bodega/reportes',
+    allowedRoles: ['administrador', 'gerencia', 'bodega'],
+    nav: { label: 'Reportes de Abastecimiento' },
   },
   ventas: {
     path: '/ventas',

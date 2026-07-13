@@ -1,11 +1,20 @@
+import type { ReactNode } from 'react';
+import { EmptyState } from './EmptyState';
+import { ErrorState } from './ErrorState';
+
 interface ChartCardProps {
   title: string;
   badge?: { label: string; variant?: 'live' | 'ml' | 'hist' };
-  actions?: React.ReactNode;
-  children: React.ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
   className?: string;
   height?: string;
   loading?: boolean;
+  error?: string;
+  onRetry?: () => void;
+  empty?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
 }
 
 // Provenance color system: live/hist = warehouse-sourced truth (cyan), ml = model-predicted (amber).
@@ -23,6 +32,7 @@ const ChartSkeleton = ({ height }: { height: string }) => (
 
 export const ChartCard = ({
   title, badge, actions, children, className = '', height = 'h-[320px]', loading = false,
+  error, onRetry, empty = false, emptyTitle = 'Sin datos para este período', emptyDescription,
 }: ChartCardProps) => (
   <div className={`card p-6 animate-fade-in ${className}`}>
     <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
@@ -37,8 +47,16 @@ export const ChartCard = ({
         )}
       </div>
     </div>
-    <div className={height}>
-      {loading ? <ChartSkeleton height={height} /> : children}
+    <div className={`${height} overflow-hidden`}>
+      {loading ? (
+        <ChartSkeleton height={height} />
+      ) : error ? (
+        <ErrorState message={error} onRetry={onRetry} className="h-full justify-center" />
+      ) : empty ? (
+        <EmptyState title={emptyTitle} description={emptyDescription} className="h-full justify-center" />
+      ) : (
+        children
+      )}
     </div>
   </div>
 );

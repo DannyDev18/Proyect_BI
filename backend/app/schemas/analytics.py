@@ -66,6 +66,12 @@ class AnomaliaResponse(BaseModel):
     score: float
     es_anomalia: bool
 
+class AuditLogEntryResponse(BaseModel):
+    ts: str
+    level: str
+    source: str
+    msg: str
+
 class RecomendacionProducto(BaseModel):
     producto_cod: str
     score: float

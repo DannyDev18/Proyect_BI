@@ -3,7 +3,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.dependencies import UserServiceDep
+from app.api.dependencies import CatalogRepositoryDep, UserServiceDep
 from app.core.deps import CurrentUserDep, PermissionChecker
 from app.schemas.user import UserChangePassword, UserCreate, UserMe, UserOut, UserUpdate
 
@@ -11,6 +11,16 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 only_admin = PermissionChecker(allowed_roles=["administrador"])
+
+
+@router.get(
+    "/catalogos/almacenes", summary="Catálogo de almacenes (edw.Dim_Almacen)",
+    dependencies=[Depends(only_admin)],
+)
+def get_catalogo_almacenes(catalog_repo: CatalogRepositoryDep) -> list[dict]:
+    """Lista `codalm` + nombre de los almacenes vigentes, para poblar el selector de
+    "almacén" al crear/editar una cuenta con rol `bodega`. **Acceso:** solo `administrador`."""
+    return catalog_repo.list_almacenes()
 
 
 @router.get("/me", response_model=UserMe, summary="Perfil del usuario autenticado")

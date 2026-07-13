@@ -192,27 +192,70 @@ class SalesTimeSerieExtractor:
             ['cliente_sk', 'fecha_corte', 'recency', 'frequency', 'monetary_value', 'average_ticket', 'is_churn']
         ]
 
-    def fetch_market_basket(self) -> pd.DataFrame:
-        """Líneas de venta más recientes para reglas de asociación. La transacción real
-        es la factura (num_factura), no la combinación fecha/cliente/sucursal que
-        colapsaba varias compras de un mismo cliente-día en una sola canasta. Se
-        excluyen devoluciones porque no son 'compras conjuntas'; con el DDL nuevo,
-        `es_devolucion` migró de `fact_ventas_detalle` a la junk dimension
-        `dim_estado_documento` (cambio C-1, docs/auditoria/12_fase0_analisis_capa_contratos_ml.md).
-        Se usa `codart` (llave de negocio) en vez de `nombre_articulo` (H-10): el backend
-        identifica productos por código, no por nombre a texto libre. Excluye el centinela
-        `producto_sk = -1` ('producto desconocido'): no es un artículo real y no debe
-        entrar a las reglas de asociación (regla de negocio 12, CLAUDE.md)."""
+    def fetch_market_basket(self, ventana_anios: int | None = None, limite: int | None = None) -> pd.DataFrame:
+        """Líneas de venta para reglas de asociación. La transacción real es la factura
+        (num_factura), no la combinación fecha/cliente/sucursal que colapsaba varias
+        compras de un mismo cliente-día en una sola canasta. Se excluyen devoluciones
+        porque no son 'compras conjuntas'; con el DDL nuevo, `es_devolucion` migró de
+        `fact_ventas_detalle` a la junk dimension `dim_estado_documento` (cambio C-1,
+        docs/auditoria/12_fase0_analisis_capa_contratos_ml.md). Se usa `codart` (llave de
+        negocio) en vez de `nombre_articulo` (H-10): el backend identifica productos por
+        código, no por nombre a texto libre. Excluye el centinela `producto_sk = -1`
+        ('producto desconocido'): no es un artículo real y no debe entrar a las reglas de
+        asociación (regla de negocio 12, CLAUDE.md).
+
+        `fecha` (fecha_completa) se agrega siempre a la salida: la necesita el backtest
+        temporal de Fase 3 (docs/features/plan_modulo_cross_selling.md §2.3.d) para poder
+        cortar canastas-hasta-T (train) vs canastas-de-(T,T+h] (test) sin split aleatorio.
+
+        `ventana_anios`: si se da, filtra por los últimos N años completos (determinista,
+        por fecha) en vez de tomar una muestra de las N líneas más recientes -- el EDA de
+        Fase 2 (ml/notebooks/eda_cross_selling.py) mostró que las co-ocurrencias más
+        frecuentes cambian con el tiempo (solo 33% de estabilidad de los top-30 pares entre
+        2024 y 2026), así que la ventana de entrenamiento es un hiperparámetro real del
+        re-análisis, no un detalle de muestreo. Si es `None`, se preserva el comportamiento
+        legacy (`LIMIT` determinista por `venta_sk DESC`, ver `MUESTRA_MARKET_BASKET`)."""
+        filtro_ventana = ""
+        limite_sql = ""
+        if ventana_anios is not None:
+            filtro_ventana = (
+                f"AND df.fecha_completa >= (SELECT max(fecha_completa) FROM edw.dim_fecha "
+                f"WHERE fecha_completa <= CURRENT_DATE) - INTERVAL '{ventana_anios} years'"
+            )
+        else:
+            limite_sql = f"LIMIT {limite if limite is not None else MUESTRA_MARKET_BASKET}"
         sql = f"""
             SELECT
                 fvd.num_factura as transaction_id,
-                p.codart as product_code
+                p.codart as product_code,
+                df.fecha_completa as fecha,
+                fvd.cliente_sk as cliente_sk
             FROM edw.fact_ventas_detalle fvd
             JOIN edw.dim_producto p ON fvd.producto_sk = p.producto_sk
+            JOIN edw.dim_fecha df ON fvd.fecha_sk = df.fecha_sk
             JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk
             WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion AND fvd.producto_sk <> -1
+            {filtro_ventana}
             ORDER BY fvd.venta_sk DESC
-            LIMIT {MUESTRA_MARKET_BASKET};
+            {limite_sql};
+        """
+        return pd.read_sql(sql, self.engine)
+
+    def fetch_product_catalog(self) -> pd.DataFrame:
+        """Catálogo vigente (`dim_producto`, SCD2 `es_vigente`, sin el centinela `-1`) para
+        enriquecer sugerencias de venta cruzada: nombre, categoría (`clase`), precio oficial
+        y costo promedio. Usado por el backtest de Fase 3 para estimar el impacto en ticket
+        de los aciertos, y es la misma fuente que usará el backend (`dim_producto` vigente,
+        H25 auditoría 25 §1: 99.98% de precio_oficial>0, 92.1% de costo_promedio>0)."""
+        sql = """
+            SELECT
+                codart AS product_code,
+                nombre_articulo AS nombre,
+                clase AS categoria,
+                precio_oficial,
+                costo_promedio
+            FROM edw.dim_producto
+            WHERE es_vigente = TRUE AND producto_sk <> -1;
         """
         return pd.read_sql(sql, self.engine)
 

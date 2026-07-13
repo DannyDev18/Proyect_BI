@@ -97,55 +97,47 @@ export const VendorGoalDashboard = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Última semana / pronóstico de cierre -- modelo sales_rf */}
-        <ChartCard title="Pronóstico de cierre del mes" badge={{ label: 'Random Forest', variant: 'ml' }} loading={forecast.loading} height="h-[220px]">
-          {forecast.error ? (
-            <p className="text-red-400 text-sm">{forecast.error}</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-4 h-full items-center">
-              <div className="flex flex-col items-center text-center gap-1">
-                <CalendarClock size={20} className="text-cyan-400" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data?.dias_restantes ?? '—'}</span>
-                <span className="text-xs text-slate-500">Días restantes</span>
-              </div>
-              <div className="flex flex-col items-center text-center gap-1">
-                <TrendingUp size={20} className="text-cyan-400" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data ? fmt(forecast.data.proyeccion_cierre) : '—'}</span>
-                <span className="text-xs text-slate-500">Proyección de cierre</span>
-              </div>
-              <div className="flex flex-col items-center text-center gap-1">
-                <Target size={20} className="text-amber-400" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data ? pct(forecast.data.pct_cumplimiento_esperado) : '—'}</span>
-                <span className="text-xs text-slate-500">% cumplimiento esperado</span>
-              </div>
-              <div className="flex flex-col items-center text-center gap-1">
-                <Brain size={20} className="text-amber-400" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">
-                  {forecast.data?.probabilidad_alcanzar_meta != null ? pct(forecast.data.probabilidad_alcanzar_meta) : '—'}
-                </span>
-                <span className="text-xs text-slate-500">Probabilidad de alcanzar la meta</span>
-              </div>
+        <ChartCard title="Pronóstico de cierre del mes" badge={{ label: 'Random Forest', variant: 'ml' }} loading={forecast.loading} error={forecast.error ?? undefined} height="h-[220px]">
+          <div className="grid grid-cols-2 gap-4 h-full items-center">
+            <div className="flex flex-col items-center text-center gap-1">
+              <CalendarClock size={20} className="text-cyan-400" aria-hidden="true" />
+              <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data?.dias_restantes ?? '—'}</span>
+              <span className="text-xs text-slate-500">Días restantes</span>
             </div>
-          )}
+            <div className="flex flex-col items-center text-center gap-1">
+              <TrendingUp size={20} className="text-cyan-400" aria-hidden="true" />
+              <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data ? fmt(forecast.data.proyeccion_cierre) : '—'}</span>
+              <span className="text-xs text-slate-500">Proyección de cierre</span>
+            </div>
+            <div className="flex flex-col items-center text-center gap-1">
+              <Target size={20} className="text-amber-400" aria-hidden="true" />
+              <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data ? pct(forecast.data.pct_cumplimiento_esperado) : '—'}</span>
+              <span className="text-xs text-slate-500">% cumplimiento esperado</span>
+            </div>
+            <div className="flex flex-col items-center text-center gap-1">
+              <Brain size={20} className="text-amber-400" aria-hidden="true" />
+              <span className="font-mono text-2xl font-semibold text-slate-100">
+                {forecast.data?.probabilidad_alcanzar_meta != null ? pct(forecast.data.probabilidad_alcanzar_meta) : '—'}
+              </span>
+              <span className="text-xs text-slate-500">Probabilidad de alcanzar la meta</span>
+            </div>
+          </div>
         </ChartCard>
 
         {/* Meta sugerida (próximo período) -- 100% estadística, sin modelo ML (goals_rf decomisionado) */}
-        <ChartCard title="Meta sugerida (próximo período)" badge={{ label: 'Estadística', variant: 'hist' }} loading={metaSugerida.loading} height="h-[220px]">
-          {metaSugerida.error ? (
-            <p className="text-red-400 text-sm">{metaSugerida.error}</p>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full gap-2">
-              <Target size={20} className="text-cyan-400" />
-              <span className="font-mono text-2xl font-semibold text-slate-100">
-                {metaSugerida.data ? fmt(metaSugerida.data.meta_sugerida_estadistica) : '—'}
-              </span>
-              <span className="text-xs text-slate-500">Histórico limpio de picos (IQR) + tendencia reciente</span>
-              {metaSugerida.data && (
-                <p className="text-xs text-slate-500 text-center">
-                  {metaSugerida.data.meses_historico_usados} meses de histórico · {metaSugerida.data.valores_atipicos_excluidos} atípicos excluidos (IQR) · {metaSugerida.data.meses_atipicos_ml_detectados} meses con transacciones atípicas (IsolationForest)
-                </p>
-              )}
-            </div>
-          )}
+        <ChartCard title="Meta sugerida (próximo período)" badge={{ label: 'Estadística', variant: 'hist' }} loading={metaSugerida.loading} error={metaSugerida.error ?? undefined} height="h-[220px]">
+          <div className="flex flex-col items-center justify-center h-full gap-2">
+            <Target size={20} className="text-cyan-400" aria-hidden="true" />
+            <span className="font-mono text-2xl font-semibold text-slate-100">
+              {metaSugerida.data ? fmt(metaSugerida.data.meta_sugerida_estadistica) : '—'}
+            </span>
+            <span className="text-xs text-slate-500">Histórico limpio de picos (IQR) + tendencia reciente</span>
+            {metaSugerida.data && (
+              <p className="text-xs text-slate-500 text-center">
+                {metaSugerida.data.meses_historico_usados} meses de histórico · {metaSugerida.data.valores_atipicos_excluidos} atípicos excluidos (IQR) · {metaSugerida.data.meses_atipicos_ml_detectados} meses con transacciones atípicas (IsolationForest)
+              </p>
+            )}
+          </div>
         </ChartCard>
       </div>
 
@@ -155,60 +147,59 @@ export const VendorGoalDashboard = () => {
           title="Comisión"
           badge={{ label: comision.data ? NIVEL_CONFIG[comision.data.nivel].label : '—', variant: 'live' }}
           loading={comision.loading}
+          error={comision.error ?? undefined}
           height="h-[220px]"
         >
-          {comision.error ? (
-            <p className="text-red-400 text-sm">{comision.error}</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-4 h-full items-center">
-              <div className="flex flex-col items-center text-center gap-1">
-                <Wallet size={20} className="text-green-400" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">
-                  {comision.data ? fmtMoney(comision.data.comision_devengada) : '—'}
-                </span>
-                <span className="text-xs text-slate-500">Comisión devengada</span>
-              </div>
-              <div className="flex flex-col items-center text-center gap-1">
-                <TrendingUp size={20} className="text-cyan-400" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">
-                  {comision.data ? `${comision.data.tasa_aplicada_pct.toFixed(2)}%` : '—'}
-                </span>
-                <span className="text-xs text-slate-500">Tasa aplicada</span>
-              </div>
-              {comision.data && comision.data.bono_aplicado > 0 && (
-                <div className="col-span-2 flex items-center justify-center gap-2 text-sm text-amber-400">
-                  <Gift size={14} />
-                  <span>Incluye bono de sobrecumplimiento: {fmtMoney(comision.data.bono_aplicado)}</span>
-                </div>
-              )}
-              {comision.data && (
-                <p className="col-span-2 text-xs text-slate-500 text-center">
-                  Venta Neta {fmtMoney(comision.data.venta_real)} de meta {fmtMoney(comision.data.monto_meta)}
-                </p>
-              )}
+          <div className="grid grid-cols-2 gap-4 h-full items-center">
+            <div className="flex flex-col items-center text-center gap-1">
+              <Wallet size={20} className="text-green-400" aria-hidden="true" />
+              <span className="font-mono text-2xl font-semibold text-slate-100">
+                {comision.data ? fmtMoney(comision.data.comision_devengada) : '—'}
+              </span>
+              <span className="text-xs text-slate-500">Comisión devengada</span>
             </div>
-          )}
+            <div className="flex flex-col items-center text-center gap-1">
+              <TrendingUp size={20} className="text-cyan-400" aria-hidden="true" />
+              <span className="font-mono text-2xl font-semibold text-slate-100">
+                {comision.data ? `${comision.data.tasa_aplicada_pct.toFixed(2)}%` : '—'}
+              </span>
+              <span className="text-xs text-slate-500">Tasa aplicada</span>
+            </div>
+            {comision.data && comision.data.bono_aplicado > 0 && (
+              <div className="col-span-2 flex items-center justify-center gap-2 text-sm text-amber-400">
+                <Gift size={14} aria-hidden="true" />
+                <span>Incluye bono de sobrecumplimiento: {fmtMoney(comision.data.bono_aplicado)}</span>
+              </div>
+            )}
+            {comision.data && (
+              <p className="col-span-2 text-xs text-slate-500 text-center">
+                Venta Neta {fmtMoney(comision.data.venta_real)} de meta {fmtMoney(comision.data.monto_meta)}
+              </p>
+            )}
+          </div>
         </ChartCard>
 
         {/* Recomendaciones de productos -- reglas de asociación */}
-        <ChartCard title="Productos recomendados para cerrar tu meta" badge={{ label: 'Reglas Asociación', variant: 'ml' }} loading={recomendaciones.loading} height="h-[220px]">
-          {recomendaciones.error ? (
-            <p className="text-red-400 text-sm">{recomendaciones.error}</p>
-          ) : recomendaciones.data.length === 0 ? (
-            <p className="text-slate-500 text-sm text-center mt-6">Sin recomendaciones disponibles todavía.</p>
-          ) : (
-            <ul className="space-y-2 overflow-auto max-h-[170px]">
-              {recomendaciones.data.map((r, i) => (
-                <li key={i} className="flex justify-between items-center py-2 border-b border-slate-800 last:border-0">
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles size={13} className="text-amber-400" />
-                    <p className="text-sm font-medium text-slate-200 font-mono">{r.producto_cod}</p>
-                  </div>
-                  <AlertBadge variant="info">lift {r.score_afinidad.toFixed(1)}</AlertBadge>
-                </li>
-              ))}
-            </ul>
-          )}
+        <ChartCard
+          title="Productos recomendados para cerrar tu meta"
+          badge={{ label: 'Reglas Asociación', variant: 'ml' }}
+          loading={recomendaciones.loading}
+          error={recomendaciones.error ?? undefined}
+          empty={recomendaciones.data.length === 0}
+          emptyDescription="Sin recomendaciones disponibles todavía."
+          height="h-[220px]"
+        >
+          <ul className="space-y-2 overflow-auto max-h-[170px]">
+            {recomendaciones.data.map((r, i) => (
+              <li key={i} className="flex justify-between items-center py-2 border-b border-slate-800 last:border-0">
+                <div className="flex items-center gap-1.5">
+                  <Sparkles size={13} className="text-amber-400" aria-hidden="true" />
+                  <p className="text-sm font-medium text-slate-200 font-mono">{r.producto_cod}</p>
+                </div>
+                <AlertBadge variant="info">lift {r.score_afinidad.toFixed(1)}</AlertBadge>
+              </li>
+            ))}
+          </ul>
         </ChartCard>
       </div>
 
@@ -218,16 +209,15 @@ export const VendorGoalDashboard = () => {
           title="Facturas post-meta"
           badge={{ label: 'Live', variant: 'live' }}
           loading={postMeta.loading}
+          error={postMeta.error ?? undefined}
           height="h-[240px]"
         >
           <div className="flex flex-col h-full gap-3">
             <div className="flex items-center justify-center gap-2">
-              <Trophy size={20} className="text-amber-400" />
+              <Trophy size={20} className="text-amber-400" aria-hidden="true" />
               <AlertBadge variant="success">¡Meta alcanzada este período!</AlertBadge>
             </div>
-            {postMeta.error ? (
-              <p className="text-red-400 text-sm text-center">{postMeta.error}</p>
-            ) : postMeta.data.length === 0 ? (
+            {postMeta.data.length === 0 ? (
               <p className="text-slate-500 text-sm text-center mt-4">Aún no hay facturas registradas después de cruzar la meta.</p>
             ) : (
               <ul className="space-y-1.5 overflow-auto flex-1">

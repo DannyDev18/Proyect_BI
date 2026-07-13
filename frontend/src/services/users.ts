@@ -7,6 +7,9 @@ export const getRoles = () =>
 export const getUsers = () =>
   api.get('/api/v1/users/');
 
+export const getAlmacenes = () =>
+  api.get('/api/v1/users/catalogos/almacenes');
+
 export const createUser = (data: UserPayload) =>
   api.post('/api/v1/users/', data);
 

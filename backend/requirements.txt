@@ -11,11 +11,18 @@ python-multipart>=0.0.6,<1.0.0
 email-validator>=2.0.0,<3.0.0
 pydantic[email]>=2.1.1,<3.0.0
 pandas>=2.0.0,<3.0.0
-scikit-learn>=1.2.0,<2.0.0
-joblib>=1.2.0,<2.0.0
+# H-20 / M-01 (docs/auditoria/24_.../plan_mejoras_proyecto.md): versiones EXACTAS e
+# idénticas a ml/requirements.txt -- joblib.load() de los .pkl no garantiza compatibilidad
+# entre versiones de sklearn/xgboost/lightgbm/catboost (InconsistentVersionWarning puede
+# esconder predicciones silenciosamente distintas, no solo un crash). Actualizar ambos
+# archivos a la vez y reentrenar+republicar si se sube alguna de estas versiones.
+scikit-learn==1.9.0
+joblib==1.5.3
 # xgboost/catboost/lightgbm: necesarias en runtime (no solo en entrenamiento) porque
 # joblib.load() de los .pkl requiere la MISMA librería que los serializó -- no se
 # pueden quitar del backend aunque parezca deuda de "ML no debería estar en el API".
-xgboost>=2.0.0,<3.0.0
-catboost>=1.2.0,<2.0.0
-lightgbm>=4.0.0,<5.0.0
+xgboost==2.1.4
+catboost==1.2.10
+lightgbm==4.6.0
+# Export XLSX de reportes del módulo Bodega (docs/auditoria/23_modulo_bodega.md)
+openpyxl>=3.1.0,<4.0.0

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS public.usuarios (
     rol_id                  INTEGER NOT NULL REFERENCES public.roles(id) ON DELETE RESTRICT,
     sucursal                VARCHAR(50),          -- Filtro de seguridad a nivel de fila (row-level security)
     id_vendedor_origen      VARCHAR(15) UNIQUE,   -- Código SAP del vendedor para filtros analíticos en JWT
+    codalm                  VARCHAR(10),          -- Código de almacén (edw.Dim_Almacen.codalm) para usuarios rol bodega; NULL = todos los almacenes
     es_activo               BOOLEAN NOT NULL DEFAULT TRUE,
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -43,8 +44,12 @@ COMMENT ON COLUMN public.usuarios.id_vendedor_origen IS
      que el backend filtre automáticamente dw.fact_ventas sin consultar la BD en cada request.';
 
 COMMENT ON COLUMN public.usuarios.sucursal IS
-    'Sucursal asignada al usuario (filtro row-level-security). 
+    'Sucursal asignada al usuario (filtro row-level-security).
      Se inyecta en JWT para restricciones analíticas automáticas.';
+
+COMMENT ON COLUMN public.usuarios.codalm IS
+    'Código de almacén (edw.Dim_Almacen.codalm) para usuarios con rol bodega.
+     NULL = acceso a todos los almacenes (panel Administrador).';
 
 -- ── Índices ───────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_usuarios_email ON public.usuarios(email);
@@ -75,3 +80,28 @@ CREATE TABLE IF NOT EXISTS public.cliente_lookup (
 
 COMMENT ON TABLE public.cliente_lookup IS
     'Tabla aislada para mapeo y desanonimización de clientes.';
+
+-- ── 4. Telemetría del módulo Venta Cruzada (Cross-Selling) ───
+-- Ver docs/auditoria/25_modulo_cross_selling.md y regla de negocio RN-CS2
+-- (02_reglas_negocio_validadas.md §17). Grano: un evento por sugerencia mostrada/aceptada.
+CREATE TABLE IF NOT EXISTS public.recomendaciones_eventos (
+    id                      BIGSERIAL PRIMARY KEY,
+    fecha                   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    usuario_id              INTEGER REFERENCES public.usuarios(id) ON DELETE SET NULL,
+    cliente_sk              INTEGER,
+    producto_origen_cod     VARCHAR(20) NOT NULL,
+    producto_sugerido_cod   VARCHAR(20) NOT NULL,
+    score_lift              NUMERIC(12, 6),
+    motivo                  TEXT,
+    evento                  VARCHAR(20) NOT NULL,
+    fecha_carga             TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT check_evento_valido CHECK (evento IN ('mostrada', 'aceptada', 'rechazada'))
+);
+
+COMMENT ON TABLE public.recomendaciones_eventos IS
+    'Telemetría del módulo de Venta Cruzada: registra cada sugerencia mostrada/aceptada/
+     rechazada al vendedor para calcular la tasa de conversión (RN-CS2). No es un hecho
+     analítico del EDW -- vive en public.* como metas_comerciales_operativas.';
+
+CREATE INDEX IF NOT EXISTS idx_recomendaciones_eventos_fecha ON public.recomendaciones_eventos(fecha);
+CREATE INDEX IF NOT EXISTS idx_recomendaciones_eventos_evento ON public.recomendaciones_eventos(evento);

@@ -2,6 +2,8 @@ import { LogOut, User as UserIcon, Bell, Menu } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
 import { useNavigate } from 'react-router-dom';
+import { canAccess } from '../../constants/permissions';
+import { NotificationBell } from '../bodega/NotificationBell';
 
 export const Header = () => {
   const { user, logout } = useAuthStore();
@@ -18,7 +20,8 @@ export const Header = () => {
       <div className="flex items-center">
         <button
           onClick={toggleSidebar}
-          className="md:hidden mr-4 p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors focus:outline-none cursor-pointer"
+          aria-label="Alternar menú de navegación"
+          className="md:hidden mr-4 p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer focus-ring"
         >
           <Menu size={24} />
         </button>
@@ -31,14 +34,18 @@ export const Header = () => {
       </div>
 
       <div className="flex items-center space-x-4 md:space-x-6">
-        <button
-          disabled
-          aria-label="Notificaciones (próximamente)"
-          title="Notificaciones — próximamente"
-          className="text-slate-600 cursor-not-allowed"
-        >
-          <Bell size={20} />
-        </button>
+        {user && canAccess(user.role, 'bodega') ? (
+          <NotificationBell />
+        ) : (
+          <button
+            disabled
+            aria-label="Notificaciones (próximamente)"
+            title="Notificaciones — próximamente"
+            className="text-slate-600 cursor-not-allowed"
+          >
+            <Bell size={20} />
+          </button>
+        )}
 
         <div className="h-8 w-px bg-slate-800"></div>
 
@@ -54,7 +61,8 @@ export const Header = () => {
         
         <button
           onClick={handleLogout}
-          className="ml-2 sm:ml-4 p-2 text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all cursor-pointer"
+          aria-label="Cerrar sesión"
+          className="ml-2 sm:ml-4 p-2 text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all cursor-pointer focus-ring"
           title="Logout"
         >
           <LogOut size={20} />

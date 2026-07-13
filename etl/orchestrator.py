@@ -506,6 +506,7 @@ def run_etl(config: ETLConfig, tablas_incluir: list = None) -> None:
     extractors_path = os.path.join(os.path.dirname(__file__), 'extractors')
     tablas_ok, tablas_fail, tablas_saltadas = 0, 0, 0
     dims_fallidas: set = set()  # Auditoría 09 (H3)
+    tablas_para_analyze: set = {'dim_fecha'}  # H-analyze: siempre se actualiza (paso 1)
 
     pipeline_a_correr = PIPELINE_CONFIG
     if tablas_incluir:
@@ -663,6 +664,7 @@ def run_etl(config: ETLConfig, tablas_incluir: list = None) -> None:
                                       f"OK modo={'INC' if incremental else 'FULL'} desde={fecha_desde} extraidas={total_extraido}", dur_table)
                 logger.info(f"[OK] FINALIZADO {cfg['tabla']}: {total_loaded} registros en {dur_table} segs.")
                 tablas_ok += 1
+                tablas_para_analyze.add(cfg['tabla'])
 
             except Exception as e_tbl:
                 dur_table = int((datetime.now() - start_t_table).total_seconds())
@@ -678,6 +680,22 @@ def run_etl(config: ETLConfig, tablas_incluir: list = None) -> None:
             f"{tablas_saltadas} saltadas por dependencia fallida, "
             f"{_STATS_CONTROL['fallas']} fallas de control (edw.etl_control)."
         )
+
+        # H-analyze: los inserts incrementales de cada corrida (cientos/miles de filas contra
+        # tablas de millones) rara vez cruzan el umbral de autovacuum_analyze_scale_factor, así
+        # que las estadísticas del planificador quedan obsoletas silenciosamente -- causa real
+        # verificada de un incidente en producción donde una consulta bajó de <100ms a >20min
+        # (planes catastróficos por estadísticas desactualizadas en fact_movimientos_inventario
+        # y varias dimensiones con reltuples=-1 = "nunca analizada"). Se corre ANALYZE explícito
+        # sobre cada tabla tocada en esta corrida (no todo el esquema, para no alargar el pipeline).
+        engine = pg.connect()
+        for tabla in sorted(tablas_para_analyze):
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ANALYZE edw.{tabla}"))
+            except Exception as e_analyze:
+                logger.warning(f"ANALYZE falló para edw.{tabla} (no crítico): {e_analyze}")
+        logger.info(f"ANALYZE ejecutado sobre {len(tablas_para_analyze)} tabla(s): {sorted(tablas_para_analyze)}")
 
     except Exception as e:
         logger.critical(f"Falla crítica (infraestructura/conexión): {e}", exc_info=True)

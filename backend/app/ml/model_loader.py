@@ -104,6 +104,11 @@ class ModelLoader:
         """Al menos un modelo cargado -- usado por el healthcheck extendido."""
         return len(self._models) > 0
 
+    def keys(self) -> list[str]:
+        """Claves internas declaradas en `_MODEL_FILES` (M-02: panel MLOps de
+        Administrador itera esto para reportar el estado de cada modelo, cargado o no)."""
+        return list(_MODEL_FILES.keys())
+
     def get_meta(self, key: str) -> dict[str, Any]:
         """Sidecar `.meta.json` completo del modelo (features, metrics, cluster_to_segment,
         target_transform, etc.). Diccionario vacío si el modelo no cargó o no tiene sidecar
@@ -120,6 +125,37 @@ class ModelLoader:
         volumen `ML_CONTRACTS_DIR` está montado y el JSON existe. `None` en caso
         contrario -- `app/ml/contract_validation.py` degrada con gracia (no bloquea)."""
         return self._contracts.get(key)
+
+    def verify_library_versions(self) -> None:
+        """M-01 (docs/features/plan_mejoras_proyecto.md): compara `library_versions` del
+        sidecar `.meta.json` de cada modelo cargado contra la librería realmente instalada
+        en este proceso. sklearn no garantiza compatibilidad de pickles entre versiones
+        (`InconsistentVersionWarning`) -- eso puede producir predicciones silenciosamente
+        distintas, no solo un crash, así que el warning de sklearn (que nadie mira en los
+        logs) se promueve aquí a un ERROR explícito y agregado por librería."""
+        import catboost
+        import lightgbm
+        import sklearn
+        import xgboost
+
+        installed = {
+            "scikit-learn": sklearn.__version__,
+            "xgboost": xgboost.__version__,
+            "lightgbm": lightgbm.__version__,
+            "catboost": catboost.__version__,
+        }
+
+        for key, meta in self._meta.items():
+            trained_versions = meta.get("library_versions", {})
+            for lib, trained_version in trained_versions.items():
+                current_version = installed.get(lib)
+                if current_version and current_version != trained_version:
+                    logger.error(
+                        f"Drift de versión de librería ML para el modelo '{key}': "
+                        f"'{lib}' fue serializado con {trained_version} pero el proceso "
+                        f"actual tiene {current_version}. Las predicciones pueden diferir "
+                        f"silenciosamente del modelo entrenado (ver M-01, plan_mejoras_proyecto.md)."
+                    )
 
     def get_training_date(self, key: str) -> str:
         """Fecha de modificación del archivo .pkl (proxy de 'fecha de entrenamiento').

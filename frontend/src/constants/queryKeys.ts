@@ -10,6 +10,24 @@ export const qk = {
   },
   bodega: {
     kpis: () => ['bodega', 'kpis'] as const,
+    filtros: () => ['bodega', 'filtros'] as const,
+    kpisDashboard: (filters: unknown) => ['bodega', 'kpis-dashboard', filters] as const,
+    salidasForecast: (filters: unknown, producto: string | null) => ['bodega', 'salidas-forecast', filters, producto] as const,
+    rotacionMatriz: (filters: unknown) => ['bodega', 'rotacion-matriz', filters] as const,
+    topProductos: (filters: unknown) => ['bodega', 'top-productos', filters] as const,
+    salidasCategoria: (filters: unknown) => ['bodega', 'salidas-categoria', filters] as const,
+    stockReorden: (filters: unknown, soloCriticos: boolean, pagination: unknown) =>
+      ['bodega', 'stock-reorden', filters, soloCriticos, pagination] as const,
+    necesidadCompra: (filters: unknown, horizonte: number | undefined, pagination: unknown) =>
+      ['bodega', 'necesidad-compra', filters, horizonte, pagination] as const,
+    inventarioMatriz: (filters: unknown, estado: string | null, pagination: unknown) =>
+      ['bodega', 'inventario-matriz', filters, estado, pagination] as const,
+    transferencias: (filters: unknown, pagination: unknown) =>
+      ['bodega', 'transferencias', filters, pagination] as const,
+    notificaciones: (almacen: string | null) => ['bodega', 'notificaciones', almacen] as const,
+    reporte: (tipo: string, filters: unknown) => ['bodega', 'reporte', tipo, filters] as const,
+    prediccionComprasMes: (filters: unknown, productoCod: string | null | undefined) =>
+      ['bodega', 'prediccion-compras-mes', filters, productoCod] as const,
   },
   ventas: {
     goals: () => ['ventas', 'goals'] as const,
@@ -25,5 +43,11 @@ export const qk = {
     tracking: (anio: number, mes: number) => ['goals', 'tracking', anio, mes] as const,
     aiSummary: () => ['goals', 'ai-summary'] as const,
     commissionTracking: (anio: number, mes: number) => ['goals', 'commission-tracking', anio, mes] as const,
+  },
+  crossSelling: {
+    sugerencias: (items: string[], clienteId: string | null | undefined) =>
+      ['cross-selling', 'sugerencias', items, clienteId] as const,
+    kpis: (desde: string | undefined, hasta: string | undefined) => ['cross-selling', 'kpis', desde, hasta] as const,
+    productos: (q: string) => ['cross-selling', 'productos', q] as const,
   },
 };

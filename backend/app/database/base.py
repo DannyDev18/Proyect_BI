@@ -5,3 +5,4 @@ from app.database.session import Base  # noqa: F401
 from app.models.role import Role  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.goal import Goal  # noqa: F401
+from app.models.recommendation_event import RecommendationEvent  # noqa: F401

@@ -4,8 +4,10 @@ import { useSalesGoals, useChurnRisk, useRecommendations, useCustomerSegment } f
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
+import { ErrorState } from '../components/ui/ErrorState';
 import { SearchInput } from '../components/ui/SearchInput';
 import { GlobalBranchSelector } from '../components/ui/GlobalBranchSelector';
+import { SaleAssistant } from '../components/crossSelling/SaleAssistant';
 import { useAuthStore } from '../store/authStore';
 import { pct } from '../utils/format';
 
@@ -79,7 +81,9 @@ export const DashboardVentas = () => {
         {goals.loading ? (
           <><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /></>
         ) : goals.error ? (
-          <div className="col-span-4 card p-4 text-red-400 text-sm">{goals.error}</div>
+          <div className="col-span-full card">
+            <ErrorState message={goals.error} onRetry={goals.refetch} />
+          </div>
         ) : (
           <>
             <KpiCard title="Meta Mensual" value={goals.data ? `$${(goals.data.meta_mensual/1000).toFixed(0)}k` : '—'} icon={Target} trend="neutral" animDelay={0} />
@@ -105,37 +109,52 @@ export const DashboardVentas = () => {
       {clienteId && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 animate-fade-in">
           {/* Segmento RFM */}
-          <ChartCard title="Segmento RFM" badge={{ label: 'K-Means', variant: 'ml' }} loading={seg.loading}>
-            {seg.error ? (
-              <p className="text-red-400 text-sm">{seg.error}</p>
-            ) : seg.data ? (
+          <ChartCard
+            title="Segmento RFM"
+            badge={{ label: 'K-Means', variant: 'ml' }}
+            loading={seg.loading}
+            error={seg.error ?? undefined}
+            onRetry={() => seg.execute(clienteId)}
+            empty={!seg.loading && !seg.error && !seg.data}
+            emptyTitle="Sin datos aún"
+            emptyDescription="Busca un cliente para ver su segmento RFM."
+          >
+            {seg.data && (
               <div className="flex flex-col items-center justify-center h-full gap-4">
                 <AlertBadge variant={segmentVariant(seg.data.nombre_segmento)} className="text-base px-4 py-2">
                   {seg.data.nombre_segmento}
                 </AlertBadge>
                 <p className="text-xs text-slate-500 font-mono">Cluster #{seg.data.segmento} · Cliente: {seg.data.cliente_id}</p>
               </div>
-            ) : (
-              <p className="text-slate-500 text-sm text-center mt-6">Sin datos aún</p>
             )}
           </ChartCard>
 
           {/* Churn Risk */}
-          <ChartCard title="Riesgo de Abandono (Churn)" badge={{ label: 'Random Forest', variant: 'ml' }} loading={churn.loading}>
-            {churn.error ? (
-              <p className="text-red-400 text-sm">{churn.error}</p>
-            ) : churn.data ? (
-              <ChurnGauge prob={churn.data.probabilidad_abandono} />
-            ) : (
-              <p className="text-slate-500 text-sm text-center mt-6">Sin datos aún</p>
-            )}
+          <ChartCard
+            title="Riesgo de Abandono (Churn)"
+            badge={{ label: 'Random Forest', variant: 'ml' }}
+            loading={churn.loading}
+            error={churn.error ?? undefined}
+            onRetry={() => churn.execute(clienteId)}
+            empty={!churn.loading && !churn.error && !churn.data}
+            emptyTitle="Sin datos aún"
+            emptyDescription="Busca un cliente para ver su riesgo de abandono."
+          >
+            {churn.data && <ChurnGauge prob={churn.data.probabilidad_abandono} />}
           </ChartCard>
 
           {/* Recomendaciones Cross-selling */}
-          <ChartCard title="Recomendaciones de Venta Cruzada" badge={{ label: 'Reglas Asociación', variant: 'ml' }} loading={recs.loading}>
-            {recs.error ? (
-              <p className="text-red-400 text-sm">{recs.error}</p>
-            ) : recs.data?.recomendaciones?.length ? (
+          <ChartCard
+            title="Recomendaciones de Venta Cruzada"
+            badge={{ label: 'Reglas Asociación', variant: 'ml' }}
+            loading={recs.loading}
+            error={recs.error ?? undefined}
+            onRetry={() => recs.execute(clienteId)}
+            empty={!recs.loading && !recs.error && !recs.data?.recomendaciones?.length}
+            emptyTitle="Sin recomendaciones"
+            emptyDescription="No hay productos sugeridos de venta cruzada para este cliente."
+          >
+            {recs.data?.recomendaciones?.length ? (
               <ul className="space-y-2 overflow-auto max-h-[260px]">
                 {recs.data.recomendaciones.map((r, i) => (
                   <li key={i} className="flex justify-between items-center py-2 border-b border-slate-800 last:border-0">
@@ -149,12 +168,13 @@ export const DashboardVentas = () => {
                   </li>
                 ))}
               </ul>
-            ) : (
-              <p className="text-slate-500 text-sm text-center mt-6">Sin recomendaciones</p>
-            )}
+            ) : null}
           </ChartCard>
         </div>
       )}
+
+      {/* Asistente de Venta Cruzada (docs/auditoria/25_modulo_cross_selling.md) */}
+      <SaleAssistant clienteId={clienteId || null} />
     </div>
   );
 };

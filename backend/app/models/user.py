@@ -15,6 +15,9 @@ class User(Base):
     
     El campo id_vendedor_origen permite enlazar al usuario de la app con
     su registro en dw.Dim_Vendedor para ejecutar filtros analíticos seguros.
+    El campo codalm enlaza a un usuario con rol "bodega" a un almacén
+    específico (edw.Dim_Almacen.codalm); codalm=NULL con rol bodega significa
+    acceso a todos los almacenes (panel Administrador, ver UserService.create).
     """
     __tablename__ = "usuarios"
     __table_args__ = {"schema": "public"}
@@ -26,6 +29,7 @@ class User(Base):
     rol_id               = Column(Integer, ForeignKey("public.roles.id", ondelete="RESTRICT"), nullable=False)
     sucursal             = Column(String(50), nullable=True)          # Filtro de seguridad a nivel de fila
     id_vendedor_origen   = Column(String(15), unique=True, nullable=True)          # Código SAP del vendedor (para JWT)
+    codalm               = Column(String(10), nullable=True)          # Código de almacén (bodega); NULL = todos los almacenes
     es_activo            = Column(Boolean, default=True, nullable=False)
     created_at           = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

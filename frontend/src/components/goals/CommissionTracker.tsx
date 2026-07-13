@@ -1,15 +1,18 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Wallet, Loader2, Gift } from 'lucide-react';
+import { Wallet, Gift } from 'lucide-react';
 
 import { usePeriods, useCommissionTracking } from '../../hooks/goals';
-import type { GoalPeriodOption, NivelComision } from '../../types/goals';
+import type { GoalPeriodOption, NivelComision, VendorCommissionRow } from '../../types/goals';
 import { fmtMoney, pct } from '../../utils/format';
+import { Select } from '../ui/Select';
+import { DataTable, type DataTableColumn } from '../ui/DataTable';
+import { AlertBadge } from '../ui/AlertBadge';
 
-const NIVEL_STYLES: Record<NivelComision, string> = {
-  EXCELENTE: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25',
-  META: 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/25',
-  CERCA: 'bg-amber-500/10 text-amber-400 border border-amber-500/25',
-  LEJOS: 'bg-rose-500/10 text-rose-400 border border-rose-500/25',
+const NIVEL_VARIANT: Record<NivelComision, 'success' | 'info' | 'warning' | 'critical'> = {
+  EXCELENTE: 'success',
+  META: 'info',
+  CERCA: 'warning',
+  LEJOS: 'critical',
 };
 
 const NIVEL_LABEL: Record<NivelComision, string> = {
@@ -22,8 +25,8 @@ const NIVEL_LABEL: Record<NivelComision, string> = {
 /** Panel gerencial de comisiones (docs/modulo_metas.md): cumplimiento real (Venta Neta)
  * y comisión devengada por vendedor -- cierra el hallazgo R-1 de
  * docs/auditoria/14_...md (`GoalsConsole` solo muestra la meta configurada, sin venta
- * real). Componente hermano de `GoalsConsole`, mismo sistema visual (tabla en Tailwind
- * plano, sin `ChartCard`) para no fragmentar el look del panel gerencial de Metas. */
+ * real). Componente hermano de `GoalsConsole`, mismo sistema visual (DataTable) para no
+ * fragmentar el look del panel gerencial de Metas. */
 export function CommissionTracker() {
   const [period, setPeriod] = useState({ anio: new Date().getFullYear(), mes: new Date().getMonth() + 1 });
   const [hasInitializedPeriod, setHasInitializedPeriod] = useState(false);
@@ -45,17 +48,36 @@ export function CommissionTracker() {
   const tracking = useCommissionTracking(period.anio, period.mes);
   const totalComision = tracking.data.reduce((sum, f) => sum + f.comision_devengada, 0);
 
+  const columns: DataTableColumn<VendorCommissionRow>[] = [
+    { key: 'vendedor', header: 'Vendedor', render: (f) => <span className="font-semibold text-teal-50">{f.vendedor}</span> },
+    { key: 'venta_real', header: 'Venta Neta', render: (f) => <span className="text-slate-300">{fmtMoney(f.venta_real)}</span> },
+    { key: 'monto_meta', header: 'Meta', render: (f) => <span className="text-slate-400">{fmtMoney(f.monto_meta)}</span> },
+    { key: 'pct_cumplimiento', header: 'Cumplimiento', render: (f) => <span className="text-slate-300">{pct(f.pct_cumplimiento)}</span> },
+    {
+      key: 'nivel',
+      header: 'Nivel',
+      render: (f) => <AlertBadge variant={NIVEL_VARIANT[f.nivel]}>{NIVEL_LABEL[f.nivel]}</AlertBadge>,
+    },
+    { key: 'tasa', header: 'Tasa', render: (f) => <span className="text-slate-400">{f.tasa_aplicada_pct.toFixed(2)}%</span> },
+    {
+      key: 'comision',
+      header: 'Comisión',
+      numeric: true,
+      render: (f) => <span className="font-semibold text-teal-300">{fmtMoney(f.comision_devengada)}</span>,
+    },
+  ];
+
   return (
     <div className="p-6 bg-slate-900 text-white rounded-lg border border-slate-800 shadow-xl max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <Wallet className="w-8 h-8 text-teal-400" />
+          <Wallet className="w-8 h-8 text-teal-400" aria-hidden="true" />
           <h2 className="text-2xl font-bold tracking-tight">Comisiones devengadas</h2>
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-semibold text-slate-400">Período</label>
-          <select
-            className="bg-slate-800 p-2 rounded text-sm border border-slate-700 cursor-pointer focus:border-teal-400 focus:outline-none transition-colors"
+          <label className="text-xs font-semibold text-slate-400" htmlFor="commission-tracker-period">Período</label>
+          <Select
+            id="commission-tracker-period"
             onChange={(e) => {
               const selectedValue = e.target.value;
               const selectedMonth = months.find((m) => `${m.anio}-${m.mes}` === selectedValue);
@@ -66,7 +88,7 @@ export function CommissionTracker() {
             {months.map((m, idx) => (
               <option key={idx} value={`${m.anio}-${m.mes}`}>{m.label}</option>
             ))}
-          </select>
+          </Select>
         </div>
       </div>
 
@@ -74,53 +96,20 @@ export function CommissionTracker() {
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-slate-200">Cumplimiento real y comisión por vendedor</h3>
           <div className="flex items-center gap-1.5 text-sm text-slate-400">
-            <Gift size={14} className="text-teal-400" />
+            <Gift size={14} className="text-teal-400" aria-hidden="true" />
             Total del período: <span className="font-mono text-teal-300 font-semibold">{fmtMoney(totalComision)}</span>
           </div>
         </div>
 
-        {tracking.loading ? (
-          <div className="flex justify-center items-center py-20">
-            <Loader2 className="w-10 h-10 animate-spin text-teal-400" />
-          </div>
-        ) : tracking.error ? (
-          <p className="text-red-400 text-sm py-6 text-center">{tracking.error}</p>
-        ) : tracking.data.length === 0 ? (
-          <div className="text-center py-10 text-slate-400">No hay metas configuradas para este período.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-700 text-slate-400 font-medium">
-                  <th className="p-3">Vendedor</th>
-                  <th className="p-3">Venta Neta</th>
-                  <th className="p-3">Meta</th>
-                  <th className="p-3">Cumplimiento</th>
-                  <th className="p-3">Nivel</th>
-                  <th className="p-3">Tasa</th>
-                  <th className="p-3 text-right">Comisión</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tracking.data.map((f) => (
-                  <tr key={f.id} className="border-b border-slate-800 hover:bg-slate-800/50 transition-all duration-150">
-                    <td className="p-3 font-semibold text-teal-50">{f.vendedor}</td>
-                    <td className="p-3 font-mono text-slate-300">{fmtMoney(f.venta_real)}</td>
-                    <td className="p-3 font-mono text-slate-400">{fmtMoney(f.monto_meta)}</td>
-                    <td className="p-3 font-mono text-slate-300">{pct(f.pct_cumplimiento)}</td>
-                    <td className="p-3">
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${NIVEL_STYLES[f.nivel]}`}>
-                        {NIVEL_LABEL[f.nivel]}
-                      </span>
-                    </td>
-                    <td className="p-3 font-mono text-slate-400">{f.tasa_aplicada_pct.toFixed(2)}%</td>
-                    <td className="p-3 text-right font-mono font-semibold text-teal-300">{fmtMoney(f.comision_devengada)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <DataTable
+          columns={columns}
+          data={tracking.data}
+          rowKey={(f) => f.id}
+          loading={tracking.loading}
+          error={tracking.error ?? undefined}
+          onRetry={tracking.refetch}
+          emptyTitle="No hay metas configuradas para este período"
+        />
       </div>
     </div>
   );

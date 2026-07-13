@@ -10,12 +10,15 @@ from app.core.deps import CurrentUserDep, SessionDep
 from app.ml.model_loader import ModelLoader
 from app.repositories.analytics_repository import AnalyticsRepository
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository
 from app.repositories.prediction_repository import PredictionRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.warehouse_repository import WarehouseRepository
 from app.services.analytics_service import AnalyticsService
+from app.services.audit_service import AuditService
 from app.services.commission_service import CommissionService
 from app.services.goal_ml_service import GoalMLService
 from app.services.goals_service import GoalsService
@@ -23,6 +26,7 @@ from app.services.prediction_service import PredictionService
 from app.services.role_service import RoleService
 from app.services.training_service import TrainingService
 from app.services.user_service import UserService
+from app.services.warehouse_service import WarehouseService
 
 
 # ── Repositorios ─────────────────────────────────────────────────────────────
@@ -50,6 +54,18 @@ def get_dataset_repository(db: SessionDep) -> DatasetRepository:
     return DatasetRepository(db)
 
 
+def get_warehouse_repository(db: SessionDep) -> WarehouseRepository:
+    return WarehouseRepository(db)
+
+
+def get_catalog_repository(db: SessionDep) -> CatalogRepository:
+    return CatalogRepository(db)
+
+
+def get_audit_repository(db: SessionDep) -> AuditRepository:
+    return AuditRepository(db)
+
+
 # ── Modelos ML (Singleton vía app.state, cargado en el lifespan de main.py) ──
 def get_model_loader(request: Request) -> ModelLoader:
     return request.app.state.model_loader
@@ -70,8 +86,9 @@ TrainingServiceDep = Annotated[TrainingService, Depends(get_training_service)]
 def get_user_service(
     user_repo: Annotated[UserRepository, Depends(get_user_repository)],
     role_repo: Annotated[RoleRepository, Depends(get_role_repository)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
 ) -> UserService:
-    return UserService(user_repo, role_repo)
+    return UserService(user_repo, role_repo, catalog_repo)
 
 
 def get_role_service(role_repo: Annotated[RoleRepository, Depends(get_role_repository)]) -> RoleService:
@@ -109,6 +126,23 @@ def get_goal_ml_service(
     return GoalMLService(goal_repo, dataset_repo, model_loader)
 
 
+def get_warehouse_service(
+    warehouse_repo: Annotated[WarehouseRepository, Depends(get_warehouse_repository)],
+    dataset_repo: Annotated[DatasetRepository, Depends(get_dataset_repository)],
+    model_loader: ModelLoaderDep,
+) -> WarehouseService:
+    """Módulo Bodega (docs/auditoria/23_modulo_bodega.md): compone el repositorio de
+    inventario + `DatasetRepository` (serie de producto para el forecast) + `ModelLoader`
+    (reutiliza `demand_rf`, sin modelos nuevos)."""
+    return WarehouseService(warehouse_repo, dataset_repo, model_loader)
+
+
+def get_audit_service(
+    audit_repo: Annotated[AuditRepository, Depends(get_audit_repository)],
+) -> AuditService:
+    return AuditService(audit_repo)
+
+
 def get_commission_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
 ) -> CommissionService:
@@ -124,6 +158,9 @@ GoalsServiceDep = Annotated[GoalsService, Depends(get_goals_service)]
 PredictionServiceDep = Annotated[PredictionService, Depends(get_prediction_service)]
 GoalMLServiceDep = Annotated[GoalMLService, Depends(get_goal_ml_service)]
 CommissionServiceDep = Annotated[CommissionService, Depends(get_commission_service)]
+WarehouseServiceDep = Annotated[WarehouseService, Depends(get_warehouse_service)]
+AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
+CatalogRepositoryDep = Annotated[CatalogRepository, Depends(get_catalog_repository)]
 
 
 # ── Resolución de sucursal por rol ────────────────────────────────────────────

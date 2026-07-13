@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.api.routes.api import api_router
 from app.core.config import settings, validar_configuracion
@@ -32,11 +33,18 @@ async def lifespan(app: FastAPI):
     try:
         Base.metadata.create_all(bind=engine)
         logger.info("Tablas public.* verificadas/creadas correctamente.")
+        # create_all no altera tablas existentes: columna añadida en un volumen Docker
+        # ya inicializado (docs/auditoria/ vínculo usuario-almacén, panel Administrador).
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE public.usuarios ADD COLUMN IF NOT EXISTS codalm VARCHAR(10)"
+            ))
     except Exception as e:
         logger.error(f"Error al verificar tablas: {e}", exc_info=True)
 
     app.state.model_loader = ModelLoader(models_dir=settings.ML_MODELS_DIR, contracts_dir=settings.ML_CONTRACTS_DIR)
     app.state.model_loader.load_all()
+    app.state.model_loader.verify_library_versions()
     app.state.training_service = TrainingService()
 
     yield

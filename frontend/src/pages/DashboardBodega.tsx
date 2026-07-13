@@ -1,201 +1,415 @@
-import { useState } from 'react';
-import { AlertTriangle, Package, TrendingUp, ShieldAlert } from 'lucide-react';
-import { useBodegaKPIs, useDemandForecast } from '../hooks/bodega';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  AlertTriangle, Boxes, CalendarClock, ShoppingCart,
+} from 'lucide-react';
+import {
+  Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart,
+  ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis,
+} from 'recharts';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
-import { SearchInput } from '../components/ui/SearchInput';
-import { GlobalBranchSelector } from '../components/ui/GlobalBranchSelector';
+import { Pagination } from '../components/ui/Pagination';
+import { Select } from '../components/ui/Select';
+import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
+import { BodegaFilterBar } from '../components/bodega/BodegaFilterBar';
+import { PrediccionComprasChart } from '../components/bodega/PrediccionComprasChart';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-} from 'recharts';
-import { useAuthStore } from '../store/authStore';
-import { MOCK_ALERTS } from '../services/mocks/bodega.mock';
-import { fmt } from '../utils/format';
+  useKpisBodega, useNecesidadCompra, useRotacionMatriz, useSalidasCategoria,
+  useSalidasForecast, useStockReorden, useTopProductos,
+} from '../hooks/bodega';
+import { usePagination } from '../hooks/usePagination';
+import { useBodegaFiltersStore, toQueryFilters } from '../store/bodegaFiltersStore';
+import { fmt, pct } from '../utils/format';
+import { chartTheme, colorByCategory } from '../utils/chartTheme';
+import type { EstadoStock, ProductoCompra, ProductoStockReorden } from '../types/bodega';
+
+const estadoBadge: Record<EstadoStock, 'critical' | 'warning' | 'neutral' | 'info'> = {
+  'Crítico': 'critical', 'Cerca': 'warning', 'Seguro': 'neutral', 'Exceso': 'info',
+};
+
+const tooltipStyle = {
+  backgroundColor: chartTheme.cardBg, borderColor: chartTheme.grid, borderRadius: '8px', fontSize: '12px',
+} as const;
+
+const tendencia = (v: number | null | undefined) =>
+  v == null ? '—' : `${v > 0 ? '▲ +' : v < 0 ? '▼ ' : ''}${v.toFixed(1)}% vs mes anterior`;
 
 export const DashboardBodega = () => {
-  const { user } = useAuthStore();
-  const kpi     = useBodegaKPIs();
-  const demand  = useDemandForecast();
-  const [skuBuscado, setSkuBuscado] = useState('');
-  const [sucursal, setSucursal] = useState<string | null>(null);
-  
-  // isAdmin checks if the user is strict admin to enable destructive actions.
-  const isAdmin = user?.role === 'administrador';
+  const store = useBodegaFiltersStore();
+  const filters = useMemo(() => toQueryFilters(store), [store]);
 
-  const handleSkuSearch = (sku: string) => {
-    setSkuBuscado(sku);
-    demand.execute(sku);
-  };
+  const kpis = useKpisBodega(filters);
+  const [productoForecast, setProductoForecast] = useState<string | null>(null);
+  const forecast = useSalidasForecast(filters, productoForecast);
+  const rotacion = useRotacionMatriz(filters);
+  const top = useTopProductos(filters, 20);
+  const categorias = useSalidasCategoria(filters);
+  const [soloCriticos, setSoloCriticos] = useState(false);
+  const stockPagination = usePagination([filters, soloCriticos]);
+  const stockReorden = useStockReorden(filters, soloCriticos, stockPagination.query);
+  const compraPagination = usePagination(filters);
+  const compra = useNecesidadCompra(filters, undefined, compraPagination.query);
+
+  // G1: fusiona histórico + predicción en una sola serie para el ComposedChart.
+  const serieForecast = useMemo(() => {
+    if (!forecast.data) return [];
+    const hist = forecast.data.historial.map((h) => ({
+      fecha: h.fecha, real: h.unidades, pred: null as number | null, banda: null as [number, number] | null,
+    }));
+    const preds = forecast.data.prediccion.map((p) => ({
+      fecha: p.fecha, real: null, pred: p.unidades, banda: [p.banda_inferior, p.banda_superior] as [number, number],
+    }));
+    // Pivote sin gap visual entre real y predicción.
+    if (hist.length && preds.length) hist[hist.length - 1].pred = hist[hist.length - 1].real;
+    return [...hist, ...preds];
+  }, [forecast.data]);
+
+  const nombresCategorias = useMemo(
+    () => (categorias.data ?? []).map((c) => c.categoria),
+    [categorias.data],
+  );
+
+  const stockReordenColumns: DataTableColumn<ProductoStockReorden>[] = [
+    {
+      key: 'producto', header: 'Producto',
+      render: (p) => (
+        <>
+          <p className="font-semibold text-slate-200">{p.nombre}</p>
+          <p className="text-xs text-slate-500">{p.codart} · {p.categoria}</p>
+        </>
+      ),
+    },
+    {
+      key: 'stock', header: 'Stock / Reorden', width: '200px',
+      render: (p) => {
+        const ratio = p.punto_reorden > 0 ? Math.min(p.stock_actual / (p.punto_reorden * 1.5), 1) : 1;
+        const barColor = p.estado === 'Crítico' ? 'bg-red-500' : p.estado === 'Cerca' ? 'bg-amber-500' : 'bg-emerald-500';
+        return (
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-slate-300 text-xs w-20">{p.stock_actual} / {p.punto_reorden}</span>
+            <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div className={`h-full ${barColor}`} style={{ width: `${ratio * 100}%` }} />
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'dias', header: 'Días hasta agotarse',
+      render: (p) => <span className="font-mono text-slate-400">{p.dias_hasta_reorden != null ? `${p.dias_hasta_reorden} días` : 'sin consumo'}</span>,
+    },
+    { key: 'estado', header: 'Estado', render: (p) => <AlertBadge variant={estadoBadge[p.estado]}>{p.estado}</AlertBadge> },
+    {
+      key: 'accion', header: 'Acción',
+      render: (p) => p.estado === 'Crítico' ? (
+        <Link to="/bodega/reportes" className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold transition-colors focus-ring">
+          Solicitar Compra
+        </Link>
+      ) : p.estado === 'Exceso' ? (
+        <Link to="/bodega/almacenes" className="px-3 py-1.5 border border-slate-600 hover:border-cyan-500 text-slate-300 rounded text-xs font-semibold transition-colors focus-ring">
+          Sugerir Transferencia
+        </Link>
+      ) : <span className="text-xs text-slate-600">—</span>,
+    },
+  ];
+
+  const compraColumns: DataTableColumn<ProductoCompra>[] = [
+    {
+      key: 'producto', header: 'Producto',
+      render: (p) => (
+        <>
+          <p className="font-semibold text-slate-200">{p.nombre}</p>
+          <p className="text-xs text-slate-500">{p.codart} · {p.justificacion}</p>
+        </>
+      ),
+    },
+    { key: 'stock', header: 'Stock', numeric: true, render: (p) => <span className="text-slate-300">{p.stock_actual}</span> },
+    { key: 'salida', header: 'Salida diaria', numeric: true, render: (p) => <span className="text-slate-400">{p.salida_diaria}/día</span> },
+    { key: 'llega', header: 'Llega a reorden', numeric: true, render: (p) => <span className="text-slate-400">{p.fecha_estimada_reorden ?? '—'}</span> },
+    { key: 'cantidad', header: 'Cant. sugerida', numeric: true, render: (p) => <span className="text-cyan-400 font-semibold">{p.cantidad_sugerida}</span> },
+    { key: 'costo', header: 'Costo total', numeric: true, render: (p) => <span className="text-slate-300">{fmt(p.costo_total)}</span> },
+    {
+      key: 'prioridad', header: 'Prioridad',
+      render: (p) => (
+        <AlertBadge variant={p.prioridad === 'Alta' ? 'critical' : p.prioridad === 'Media' ? 'warning' : 'neutral'}>
+          {p.prioridad}
+        </AlertBadge>
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-wrap justify-between items-center gap-3 animate-fade-in">
         <div>
-          <h1 className="text-3xl font-display font-semibold text-slate-100">Control de Inventario</h1>
+          <h1 className="text-3xl font-display font-semibold text-slate-100">Gestión de Inventario y Abastecimiento</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Sucursal: <span className="text-slate-300">{user?.role === 'gerencia' || user?.role === 'administrador' ? (sucursal || 'Consolidado Global') : (user?.sucursalId ?? 'Central')}</span> · Predicción de demanda por SKU activa
+            Decisiones de compra y transferencia basadas en histórico del EDW + predicción ML
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          <GlobalBranchSelector onSelectSucursal={setSucursal} />
-          {(kpi.data?.alertas_criticas ?? 0) > 0 && (
-            <AlertBadge variant="critical" dot>
-              {kpi.data?.alertas_criticas} alertas críticas
-            </AlertBadge>
-          )}
+        <div className="flex items-center gap-3">
+          <Link to="/bodega/almacenes" className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-700 text-slate-300 hover:border-cyan-500 hover:text-cyan-400 transition-colors focus-ring">
+            Status por Almacén
+          </Link>
+          <Link to="/bodega/reportes" className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-700 text-slate-300 hover:border-cyan-500 hover:text-cyan-400 transition-colors focus-ring">
+            Reportes Gerencia
+          </Link>
         </div>
       </div>
 
-      {/* KPI Row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        {kpi.loading ? (
-          <><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /></>
-        ) : kpi.error ? (
-          <div className="col-span-4 card p-4 text-red-400 text-sm">{kpi.error}</div>
-        ) : (
+      {/* §1.1 Filtros globales */}
+      <BodegaFilterBar />
+
+      {/* §1.2 KPIs — cobertura operativa (3): qué tengo, qué falta reponer, cuánto dura */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {kpis.loading ? (
+          <><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /></>
+        ) : kpis.error ? (
+          <div className="col-span-full card p-4 text-red-400 text-sm">{kpis.error}</div>
+        ) : kpis.data && (
           <>
-            <KpiCard
-              title="Ítems en Riesgo"
-              value={kpi.data?.items_riesgo_desabastecimiento ?? '—'}
-              icon={AlertTriangle}
-              trend={(kpi.data?.items_riesgo_desabastecimiento ?? 0) > 10 ? 'down' : 'neutral'}
-              animDelay={0}
-            />
-            <KpiCard
-              title="Sobrestock"
-              value={kpi.data?.items_sobrestock ?? '—'}
-              icon={Package}
-              trend={(kpi.data?.items_sobrestock ?? 0) > 20 ? 'down' : 'neutral'}
-              animDelay={60}
-            />
-            <KpiCard
-              title="Valorización"
-              value={kpi.data ? fmt(kpi.data.valorizacion_inventario) : '—'}
-              icon={ShieldAlert}
-              trend="neutral"
-              animDelay={120}
-            />
-            <KpiCard
-              title="Rotación Mensual"
-              value={kpi.data ? `${kpi.data.rotacion_mensual.toFixed(1)}x` : '—'}
-              icon={TrendingUp}
-              trend={kpi.data && kpi.data.rotacion_mensual >= 4 ? 'up' : 'down'}
-              animDelay={180}
-            />
+            <KpiCard title="Artículos en Inventario" icon={Boxes}
+              value={kpis.data.total_articulos.skus_activos.toLocaleString('es-EC')}
+              subValue={`${kpis.data.total_articulos.cantidad_total.toLocaleString('es-EC', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} unidades · de ${kpis.data.total_articulos.total_skus.toLocaleString('es-EC')} en catálogo · ${kpis.data.total_articulos.skus_stock_cero} en cero · ${tendencia(kpis.data.total_articulos.tendencia_pct)}`}
+              trend={(kpis.data.total_articulos.tendencia_pct ?? 0) >= 0 ? 'up' : 'down'} animDelay={0} />
+            <KpiCard title="Productos con Stock Bajo" icon={AlertTriangle}
+              value={kpis.data.stock_bajo.productos_bajo_reorden}
+              subValue={`${pct(kpis.data.stock_bajo.pct_del_total)} del catálogo bajo punto de reorden`}
+              trend={kpis.data.stock_bajo.color === 'verde' ? 'up' : kpis.data.stock_bajo.color === 'amarillo' ? 'neutral' : 'down'} animDelay={60} />
+            <KpiCard title="Días de Inventario" icon={CalendarClock}
+              value={kpis.data.dias_inventario.dias != null ? `${kpis.data.dias_inventario.dias} días` : '—'}
+              subValue={kpis.data.dias_inventario.alerta_desabastecimiento ? '⚠ Riesgo de desabastecimiento (<15 días)' : 'Cobertura saludable'}
+              trend={kpis.data.dias_inventario.alerta_desabastecimiento ? 'down' : 'up'} animDelay={120} />
           </>
         )}
       </div>
 
-      {/* SKU Demand Forecasting */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="card p-6 animate-fade-in-up stagger-1">
-          <h3 className="font-sans font-semibold text-slate-200 mb-4">Predicción de Demanda por SKU</h3>
-          <SearchInput
-            placeholder="Ej: TEC-0012"
-            onSearch={handleSkuSearch}
-            loading={demand.loading}
-            label="Código de producto (SKU)"
-          />
-          {skuBuscado && (
-            <div className="mt-5">
-              {demand.loading && <p className="text-cyan-400 text-sm animate-pulse-slow">Consultando modelo…</p>}
-              {demand.error && <p className="text-red-400 text-sm">{demand.error}</p>}
-              {demand.data && !demand.loading && (
-                <div className="flex items-center justify-between p-4 rounded-lg bg-slate-800/50 border border-slate-700 mt-2">
-                  <div>
-                    <p className="text-xs text-slate-500 uppercase tracking-widest">Demanda próxima semana</p>
-                    <p className="font-mono text-3xl font-semibold text-cyan-400 mt-1">
-                      {demand.data.demanda_proxima_semana} <span className="text-base text-slate-400 font-normal">uds</span>
-                    </p>
-                  </div>
-                  <AlertBadge variant="info">SKU: {demand.data.producto_cod}</AlertBadge>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+      {/* G1: Histórico + predicción de salidas */}
+      <ChartCard
+        title="Histórico y Predicción de Salidas"
+        badge={{ label: forecast.data?.metodo === 'ml_demand_rf' ? 'ML demand_rf' : 'Proyección estadística', variant: 'ml' }}
+        height="h-[360px]"
+        loading={forecast.loading}
+        error={forecast.error ?? undefined}
+        onRetry={forecast.refetch}
+        empty={!forecast.loading && !forecast.error && serieForecast.length === 0}
+        emptyDescription="No hay histórico de salidas para el producto o filtros seleccionados."
+        actions={
+          <Select
+            size="sm"
+            aria-label="Producto para el forecast"
+            value={productoForecast ?? 'TOP'}
+            onChange={(e) => setProductoForecast(e.target.value === 'TOP' ? null : e.target.value)}
+          >
+            <option value="TOP">Top 10 productos (agregado)</option>
+            {(top.data ?? []).map((p) => (
+              <option key={p.codart} value={p.codart}>{p.codart} — {p.nombre.slice(0, 40)}</option>
+            ))}
+          </Select>
+        }
+      >
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={serieForecast} margin={{ top: 4, right: 16, left: -10, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
+            <XAxis dataKey="fecha" tick={{ fill: chartTheme.axis, fontSize: 10 }} tickFormatter={(f: string) => f.slice(5)} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fill: chartTheme.axis, fontSize: 11 }} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={tooltipStyle} />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Area dataKey="banda" name="Banda de confianza" stroke="none" fill={chartTheme.ml} fillOpacity={0.15} connectNulls />
+            <Line dataKey="real" name="Salidas reales" stroke={chartTheme.palette[0]} strokeWidth={2} dot={false} connectNulls={false} />
+            <Line dataKey="pred" name="Predicción" stroke={chartTheme.ml} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />
+            {forecast.data?.punto_reorden != null && (
+              <ReferenceLine y={forecast.data.punto_reorden} stroke={chartTheme.danger} strokeDasharray="4 4"
+                label={{ value: `Punto reorden (${forecast.data.punto_reorden})`, fill: chartTheme.danger, fontSize: 10, position: 'insideTopRight' }} />
+            )}
+            {forecast.data?.stock_actual != null && (
+              <ReferenceLine y={forecast.data.stock_actual} stroke={chartTheme.success}
+                label={{ value: `Stock actual (${forecast.data.stock_actual})`, fill: chartTheme.success, fontSize: 10, position: 'insideBottomRight' }} />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </ChartCard>
 
-        {/* Mini bar chart of mock risk distribution until dedicated endpoint available */}
-        <ChartCard title="Distribución de Riesgo de Stock" badge={{ label: 'Inventario', variant: 'hist' }}>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {/* G2: Matriz rotación × margen */}
+        <ChartCard title="Matriz de Rotación y Rentabilidad" badge={{ label: 'Cuadrantes de prioridad', variant: 'hist' }} height="h-[340px]"
+          loading={rotacion.loading} error={rotacion.error ?? undefined} onRetry={rotacion.refetch}
+          empty={!rotacion.loading && !rotacion.error && (rotacion.data?.productos ?? []).length === 0}>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={[
-                { estado: 'Crítico',   total: MOCK_ALERTS.filter(a => a.estado === 'critical').length },
-                { estado: 'Moderado',  total: MOCK_ALERTS.filter(a => a.estado === 'warning').length },
-                { estado: 'Normal',    total: MOCK_ALERTS.filter(a => a.estado === 'neutral').length },
-              ]}
-              margin={{ top: 4, right: 10, left: -20, bottom: 4 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-              <XAxis dataKey="estado" tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#64748b', fontSize: 11 }} axisLine={false} tickLine={false} />
+            <ScatterChart margin={{ top: 10, right: 16, left: -10, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+              <XAxis type="number" dataKey="rotacion_mensual" name="Rotación mensual" tick={{ fill: chartTheme.axis, fontSize: 11 }}
+                label={{ value: 'Rotación (veces/mes)', fill: chartTheme.axis, fontSize: 11, position: 'insideBottom', offset: -2 }} />
+              <YAxis type="number" dataKey="margen_unitario" name="Margen/unidad" tick={{ fill: chartTheme.axis, fontSize: 11 }}
+                label={{ value: 'Margen $/ud', fill: chartTheme.axis, fontSize: 11, angle: -90, position: 'insideLeft' }} />
+              <ZAxis type="number" dataKey="valor_inventario" range={[40, 400]} name="Valor inventario" />
               <Tooltip
-                cursor={{ fill: '#1e293b' }}
-                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', fontSize: '12px' }}
+                contentStyle={tooltipStyle}
+                content={({ payload }) => {
+                  const p = payload?.[0]?.payload;
+                  if (!p) return null;
+                  return (
+                    <div style={tooltipStyle} className="p-3 border">
+                      <p className="font-semibold text-slate-200">{p.nombre}</p>
+                      <p className="text-slate-400">Rotación: {p.rotacion_mensual ?? '—'} veces/mes</p>
+                      <p className="text-slate-400">Margen: ${p.margen_unitario}/ud</p>
+                      <p className="text-slate-400">Stock: {p.stock_actual} · Días inv: {p.dias_inventario ?? '∞'}</p>
+                      <p className="text-slate-400">Valor: {fmt(p.valor_inventario)}</p>
+                    </div>
+                  );
+                }}
               />
-              <Bar dataKey="total" radius={[4, 4, 0, 0]} barSize={36}
-                fill="#06b6d4"
-              />
-            </BarChart>
+              {rotacion.data && (
+                <>
+                  <ReferenceLine x={rotacion.data.mediana_rotacion} stroke={chartTheme.median} strokeDasharray="4 4" />
+                  <ReferenceLine y={rotacion.data.mediana_margen} stroke={chartTheme.median} strokeDasharray="4 4" />
+                </>
+              )}
+              <Scatter data={(rotacion.data?.productos ?? []).filter((p) => p.rotacion_mensual != null)} fill={chartTheme.live} fillOpacity={0.6} />
+            </ScatterChart>
           </ResponsiveContainer>
+        </ChartCard>
+
+        {/* G4: Distribución por categoría */}
+        <ChartCard title="Distribución de Salidas por Categoría" badge={{ label: 'vs período anterior', variant: 'hist' }} height="h-[340px]"
+          loading={categorias.loading} error={categorias.error ?? undefined} onRetry={categorias.refetch}
+          empty={!categorias.loading && !categorias.error && (categorias.data ?? []).length === 0}>
+          <div className="flex h-full gap-4">
+            <ResponsiveContainer width="55%" height="100%">
+              <PieChart>
+                <Pie data={categorias.data ?? []} dataKey="unidades" nameKey="categoria" innerRadius="45%" outerRadius="80%" paddingAngle={2}>
+                  {(categorias.data ?? []).map((c) => (
+                    <Cell key={c.categoria} fill={colorByCategory(c.categoria, nombresCategorias)} stroke="none" />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={tooltipStyle}
+                  content={({ payload }) => {
+                    const p = payload?.[0]?.payload as { categoria?: string; unidades?: number; pct_participacion?: number } | undefined;
+                    if (!p) return null;
+                    return (
+                      <div style={tooltipStyle} className="p-3 border">
+                        <p className="font-semibold text-slate-200">{p.categoria}</p>
+                        <p className="text-slate-400">{(p.unidades ?? 0).toLocaleString('es-EC')} uds ({p.pct_participacion ?? 0}%)</p>
+                      </div>
+                    );
+                  }} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="flex-1 overflow-y-auto text-xs space-y-2 pr-1">
+              {(categorias.data ?? []).map((c) => (
+                <div key={c.categoria} className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-slate-300">
+                    <span className="w-2.5 h-2.5 rounded-sm" style={{ background: colorByCategory(c.categoria, nombresCategorias) }} />
+                    {c.categoria}
+                  </span>
+                  <span className="text-slate-500 font-mono">
+                    {c.pct_participacion}% · {c.tendencia_pct != null ? `${c.tendencia_pct > 0 ? '+' : ''}${c.tendencia_pct}%` : '—'} · stock {c.stock_disponible.toLocaleString('es-EC')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </ChartCard>
       </div>
 
-      {/* Alertas de Reposición */}
-      <div className="card animate-fade-in-up stagger-2 overflow-hidden">
-        <div className="p-6 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="font-sans font-semibold text-slate-200">Alertas Inteligentes de Reposición (ML)</h3>
-          <AlertBadge variant="warning">{MOCK_ALERTS.filter(a => a.estado !== 'neutral').length} ítems</AlertBadge>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-slate-950/60 text-slate-500 text-xs uppercase tracking-widest">
-              <tr>
-                <th className="px-6 py-4">SKU / Producto</th>
-                <th className="px-6 py-4">Stock Actual</th>
-                <th className="px-6 py-4 text-cyan-400">Demanda Prevista</th>
-                <th className="px-6 py-4">Punto Reorden</th>
-                <th className="px-6 py-4">Estado</th>
-                <th className="px-6 py-4">Acción</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/80">
-              {MOCK_ALERTS.map((row) => (
-                <tr key={row.sku} className="hover:bg-slate-800/20 transition-colors">
-                  <td className="px-6 py-4">
-                    <p className="font-semibold text-slate-200">{row.sku}</p>
-                    <p className="text-xs text-slate-500">{row.name}</p>
-                  </td>
-                  <td className="px-6 py-4 font-mono">
-                    {row.stock === 0 ? (
-                      <span className="text-red-400 bg-red-500/10 px-2 py-0.5 rounded text-xs">0 — Agotado</span>
-                    ) : (
-                      <span className="text-slate-300">{row.stock}</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 font-mono text-cyan-400">{row.demanda} uds</td>
-                  <td className="px-6 py-4 font-mono text-slate-400">{row.reorden} uds</td>
-                  <td className="px-6 py-4">
-                    <AlertBadge variant={row.estado as 'critical' | 'warning' | 'neutral'}>
-                      {row.estado === 'critical' ? 'Crítico' : row.estado === 'warning' ? 'Moderado' : 'Normal'}
-                    </AlertBadge>
-                  </td>
-                  <td className="px-6 py-4">
-                    {isAdmin ? (
-                      <button className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold glow-accent-sm transition-colors">
-                        Solicitar Traspaso
-                      </button>
-                    ) : (
-                      <span className="text-xs text-slate-500 italic block mt-1">🔒 Operación bloqueada (Solo Admin)</span>
-                    )}
-                  </td>
-                </tr>
+      {/* G3: Top 20 productos */}
+      <ChartCard title="Top 20 Productos con Mayor Salida" badge={{ label: 'Prioridad de abastecimiento', variant: 'hist' }}
+        height="h-[560px]" loading={top.loading} error={top.error ?? undefined} onRetry={top.refetch}
+        empty={!top.loading && !top.error && (top.data ?? []).length === 0}
+        actions={<Link to="/bodega/almacenes" className="text-xs text-cyan-400 hover:underline focus-ring rounded">Ver todos los productos →</Link>}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={top.data ?? []} layout="vertical" margin={{ top: 4, right: 90, left: 40, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} horizontal={false} />
+            <XAxis type="number" tick={{ fill: chartTheme.axis, fontSize: 11 }} axisLine={false} tickLine={false} />
+            <YAxis type="category" dataKey="nombre" width={180} tick={{ fill: chartTheme.axisLabel, fontSize: 10 }}
+              tickFormatter={(n: string) => n.length > 26 ? `${n.slice(0, 26)}…` : n} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={tooltipStyle} cursor={{ fill: chartTheme.grid }}
+              content={({ payload }) => {
+                const p = payload?.[0]?.payload;
+                if (!p) return null;
+                return (
+                  <div style={tooltipStyle} className="p-3 border">
+                    <p className="font-semibold text-slate-200">{p.nombre} <span className="text-slate-500">({p.codart})</span></p>
+                    <p className="text-slate-400">Salidas: {p.unidades.toLocaleString('es-EC')} uds {p.tendencia_pct != null && (p.tendencia_pct >= 0 ? `↑ +${p.tendencia_pct}%` : `↓ ${p.tendencia_pct}%`)}</p>
+                    <p className="text-slate-400">Stock: {p.stock_actual} uds · {p.dias_inventario != null ? `${p.dias_inventario} días` : 'sin consumo'}</p>
+                  </div>
+                );
+              }} />
+            <Bar dataKey="unidades" radius={[0, 4, 4, 0]} barSize={16}>
+              {(top.data ?? []).map((p) => (
+                <Cell key={p.codart} fill={colorByCategory(p.categoria, nombresCategorias)} />
               ))}
-            </tbody>
-          </table>
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartCard>
+
+      {/* G5: Estado de stock vs punto de reorden */}
+      <div className="animate-fade-in-up">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+          <h3 className="font-sans font-semibold text-slate-200">Estado de Stock vs Punto de Reorden</h3>
+          <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+            <input type="checkbox" checked={soloCriticos} onChange={(e) => setSoloCriticos(e.target.checked)} className="accent-red-500 focus-ring" />
+            Solo críticos
+          </label>
         </div>
+        <DataTable
+          columns={stockReordenColumns}
+          data={stockReorden.data?.items ?? []}
+          rowKey={(p) => p.codart}
+          loading={stockReorden.loading}
+          error={stockReorden.error ?? undefined}
+          onRetry={stockReorden.refetch}
+          emptyTitle="Sin productos que reportar"
+          emptyDescription="No hay artículos en riesgo de reorden con los filtros actuales."
+          pagination={stockReorden.data && (
+            <Pagination
+              page={stockReorden.data.page} pageSize={stockReorden.data.page_size}
+              total={stockReorden.data.total} totalPages={stockReorden.data.total_pages}
+              onPageChange={stockPagination.setPage} onPageSizeChange={stockPagination.setPageSize}
+            />
+          )}
+        />
+      </div>
+
+      {/* Predicción de compras del próximo mes (enlazada al filtro de categoría) */}
+      <PrediccionComprasChart filters={filters} />
+
+      {/* G6: Predicción de necesidad de compra */}
+      <div className="animate-fade-in-up">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+          <div className="flex items-center gap-3">
+            <ShoppingCart size={18} className="text-cyan-400" />
+            <h3 className="font-sans font-semibold text-slate-200">Predicción de Necesidad de Compra</h3>
+          </div>
+          {compra.data && (
+            <div className="flex items-center gap-4 text-xs text-slate-400">
+              <span>{compra.data.total_productos_a_comprar} productos · {fmt(compra.data.valor_total_compra)}</span>
+              <span className="text-emerald-400">Ahorro por no comprar: {fmt(compra.data.ahorro_por_no_comprar)}</span>
+            </div>
+          )}
+        </div>
+        <DataTable
+          columns={compraColumns}
+          data={compra.data?.recomendados.items ?? []}
+          rowKey={(p) => p.codart}
+          loading={compra.loading}
+          error={compra.error ?? undefined}
+          onRetry={compra.refetch}
+          rowClassName={(p) => p.prioridad === 'Alta' ? 'bg-red-500/5' : ''}
+          emptyTitle="Sin necesidades de compra"
+          emptyDescription="No hay artículos que requieran reposición con los filtros actuales."
+          pagination={compra.data && (
+            <Pagination
+              page={compra.data.recomendados.page} pageSize={compra.data.recomendados.page_size}
+              total={compra.data.recomendados.total} totalPages={compra.data.recomendados.total_pages}
+              onPageChange={compraPagination.setPage} onPageSizeChange={compraPagination.setPageSize}
+            />
+          )}
+        />
       </div>
     </div>
   );

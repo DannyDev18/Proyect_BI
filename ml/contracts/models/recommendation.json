@@ -1,15 +1,15 @@
 {
   "name": "recommendation",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "task": "recommendation",
-  "status": "active",
+  "status": "draft",
   "features": [
     {
       "name": "item_A",
       "dtype": "string",
       "required": true,
       "nullable": false,
-      "description": "codart del producto antecedente"
+      "description": "codart del producto antecedente / contexto de la canasta"
     },
     {
       "name": "item_B",
@@ -19,32 +19,39 @@
       "description": "codart del producto consecuente (recomendado)"
     },
     {
-      "name": "support",
+      "name": "score",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "P(A y B en la misma factura)"
+      "description": "Score unificado de ranking (mayor = mejor). Para reglas de asociación (co-ocurrencia/apriori) es el `lift`; para el candidato item-item es la similitud coseno normalizada; para popularidad-fallback es la frecuencia relativa del producto en su categoría. Reemplaza a `lift` como campo de ranking genérico (D-2, Fase 2 -- ver notes) porque distintas estrategias candidatas no comparten la misma métrica nativa."
+    },
+    {
+      "name": "fuente",
+      "dtype": "string",
+      "required": true,
+      "nullable": false,
+      "description": "Origen de la fila: 'coocurrencia' | 'apriori' | 'item_item' | 'hibrido' | 'popularidad'. Permite al backend armar el texto de `motivo` diferenciado (\"clientes que llevan X también llevan Y\" vs \"clientes similares compraron\" vs \"popular en esta categoría\")."
+    },
+    {
+      "name": "support",
+      "dtype": "float",
+      "required": false,
+      "nullable": true,
+      "description": "P(A y B en la misma factura). Solo poblado cuando fuente en {coocurrencia, apriori}; NULL para item_item/popularidad (no aplica a esas estrategias)."
     },
     {
       "name": "confidence",
       "dtype": "float",
-      "required": true,
-      "nullable": false,
-      "description": "P(B | A) = count(A,B) / count(A)"
-    },
-    {
-      "name": "lift",
-      "dtype": "float",
-      "required": true,
-      "nullable": false,
-      "description": "support(A,B) / (support(A) * support(B)); >1 indica afinidad real, no solo popularidad"
+      "required": false,
+      "nullable": true,
+      "description": "P(B | A) = count(A,B) / count(A). Solo poblado cuando fuente en {coocurrencia, apriori}; NULL para item_item/popularidad."
     }
   ],
   "target": {
     "name": "",
     "transform": null,
     "inverse_transform": null,
-    "description": "No supervisado. Reglas de asociación DIRECCIONALES (A->B y B->A) con support/confidence/lift sobre canastas agrupadas por num_factura, calculadas por co-ocurrencia (no mlxtend -- se prefirió la implementación manual existente, extendida con confidence/lift, por simplicidad y rendimiento sobre el catálogo real; el resultado cumple el mismo contrato que mlxtend.association_rules habría producido). H-10 cerrado: antes solo se emitía un par simétrico por combinación (ordenado alfabéticamente, sin confidence/lift)."
+    "description": "No supervisado / evaluado por backtest de completado de canasta (basket completion). Re-análisis de Fase 3 (docs/features/plan_modulo_cross_selling.md §2.3): compiten co-ocurrencia direccional re-tuneada, Apriori/FP-Growth (mlxtend), filtrado colaborativo item-item (similitud coseno, scikit-learn) e híbrido; selecciona el ganador un backtest temporal (split por fecha, nunca aleatorio) con Precision@K/Recall@K (K=3,5), Hit-Rate@5 y cobertura. Detalle de la estrategia ganadora y sus métricas reales: ver `notes` tras cerrar Fase 3."
   },
   "output": {
     "type": "rules",
@@ -52,17 +59,14 @@
     "plausible_range": null
   },
   "population_filter": {
-    "description": "Excluir devoluciones y el centinela producto_sk=-1 ('producto desconocido', regla de negocio 12 CLAUDE.md); mismo filtro de estado vía dim_estado_documento (C-1). Implementado en Fase 3: ml/src/data/make_dataset.py::fetch_market_basket ya usa este JOIN + exclusiones.",
+    "description": "Excluir devoluciones y el centinela producto_sk=-1 ('producto desconocido', regla de negocio 12 CLAUDE.md); mismo filtro de estado vía dim_estado_documento (C-1). Implementado en ml/src/data/make_dataset.py::fetch_market_basket (agrega ahora `fecha` para el split temporal y un parámetro `ventana_anios`, Fase 3) y fetch_product_catalog (catálogo vigente `dim_producto` para precio/categoría/margen, usado por el backtest para estimar impacto en ticket).",
     "sql_condition": "JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion AND fvd.producto_sk <> -1"
   },
-  "library_versions": {
-    "pandas": "2.3.3"
-  },
-  "data_range": {
-    "n_transacciones_entrenamiento": 17009
-  },
+  "library_versions": {},
+  "data_range": {},
   "known_serving_mismatch": [
-    "H-10 cerrado en Fase 4: model_loader.py apunta a recommendation.pkl; get_recommendations sigue filtrando por rules['item_A'].isin(historial), pero ya no pierde cobertura (cada par emite las dos filas direccionales A->B y B->A) y ordena por lift (afinidad real) en vez de support. prediction_service.py expone item_B (codart) como producto_cod y lift como score."
+    "PENDIENTE (Fase 4, fuera de alcance de este cambio): prediction_service.py / inference.py del backend todavía esperan las columnas v0.1.0 (item_A, item_B, support, confidence, lift) y ordenan por `lift`. Con v0.2.0 deben leer `score` (ranking genérico) y `fuente` (para el texto de motivo); este ajuste de serving se hace en la Fase 4 del plan (backend), no en este cambio de ml/.",
+    "H-10 heredado de v0.1.0 (cerrado en su momento): cada par de co-ocurrencia emite las dos filas direccionales A->B y B->A; se preserva en v0.2.0 para las fuentes coocurrencia/apriori."
   ],
-  "notes": "Reconstruido en Fase 3 (2026-07-09): 490 reglas direccionales (245 pares x 2 direcciones) sobre 17.009 facturas con 2+ productos distintos, min_support=0.005. Se descubrió y corrigió una fuga adicional durante esta reconstrucción: el centinela producto_sk=-1 aparecía como pseudo-producto en las reglas (item_A='-1' con lift~1.34 en la primera corrida) porque fetch_market_basket no lo excluía; corregido en ml/src/data/make_dataset.py. Verificado manualmente: sin filas con codart='-1' en la corrida final; lifts observados entre ~8.8 y ~26.9 (afinidad real, no solo popularidad)."
+  "notes": "v0.2.0 en DRAFT (Fase 2, 2026-07-13, contrato-primero D-2, ANTES de re-entrenar): EDA en ml/notebooks/eda_cross_selling.py sobre 463.214 líneas de venta válidas / 234.774 facturas (2018-01-02 a 2026-07-13). Hallazgos que fijan el grid experimental de Fase 3: (1) solo 44,7% de las facturas tienen 2+ productos distintos (universo útil para reglas); (2) concentración Pareto fuerte -- el 5% de productos (317 de 6.340 codart) concentra 80,6% de las líneas, lo que favorece a las estrategias basadas en reglas/popularidad sobre catálogos de cola larga; (3) estabilidad temporal MODERADA de las co-ocurrencias: solo 33% (10/30) de los pares más frecuentes de 2024 siguen en el top-30 de 2026 -- justifica probar ventanas de 1-3 años en vez de todo el histórico o solo el último trimestre; (4) afinidad por sucursal fuertemente LOCAL: 0/20 de intersección entre el top-20 de pares de las 2 sucursales de mayor volumen -- señal real de heterogeneidad geográfica que el modelo global no captura (documentado como limitación conocida, no resuelta en este contrato: el módulo sirve un modelo global único, igual que v0.1.0). Grid fijado para Fase 3: min_support en {0.001, 0.003, 0.005}, umbral de lift en {ninguno, 1.5}, ventana en {2 años, 3 años, todo el histórico}, granularidad codart (se descarta clase/codgrupo como granularidad única: solo 22 categorías, demasiado grueso para una sugerencia útil de venta cruzada). Este bloque se completa con los resultados reales del backtest al pasar el contrato a `active`."
 }

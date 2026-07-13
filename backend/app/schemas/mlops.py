@@ -7,3 +7,9 @@ class MLOpsStatusResponse(BaseModel):
     last_run: str | None
     last_status: str
     logs: list[str]
+
+
+class ModelStatusResponse(BaseModel):
+    name: str
+    r2: float | None
+    status: str

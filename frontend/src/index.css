@@ -29,6 +29,31 @@
   /* Data provenance semantics: cyan = warehouse/live truth, amber = model/predicted */
   --color-provenance-live: hsl(189, 94%, 43%);
   --color-provenance-ml: hsl(43, 96%, 56%);
+
+  /* Categorical chart palette — contrasted against bg-surface, replaces hex hardcodes */
+  --color-chart-1: hsl(217, 91%, 60%);
+  --color-chart-2: hsl(160, 84%, 39%);
+  --color-chart-3: hsl(43, 96%, 56%);
+  --color-chart-4: hsl(262, 83%, 68%);
+  --color-chart-5: hsl(330, 81%, 60%);
+  --color-chart-6: hsl(189, 94%, 43%);
+  --color-chart-7: hsl(24, 95%, 58%);
+  --color-chart-8: hsl(84, 60%, 50%);
+
+  /* Recharts chrome */
+  --color-chart-grid: hsl(217, 33%, 18%);
+  --color-chart-axis: hsl(215, 20%, 45%);
+
+  /* Elevations and focus */
+  --color-bg-overlay: hsl(222, 47%, 4%, 0.7);
+  --ring-focus: hsl(189, 94%, 43%, 0.6);
+
+  /* Motion tokens */
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-panel: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 150ms;
+  --duration-base: 300ms;
+  --duration-slow: 500ms;
 }
 
 @layer base {
@@ -70,17 +95,69 @@
   0%   { background-position: -400px 0; }
   100% { background-position: 400px 0; }
 }
+@keyframes route-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes drawer-enter {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes overlay-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes toast-enter {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes count-tick {
+  from { opacity: 0.4; }
+  to   { opacity: 1; }
+}
+@keyframes tab-indicator {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 
 @layer utilities {
   .animate-fade-in-up  { animation: fade-in-up  0.4s ease-out both; }
   .animate-fade-in     { animation: fade-in     0.3s ease-out both; }
   .animate-pulse-slow  { animation: pulse-slow  2.5s ease-in-out infinite; }
+  .animate-route-enter { animation: route-enter var(--duration-base) var(--ease-out-soft) both; }
+  .animate-drawer-enter { animation: drawer-enter var(--duration-slow) var(--ease-in-out-panel) both; }
+  .animate-overlay-enter { animation: overlay-enter var(--duration-base) var(--ease-out-soft) both; }
+  .animate-toast-enter { animation: toast-enter var(--duration-base) var(--ease-out-soft) both; }
+  .animate-row-fade    { animation: fade-in var(--duration-fast) var(--ease-out-soft) both; }
+  .animate-tab-indicator { animation: tab-indicator var(--duration-fast) var(--ease-out-soft) both; }
 
   /* Staggered children delays */
   .stagger-1 { animation-delay: 0.05s; }
   .stagger-2 { animation-delay: 0.10s; }
   .stagger-3 { animation-delay: 0.15s; }
   .stagger-4 { animation-delay: 0.20s; }
+
+  /* Orchestrated stagger: apply to a container, each direct child staggers via nth-child
+     instead of pages hand-computing animDelay. */
+  .stagger-children > * {
+    animation: fade-in-up var(--duration-base) var(--ease-out-soft) both;
+  }
+  .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger-children > *:nth-child(2) { animation-delay: 60ms; }
+  .stagger-children > *:nth-child(3) { animation-delay: 120ms; }
+  .stagger-children > *:nth-child(4) { animation-delay: 180ms; }
+  .stagger-children > *:nth-child(5) { animation-delay: 240ms; }
+  .stagger-children > *:nth-child(6) { animation-delay: 300ms; }
+  .stagger-children > *:nth-child(n+7) { animation-delay: 340ms; }
+
+  /* Accessible focus ring — replaces ad-hoc hover-only borders on interactive elements */
+  .focus-ring {
+    outline: none;
+  }
+  .focus-ring:focus-visible {
+    box-shadow: 0 0 0 2px var(--color-bg-base), 0 0 0 4px var(--ring-focus);
+    border-radius: 8px;
+  }
 
   /* Skeleton shimmer */
   .skeleton {
@@ -103,7 +180,9 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .animate-fade-in-up, .animate-fade-in, .animate-pulse-slow, .skeleton {
+    .animate-fade-in-up, .animate-fade-in, .animate-pulse-slow, .skeleton,
+    .animate-route-enter, .animate-drawer-enter, .animate-overlay-enter,
+    .animate-toast-enter, .animate-row-fade, .animate-tab-indicator, .stagger-children > * {
       animation: none;
     }
   }

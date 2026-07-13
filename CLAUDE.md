@@ -1,7 +1,7 @@
 # CLAUDE.md — Contexto del Proyecto
 
 > **Proyecto:** Plataforma Inteligente de Analítica Empresarial y Predicción de Ventas para Empresas Multisucursal (proyecto de tesis).
-> **Última actualización de este documento:** 2026-07-10 (decomisión de `goals_rf`, ver `docs/auditoria/20_decomision_goals_rf.md`).
+> **Última actualización de este documento:** 2026-07-12 (predicción de compras del próximo mes por categoría + paginación global en Bodega, ver `docs/auditoria/24_prediccion_categoria_paginacion.md`).
 
 ## Descripción del proyecto
 
@@ -162,7 +162,7 @@ Validaciones existentes:
 - **Control:** `edw.etl_control` (idempotencia/auditoría del ETL).
 - **Pipelines / entrypoints:** `etl/orchestrator.py` (ETL completo), `ml/main.py` (entrena los 6 modelos), `ml/publish_models.py` (recarga el backend). Las metas comerciales se generan desde el backend (`GoalMLService.generate_proposals`, `POST /gerencia/goals/generate`), no desde un task del ETL -- `docs/matriz_trazabilidad.md`/versiones previas de este documento referenciaban un `etl/tasks/generar_metas_operativas.py` que no existe en el repositorio (inconsistencia ya corregida aquí, ver `docs/auditoria/20_...md`).
 - **Modelos ML (6, en `ml/models/*.pkl`, servidos por `backend/app/ml/`):** `sales_rf_model` / `sales_best_model` (predicción de ventas — Gerencia), `demand_rf_model` / `demand_best_model` (demanda — Bodega), `kmeans_rfm_model` (segmentación RFM, K=4 — Ventas), `churn_classifier` / `churn_best_classifier` (riesgo de fuga), `association_rules` (Apriori, venta cruzada), `isolation_forest_model` (anomalías — Admin). El modelo de metas (`goals_rf`) fue decomisionado (docs/auditoria/20_...md): Metas y Comisiones usa solo estadística pura.
-- **API (prefijo `/api/v1`):** `/auth`, `/users`, `/roles`, `/analytics` (Gerencia), `/analytics/bodega`, `/analytics/ventas`, `/analytics/admin`, `/admin/modelos` (MLOps), `/gerencia/goals`. Salud en `/health`; Swagger en `/docs`.
+- **API (prefijo `/api/v1`):** `/auth`, `/users`, `/roles`, `/analytics` (Gerencia), `/analytics/bodega`, `/analytics/ventas`, `/analytics/admin`, `/admin/modelos` (MLOps), `/gerencia/goals`. Salud en `/health`; Swagger en `/docs`. El módulo Bodega (docs/auditoria/23_modulo_bodega.md, extensión en docs/auditoria/24_prediccion_categoria_paginacion.md) expone bajo `/analytics/bodega`: `/filtros`, `/kpis`, `/salidas-forecast`, `/prediccion-compras-mes`, `/rotacion-matriz`, `/top-productos`, `/salidas-categoria`, `/stock-reorden`, `/necesidad-compra`, `/inventario-matriz`, `/transferencias-sugeridas`, `/notificaciones`, `/reportes/{tipo}[/excel]` — todo estadística sobre el EDW salvo el forecast por producto (`/salidas-forecast?producto_cod=...`) y `/prediccion-compras-mes` (predicción de compras del mes siguiente por categoría, con drill-down a los top artículos), que reutilizan `demand_rf` (sin modelos ML nuevos); umbrales configurables `BODEGA_*` en `backend/app/core/config.py` (reglas RN-B1..B7 en `docs/auditoria/02_reglas_negocio_validadas.md` §16). Paginación genérica reutilizable (`Page[T]`/`PaginationParams`, `backend/app/schemas/pagination.py`, espejo en `frontend/src/types/pagination.ts` + `components/ui/Pagination.tsx` + `hooks/usePagination.ts`) aplicada a `/stock-reorden`, `/necesidad-compra` (solo `recomendados`), `/inventario-matriz` y `/transferencias-sugeridas`.
 
 ## Dependencias
 

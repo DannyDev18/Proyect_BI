@@ -1,5 +1,5 @@
 import { api } from './http';
-import type { AnomaliaResponse } from '../types/admin';
+import type { AnomaliaResponse, AuditLogEntry, ModelStatus } from '../types/admin';
 
 export const detectAnomaly = (transaccion_id: string) =>
   api.get<AnomaliaResponse>('/api/v1/analytics/admin/anomalies', {
@@ -7,4 +7,10 @@ export const detectAnomaly = (transaccion_id: string) =>
   });
 
 export const getMLOpsStatus = () =>
-  api.get('/api/v1/admin/mlops/status');
+  api.get('/api/v1/admin/modelos/status');
+
+export const getModelsStatus = () =>
+  api.get<ModelStatus[]>('/api/v1/admin/modelos/models');
+
+export const getAuditLogs = (limit = 50) =>
+  api.get<AuditLogEntry[]>('/api/v1/analytics/admin/audit-logs', { params: { limit } });

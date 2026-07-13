@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
+import { chartTheme } from '../../utils/chartTheme';
 
 interface GoalProgressGaugeProps {
   /** Porcentaje de cumplimiento, 0-100+ (puede superar 100 si se sobrecumplió la meta). */
@@ -17,10 +18,10 @@ interface Zone {
 // commission_engine.py (UMBRAL_CERCA/META/EXCELENTE): las fronteras del arco codifican
 // los umbrales reales de comisión, no son decorativas.
 const ZONES: Zone[] = [
-  { from: 0, to: 0.8, color: '#ef4444' },   // Lejos -- red-500
-  { from: 0.8, to: 0.9, color: '#f59e0b' }, // Cerca -- amber-500
-  { from: 0.9, to: 1.0, color: '#22d3ee' }, // Meta -- cyan-400
-  { from: 1.0, to: 1.3, color: '#22c55e' }, // Excelente -- green-500
+  { from: 0, to: 0.8, color: chartTheme.danger },  // Lejos
+  { from: 0.8, to: 0.9, color: chartTheme.ml },    // Cerca
+  { from: 0.9, to: 1.0, color: chartTheme.live },  // Meta
+  { from: 1.0, to: 1.3, color: chartTheme.success }, // Excelente
 ];
 const DOMAIN_MAX = 1.3;
 const BOUNDARIES = [0, 0.8, 0.9, 1.0, 1.3];
@@ -87,11 +88,11 @@ export const GoalProgressGauge = ({ pctCumplimiento, height = 200 }: GoalProgres
       .attr('y1', 0)
       .attr('x2', 0)
       .attr('y2', -4)
-      .attr('stroke', '#f8fafc')
+      .attr('stroke', chartTheme.needle)
       .attr('stroke-width', 3)
       .attr('stroke-linecap', 'round');
 
-    g.append('circle').attr('r', 5).attr('fill', '#f8fafc').attr('stroke', '#0f172a').attr('stroke-width', 1.5);
+    g.append('circle').attr('r', 5).attr('fill', chartTheme.needle).attr('stroke', chartTheme.cardBg).attr('stroke-width', 1.5);
 
     if (prefersReducedMotion) {
       needle.attr('x2', targetX).attr('y2', targetY);

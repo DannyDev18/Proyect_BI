@@ -9,8 +9,11 @@ import { useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategorie
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
-import { fmt, fmtFull, fmtMoney, formatEjeFecha, pct } from '../utils/format';
-import { chartTooltipStyle, COLORS } from '../utils/chartTheme';
+import { Select } from '../components/ui/Select';
+import { ChartTooltip } from '../components/ui/ChartTooltip';
+import { ErrorState } from '../components/ui/ErrorState';
+import { fmt, fmtMoney, formatEjeFecha, pct } from '../utils/format';
+import { chartTheme, colorByIndex, axisTick } from '../utils/chartTheme';
 
 export const DashboardGerencia = () => {
   const [filters, setFilters] = useState({
@@ -30,7 +33,7 @@ export const DashboardGerencia = () => {
   const { data: almacenesLista } = useAlmacenes();
 
   // Calcular ingresos totales sumando todas las sucursales si existen
-  const ingresosTotales = kpi.data?.ventas_por_sucursal 
+  const ingresosTotales = kpi.data?.ventas_por_sucursal
     ? Object.values(kpi.data.ventas_por_sucursal).reduce((a, b) => a + b, 0)
     : 0;
 
@@ -39,7 +42,7 @@ export const DashboardGerencia = () => {
   const donutData = kpi.data?.ventas_por_vendedor
     ? Object.entries(kpi.data.ventas_por_vendedor).map(([name, value]) => ({ name, value }))
     : [];
-      
+
   const donutTitle = "Distribución por Vendedor";
 
   const salud = kpi.data?.roi_estimado;
@@ -66,59 +69,62 @@ export const DashboardGerencia = () => {
           <Filter className="w-4 h-4" />
           <span className="text-sm font-medium">Filtros:</span>
         </div>
-        
-        <input 
-          type="date" 
+
+        <input
+          type="date"
           value={filters.start_date}
           onChange={(e) => setFilters(f => ({ ...f, start_date: e.target.value }))}
-          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus:outline-none focus:border-teal-400"
+          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus-ring"
           title="Fecha de Inicio"
         />
         <span className="text-slate-500">-</span>
-        <input 
-          type="date" 
+        <input
+          type="date"
           value={filters.end_date}
           onChange={(e) => setFilters(f => ({ ...f, end_date: e.target.value }))}
-          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus:outline-none focus:border-teal-400"
+          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus-ring"
           title="Fecha de Fin"
         />
 
-        <select
+        <Select
+          aria-label="Filtrar por vendedor"
           value={filters.vendedor}
           onChange={(e) => setFilters(f => ({ ...f, vendedor: e.target.value }))}
-          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus:outline-none focus:border-teal-400 min-w-[150px]"
+          className="min-w-[150px]"
         >
           <option value="">Todos los Vendedores</option>
           {vendedoresLista?.map(vend => (
             <option key={vend} value={vend}>{vend}</option>
           ))}
-        </select>
+        </Select>
 
-        <select
+        <Select
+          aria-label="Filtrar por categoría"
           value={filters.categoria}
           onChange={(e) => setFilters(f => ({ ...f, categoria: e.target.value }))}
-          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus:outline-none focus:border-teal-400 min-w-[150px]"
+          className="min-w-[150px]"
         >
           <option value="">Todas las Categorías</option>
           {categoriasLista?.map(cat => (
             <option key={cat} value={cat}>{cat}</option>
           ))}
-        </select>
+        </Select>
 
-        <select
+        <Select
+          aria-label="Filtrar por almacén"
           value={filters.almacen}
           onChange={(e) => setFilters(f => ({ ...f, almacen: e.target.value }))}
-          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus:outline-none focus:border-teal-400 min-w-[150px]"
+          className="min-w-[150px]"
         >
           <option value="">Todos los Almacenes</option>
           {almacenesLista?.map(alm => (
             <option key={alm} value={alm}>{alm}</option>
           ))}
-        </select>
+        </Select>
       </div>
 
       {/* KPI Row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children">
         {kpi.loading ? (
           <>
             <KpiCardSkeleton />
@@ -127,8 +133,8 @@ export const DashboardGerencia = () => {
             <KpiCardSkeleton />
           </>
         ) : kpi.error ? (
-          <div className="col-span-4 card p-6 text-center text-red-400 text-sm">
-            Error al cargar KPIs: {kpi.error}
+          <div className="col-span-4">
+            <ErrorState message={`Error al cargar KPIs: ${kpi.error}`} onRetry={kpi.refetch} />
           </div>
         ) : (
           <>
@@ -178,7 +184,7 @@ export const DashboardGerencia = () => {
                       key={g}
                       type="button"
                       onClick={() => setGranularidad(g)}
-                      className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+                      className={`px-3 py-1 text-xs font-medium rounded-full transition-colors focus-ring ${
                         granularidad === g ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
@@ -195,67 +201,79 @@ export const DashboardGerencia = () => {
                 >
                   <defs>
                     <linearGradient id="gradHist" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                      <stop offset="5%" stopColor={chartTheme.palette[0]} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={chartTheme.palette[0]} stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="gradPred" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.4} />
-                      <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
+                      <stop offset="5%" stopColor={chartTheme.live} stopOpacity={0.4} />
+                      <stop offset="95%" stopColor={chartTheme.live} stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
                   <XAxis
                     dataKey="fecha"
-                    stroke="#334155"
-                    tick={{ fill: '#64748b', fontSize: 11 }}
+                    stroke={chartTheme.grid}
+                    tick={axisTick}
                     tickLine={false}
                     axisLine={false}
                     tickFormatter={(v) => formatEjeFecha(v, granularidad)}
                     minTickGap={30}
                   />
                   <YAxis
-                    stroke="#334155"
-                    tick={{ fill: '#64748b', fontSize: 11 }}
+                    stroke={chartTheme.grid}
+                    tick={axisTick}
                     tickLine={false}
                     axisLine={false}
                     tickFormatter={(v) => `$${v / 1000}k`}
                     width={55}
                   />
-                  <Tooltip {...chartTooltipStyle} formatter={(value, name) => [`$${Number(value).toLocaleString(undefined, {minimumFractionDigits: 2})}`, name === 'monto_real' ? 'Real' : name === 'monto_predicho' ? 'Predicho' : name]} />
-                  <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }} />
-                  
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const rows = payload
+                        .filter((p) => p.value != null)
+                        .map((p) => ({
+                          label: p.name === 'monto_real' ? 'Real' : p.name === 'monto_predicho' ? 'Predicho' : String(p.name),
+                          value: `$${Number(p.value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+                          color: p.color,
+                        }));
+                      return <ChartTooltip title={formatEjeFecha(String(label), granularidad)} rows={rows} />;
+                    }}
+                  />
+                  <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px', color: chartTheme.axisLabel }} />
+
                   {/* Historic Area */}
                   <Area
                     connectNulls={true}
                     type="monotone"
                     dataKey="monto_real"
-                    stroke="#3b82f6"
+                    stroke={chartTheme.palette[0]}
                     strokeWidth={2.5}
                     fill="url(#gradHist)"
                     name="Histórico Real"
                     dot={false}
-                    activeDot={{ r: 4, fill: '#3b82f6', stroke: '#0f172a', strokeWidth: 2 }}
+                    activeDot={{ r: 4, fill: chartTheme.palette[0], stroke: chartTheme.cardBg, strokeWidth: 2 }}
                   />
-                  
+
                   {/* Prediction Area */}
                   <Area
                   connectNulls={true}
                     type="monotone"
                     dataKey="monto_predicho"
-                    stroke="#06b6d4"
+                    stroke={chartTheme.live}
                     strokeWidth={2.5}
                     strokeDasharray="5 5"
                     fill="url(#gradPred)"
                     name="Predicción Futura"
                     dot={false}
-                    activeDot={{ r: 6, fill: '#06b6d4', stroke: '#0f172a', strokeWidth: 2 }}
+                    activeDot={{ r: 6, fill: chartTheme.live, stroke: chartTheme.cardBg, strokeWidth: 2 }}
                   />
-                  
+
                   {/* Confidence Interval Lines */}
                   {pred.data.historial_y_prediccion.some(d => d.intervalo_superior) && (
                     <>
-                      <Area type="monotone" dataKey="intervalo_superior" stroke="#06b6d4" strokeWidth={1} strokeDasharray="3 3" fill="none" name="Límite Superior (95%)" dot={false} />
-                      <Area type="monotone" dataKey="intervalo_inferior" stroke="#06b6d4" strokeWidth={1} strokeDasharray="3 3" fill="none" name="Límite Inferior (95%)" dot={false} />
+                      <Area type="monotone" dataKey="intervalo_superior" stroke={chartTheme.live} strokeWidth={1} strokeDasharray="3 3" fill="none" name="Límite Superior (95%)" dot={false} />
+                      <Area type="monotone" dataKey="intervalo_inferior" stroke={chartTheme.live} strokeWidth={1} strokeDasharray="3 3" fill="none" name="Límite Inferior (95%)" dot={false} />
                     </>
                   )}
                 </AreaChart>
@@ -277,7 +295,7 @@ export const DashboardGerencia = () => {
                   </li>
                 ))}
               </ul>
-              
+
               {/* metricas llega vacía (todo null) cuando la serie filtrada no tiene datos:
                   el backend degrada con gracia en vez de responder 500 (doc 22). */}
               <div className="mt-6 pt-6 border-t border-slate-700/50 grid grid-cols-2 gap-4">
@@ -319,48 +337,76 @@ export const DashboardGerencia = () => {
         </div>
       )}
       {pred.error && (
-        <div className="card p-6 border border-rose-500/20 bg-rose-500/5 flex flex-col items-center">
-           <p className="text-rose-400 font-medium">Error de conexión al modelo</p>
-           <p className="text-sm text-rose-400/80">{pred.error}</p>
-        </div>
+        <ErrorState message={pred.error} onRetry={pred.refetch} />
       )}
 
       {/* Secondary Charts */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Ingresos por Categoría */}
-        <ChartCard title="Ingresos por Categoría" badge={{ label: 'DW PostgreSQL', variant: 'hist' }} loading={revCat.loading}>
+        <ChartCard
+          title="Ingresos por Categoría"
+          badge={{ label: 'DW PostgreSQL', variant: 'hist' }}
+          loading={revCat.loading}
+          error={revCat.error ?? undefined}
+          onRetry={revCat.refetch}
+          empty={!revCat.loading && !revCat.error && (revCat.data ?? []).length === 0}
+        >
           <ResponsiveContainer width="100%" height={280}>
             <BarChart
               data={revCat.data || []}
               layout="vertical"
               margin={{ top: 4, right: 10, left: 10, bottom: 4 }}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} horizontal={false} />
               <XAxis type="number" hide />
               <YAxis
                 type="category"
                 dataKey="cat"
-                tick={{ fill: '#94a3b8', fontSize: 11 }}
+                tick={{ fill: chartTheme.axisLabel, fontSize: 11 }}
                 width={100}
                 axisLine={false}
                 tickLine={false}
               />
               <Tooltip
-                {...chartTooltipStyle}
-                cursor={{ fill: '#1e293b' }}
-                formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Ingresos']}
+                cursor={{ fill: chartTheme.cursor }}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <ChartTooltip
+                      title={label}
+                      rows={[{ label: 'Ingresos', value: `$${Number(payload[0].value).toLocaleString()}`, color: chartTheme.live }]}
+                    />
+                  );
+                }}
               />
-              <Bar dataKey="v" fill="#06b6d4" radius={[0, 5, 5, 0]} barSize={18} />
+              <Bar dataKey="v" fill={chartTheme.live} radius={[0, 5, 5, 0]} barSize={18} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
 
         {/* Distribución por Sucursal/Vendedor */}
-        <ChartCard title={donutTitle} badge={{ label: 'DW PostgreSQL', variant: 'hist' }} loading={kpi.loading}>
+        <ChartCard
+          title={donutTitle}
+          badge={{ label: 'DW PostgreSQL', variant: 'hist' }}
+          loading={kpi.loading}
+          error={kpi.error ?? undefined}
+          onRetry={kpi.refetch}
+          empty={!kpi.loading && !kpi.error && donutData.length === 0}
+        >
           <ResponsiveContainer width="100%" height={280}>
             <PieChart>
-              <Tooltip {...chartTooltipStyle} formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Ingresos']} />
-              <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: '11px', color: '#94a3b8' }} />
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <ChartTooltip
+                      title={payload[0].name}
+                      rows={[{ label: 'Ingresos', value: `$${Number(payload[0].value).toLocaleString()}` }]}
+                    />
+                  );
+                }}
+              />
+              <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: '11px', color: chartTheme.axisLabel }} />
               <Pie
                 data={donutData}
                 dataKey="value"
@@ -372,7 +418,7 @@ export const DashboardGerencia = () => {
                 paddingAngle={4}
               >
                 {donutData.map((_, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  <Cell key={`cell-${index}`} fill={colorByIndex(index)} />
                 ))}
               </Pie>
             </PieChart>

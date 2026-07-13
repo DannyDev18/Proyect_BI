@@ -5,6 +5,7 @@ refactor. Cambiarlo de esquema es una decisión de infraestructura de datos (DDL
 fuera de alcance de un refactor de arquitectura de código -- se documenta aquí en vez
 de silenciarlo."""
 import logging
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -15,6 +16,37 @@ logger = logging.getLogger("Backend.AuditRepository")
 class AuditRepository:
     def __init__(self, db: Session):
         self.db = db
+
+    def get_recent(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Últimos eventos de `edw.Fact_Logs_Auditoria` (M-02, DashboardAdmin real en vez
+        de mocks). No hay columna de severidad en el hecho -- se infiere de
+        `tipo_operacion` en el servicio, no aquí (esta capa solo trae datos crudos)."""
+        rows = self.db.execute(
+            text("""
+                SELECT
+                    fla.fecha_carga,
+                    fla.tipo_operacion,
+                    fla.tabla_afectada,
+                    fla.modulo,
+                    du.codusu
+                FROM edw.Fact_Logs_Auditoria fla
+                LEFT JOIN edw.dim_usuario du ON du.usuario_sk = fla.usuario_sk
+                ORDER BY fla.log_sk DESC
+                LIMIT :limit
+            """),
+            {"limit": limit},
+        ).fetchall()
+
+        return [
+            {
+                "fecha_carga": r[0],
+                "tipo_operacion": r[1],
+                "tabla_afectada": r[2],
+                "modulo": r[3],
+                "codusu": r[4],
+            }
+            for r in rows
+        ]
 
     def log_action(self, username: str, operacion: str, tabla_afectada: str, modulo: str) -> None:
         try:

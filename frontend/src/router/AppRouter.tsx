@@ -10,6 +10,8 @@ import { DashboardAdmin } from '../pages/DashboardAdmin.tsx';
 import { DashboardGerencia } from '../pages/DashboardGerencia.tsx';
 import { DashboardMetas } from '../pages/DashboardMetas.tsx';
 import { DashboardBodega } from '../pages/DashboardBodega.tsx';
+import { BodegaAlmacenes } from '../pages/BodegaAlmacenes.tsx';
+import { BodegaReportes } from '../pages/BodegaReportes.tsx';
 import { DashboardVentas } from '../pages/DashboardVentas.tsx';
 import { DashboardMetasVendedor } from '../pages/DashboardMetasVendedor.tsx';
 import { AccessDenied } from '../pages/AccessDenied.tsx';
@@ -85,11 +87,23 @@ export const AppRouter = () => {
             } />
           </Route>
 
-          <Route path="bodega" element={
-            <ProtectedRoute routeKey="bodega">
-              <DashboardBodega />
-            </ProtectedRoute>
-          } />
+          <Route path="bodega">
+            <Route index element={
+              <ProtectedRoute routeKey="bodega">
+                <DashboardBodega />
+              </ProtectedRoute>
+            } />
+            <Route path="almacenes" element={
+              <ProtectedRoute routeKey="bodega.almacenes">
+                <BodegaAlmacenes />
+              </ProtectedRoute>
+            } />
+            <Route path="reportes" element={
+              <ProtectedRoute routeKey="bodega.reportes">
+                <BodegaReportes />
+              </ProtectedRoute>
+            } />
+          </Route>
 
           <Route path="ventas">
             <Route index element={

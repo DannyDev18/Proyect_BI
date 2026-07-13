@@ -14,6 +14,7 @@ class UserOut(BaseModel):
     email: EmailStr
     sucursal: Optional[str] = None
     id_vendedor_origen: Optional[str] = None
+    codalm: Optional[str] = None
     es_activo: bool
     created_at: datetime
     updated_at: datetime
@@ -33,6 +34,7 @@ class UserMe(BaseModel):
     email: EmailStr
     sucursal: Optional[str] = None
     id_vendedor_origen: Optional[str] = None
+    codalm: Optional[str] = None
     es_activo: bool
     role: RoleOut
 
@@ -43,13 +45,22 @@ class UserMe(BaseModel):
 # ── Schemas de entrada (request) ──────────────────────────────────────────────
 
 class UserCreate(BaseModel):
-    """Schema para crear un nuevo usuario. Solo el administrador puede usarlo."""
+    """Schema para crear un nuevo usuario. Solo el administrador puede usarlo.
+
+    Enlace automático por rol (UserService._validate_role_link):
+    - rol "ventas": `id_vendedor_origen` (codven) es obligatorio y se valida contra
+      edw.Dim_Vendedor -- debe existir y estar `activo`.
+    - rol "bodega": `codalm` es obligatorio y se valida contra edw.Dim_Almacen,
+      salvo que `todos_los_almacenes=True` (acceso a todos los almacenes, `codalm=NULL`).
+    """
     nombre: str
     email: EmailStr
     password: str
     rol_id: int
     sucursal: Optional[str] = None
     id_vendedor_origen: Optional[str] = None
+    codalm: Optional[str] = None
+    todos_los_almacenes: Optional[bool] = False
     es_activo: Optional[bool] = True
 
     @field_validator("password")
@@ -68,6 +79,8 @@ class UserUpdate(BaseModel):
     rol_id: Optional[int] = None
     sucursal: Optional[str] = None
     id_vendedor_origen: Optional[str] = None
+    codalm: Optional[str] = None
+    todos_los_almacenes: Optional[bool] = None
     es_activo: Optional[bool] = None
 
     @field_validator("password")

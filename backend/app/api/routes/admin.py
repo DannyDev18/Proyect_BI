@@ -4,9 +4,9 @@
 de negocio -- ya vivía bajo el prefijo /admin/ antes del refactor."""
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import PredictionServiceDep, audit_log
+from app.api.dependencies import AuditServiceDep, PredictionServiceDep, audit_log
 from app.core.deps import PermissionChecker
-from app.schemas.analytics import AnomaliaResponse
+from app.schemas.analytics import AnomaliaResponse, AuditLogEntryResponse
 
 router = APIRouter()
 
@@ -24,3 +24,12 @@ def detect_transactional_anomaly(
     """Ejecuta el modelo Isolation Forest sobre una transacción para calificarla como anomalía."""
     res = prediction_service.get_anomaly_status(transaccion_id)
     return AnomaliaResponse(transaccion_id=transaccion_id, score=res["score"], es_anomalia=res["es_anomalia"])
+
+
+@router.get(
+    "/audit-logs", response_model=list[AuditLogEntryResponse], dependencies=[Depends(admin_only)],
+)
+def get_audit_logs(audit_service: AuditServiceDep, limit: int = 50) -> list[AuditLogEntryResponse]:
+    """Últimos eventos de `edw.Fact_Logs_Auditoria` (M-02: reemplaza el mock
+    `AUDIT_ENTRIES` del `DashboardAdmin`)."""
+    return [AuditLogEntryResponse(**entry) for entry in audit_service.get_recent_logs(limit=limit)]

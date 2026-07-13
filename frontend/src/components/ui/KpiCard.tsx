@@ -1,4 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
+import { ArrowDown, ArrowUp, Minus } from 'lucide-react';
+import { CountUp } from './CountUp';
 
 interface KpiCardProps {
   title: string;
@@ -11,15 +13,16 @@ interface KpiCardProps {
 }
 
 const trendConfig = {
-  up:      { bg: 'bg-cyan-500/10 border-cyan-500/20', text: 'text-cyan-400', icon: '↑' },
-  down:    { bg: 'bg-red-500/10  border-red-500/20',  text: 'text-red-400',  icon: '↓' },
-  neutral: { bg: 'bg-slate-700/30 border-slate-600/20', text: 'text-slate-400', icon: '—' },
+  up:      { bg: 'bg-cyan-500/10 border-cyan-500/20', text: 'text-cyan-400', Icon: ArrowUp },
+  down:    { bg: 'bg-red-500/10  border-red-500/20',  text: 'text-red-400',  Icon: ArrowDown },
+  neutral: { bg: 'bg-slate-700/30 border-slate-600/20', text: 'text-slate-400', Icon: Minus },
 };
 
 export const KpiCard = ({
   title, value, subValue, icon: Icon, trend = 'neutral', animDelay = 0,
 }: KpiCardProps) => {
   const t = trendConfig[trend];
+  const TrendIcon = t.Icon;
   return (
     <div
       className="animate-fade-in-up card card-hover p-6 group relative"
@@ -27,16 +30,18 @@ export const KpiCard = ({
     >
       <div className="flex justify-between items-start mb-4 relative z-10">
         <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">{title}</p>
-        <div className={`p-2.5 rounded-xl border ${t.bg}`}>
+        <div className={`p-2.5 rounded-xl border transition-shadow duration-150 group-hover:glow-accent-sm ${t.bg}`}>
           <Icon size={18} className={t.text} />
         </div>
       </div>
 
       <div className="relative z-10">
-        <p className="font-mono text-3xl font-semibold text-slate-100 tracking-tight">{value}</p>
+        <p className="font-mono text-3xl font-semibold text-slate-100 tracking-tight">
+          {typeof value === 'number' ? <CountUp value={value} /> : value}
+        </p>
         {subValue && (
-          <p className={`mt-2 text-xs font-medium ${t.text}`}>
-            {trend !== 'neutral' && <span className="mr-1">{t.icon}</span>}
+          <p className={`mt-2 text-xs font-medium flex items-center gap-1 ${t.text}`}>
+            {trend !== 'neutral' && <TrendIcon size={12} />}
             {subValue}
           </p>
         )}

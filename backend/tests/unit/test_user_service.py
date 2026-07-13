@@ -20,8 +20,13 @@ def role_repo():
 
 
 @pytest.fixture
-def service(user_repo, role_repo):
-    return UserService(user_repo, role_repo)
+def catalog_repo():
+    return MagicMock()
+
+
+@pytest.fixture
+def service(user_repo, role_repo, catalog_repo):
+    return UserService(user_repo, role_repo, catalog_repo)
 
 
 def test_create_falla_si_email_ya_existe(service, user_repo):
@@ -56,6 +61,105 @@ def test_create_ok_delega_al_repositorio(service, user_repo, role_repo):
     assert result is created
     kwargs = user_repo.create.call_args.kwargs
     assert kwargs["email"] == "juan@empresa.com"  # normalizado a minúsculas
+
+
+def test_create_ventas_falla_si_vendedor_no_existe(service, user_repo, role_repo, catalog_repo):
+    user_repo.get_by_email.return_value = None
+    role_repo.get_by_id.return_value = MagicMock(id=2, nombre="ventas")
+    catalog_repo.get_vendedor_activo.return_value = None
+    user_in = UserCreate(
+        nombre="Juan", email="juan@empresa.com", password="password123",
+        rol_id=2, id_vendedor_origen="V999",
+    )
+
+    with pytest.raises(ValidationError):
+        service.create(user_in)
+    user_repo.create.assert_not_called()
+
+
+def test_create_ventas_falla_si_vendedor_inactivo(service, user_repo, role_repo, catalog_repo):
+    user_repo.get_by_email.return_value = None
+    role_repo.get_by_id.return_value = MagicMock(id=2, nombre="ventas")
+    catalog_repo.get_vendedor_activo.return_value = {"codven": "V001", "activo": False}
+    user_in = UserCreate(
+        nombre="Juan", email="juan@empresa.com", password="password123",
+        rol_id=2, id_vendedor_origen="V001",
+    )
+
+    with pytest.raises(ValidationError):
+        service.create(user_in)
+
+
+def test_create_ventas_ok_enlaza_vendedor_activo(service, user_repo, role_repo, catalog_repo):
+    user_repo.get_by_email.return_value = None
+    role_repo.get_by_id.return_value = MagicMock(id=2, nombre="ventas")
+    catalog_repo.get_vendedor_activo.return_value = {"codven": "V001", "activo": True}
+    created = MagicMock(id=5)
+    user_repo.create.return_value = created
+    user_repo.get_by_id.return_value = created
+
+    user_in = UserCreate(
+        nombre="Juan", email="juan@empresa.com", password="password123",
+        rol_id=2, id_vendedor_origen="V001",
+    )
+    service.create(user_in)
+
+    kwargs = user_repo.create.call_args.kwargs
+    assert kwargs["id_vendedor_origen"] == "V001"
+    assert kwargs["codalm"] is None
+
+
+def test_create_bodega_falla_sin_almacen_ni_todos(service, user_repo, role_repo, catalog_repo):
+    user_repo.get_by_email.return_value = None
+    role_repo.get_by_id.return_value = MagicMock(id=4, nombre="bodega")
+    user_in = UserCreate(nombre="Ana", email="ana@empresa.com", password="password123", rol_id=4)
+
+    with pytest.raises(ValidationError):
+        service.create(user_in)
+
+
+def test_create_bodega_falla_si_almacen_no_existe(service, user_repo, role_repo, catalog_repo):
+    user_repo.get_by_email.return_value = None
+    role_repo.get_by_id.return_value = MagicMock(id=4, nombre="bodega")
+    catalog_repo.get_almacen.return_value = None
+    user_in = UserCreate(nombre="Ana", email="ana@empresa.com", password="password123", rol_id=4, codalm="ZZZ")
+
+    with pytest.raises(ValidationError):
+        service.create(user_in)
+
+
+def test_create_bodega_ok_enlaza_almacen(service, user_repo, role_repo, catalog_repo):
+    user_repo.get_by_email.return_value = None
+    role_repo.get_by_id.return_value = MagicMock(id=4, nombre="bodega")
+    catalog_repo.get_almacen.return_value = {"codalm": "A01", "nombre_almacen": "Bodega Central"}
+    created = MagicMock(id=6)
+    user_repo.create.return_value = created
+    user_repo.get_by_id.return_value = created
+
+    user_in = UserCreate(nombre="Ana", email="ana@empresa.com", password="password123", rol_id=4, codalm="A01")
+    service.create(user_in)
+
+    kwargs = user_repo.create.call_args.kwargs
+    assert kwargs["codalm"] == "A01"
+    assert kwargs["id_vendedor_origen"] is None
+
+
+def test_create_bodega_ok_todos_los_almacenes(service, user_repo, role_repo, catalog_repo):
+    user_repo.get_by_email.return_value = None
+    role_repo.get_by_id.return_value = MagicMock(id=4, nombre="bodega")
+    created = MagicMock(id=7)
+    user_repo.create.return_value = created
+    user_repo.get_by_id.return_value = created
+
+    user_in = UserCreate(
+        nombre="Ana", email="ana@empresa.com", password="password123",
+        rol_id=4, todos_los_almacenes=True,
+    )
+    service.create(user_in)
+
+    kwargs = user_repo.create.call_args.kwargs
+    assert kwargs["codalm"] is None
+    catalog_repo.get_almacen.assert_not_called()
 
 
 def test_deactivate_falla_si_ya_esta_desactivado(service, user_repo):

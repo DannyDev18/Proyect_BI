@@ -54,6 +54,34 @@ class Settings(BaseSettings):
     # existe, y trigger_retraining_pipeline() debe fallar con un mensaje claro.
     ML_SOURCE_DIR: str = os.getenv("ML_SOURCE_DIR", "/app/ml_src")
 
+    # ── Módulo Bodega (reglas RN-B1..B5, docs/auditoria/23_modulo_bodega.md) ──
+    # Umbrales del requerimiento docs/features/modulo_bodega.md §6.3/§3.2/§3.3;
+    # parametrizados por env para no hardcodearlos en el código (regla de CLAUDE.md).
+    BODEGA_LEAD_TIME_DIAS: int = int(os.getenv("BODEGA_LEAD_TIME_DIAS", "7"))
+    BODEGA_STOCK_SEGURIDAD_DIAS: int = int(os.getenv("BODEGA_STOCK_SEGURIDAD_DIAS", "5"))
+    BODEGA_DIAS_DEFICIT: int = int(os.getenv("BODEGA_DIAS_DEFICIT", "15"))
+    BODEGA_DIAS_COMPRA: int = int(os.getenv("BODEGA_DIAS_COMPRA", "20"))
+    BODEGA_DIAS_OBJETIVO_TRANSFERENCIA: int = int(os.getenv("BODEGA_DIAS_OBJETIVO_TRANSFERENCIA", "30"))
+    BODEGA_HORIZONTE_COMPRA_DIAS: int = int(os.getenv("BODEGA_HORIZONTE_COMPRA_DIAS", "30"))
+    BODEGA_HORIZONTE_PLAN_DIAS: int = int(os.getenv("BODEGA_HORIZONTE_PLAN_DIAS", "45"))
+    BODEGA_DIAS_EXCEDENTE: int = int(os.getenv("BODEGA_DIAS_EXCEDENTE", "60"))
+    BODEGA_DIAS_EXCESO: int = int(os.getenv("BODEGA_DIAS_EXCESO", "90"))
+    BODEGA_ROTACION_BUENA: float = float(os.getenv("BODEGA_ROTACION_BUENA", "4.0"))
+    BODEGA_ROTACION_REGULAR: float = float(os.getenv("BODEGA_ROTACION_REGULAR", "2.0"))
+    BODEGA_ROTACION_MIN_COMPRA: float = float(os.getenv("BODEGA_ROTACION_MIN_COMPRA", "3.0"))
+
+    # ── Predicción de compras del próximo mes por categoría (docs/auditoria/24) ──
+    # Top-N artículos por ventas de la categoría sobre los que corre `demand_rf`
+    # (walk-forward); cache en memoria por proceso para no recalcular 20 series por
+    # cada request mientras el EDW no cambie (se carga por lotes, no intra-hora).
+    BODEGA_TOP_ARTICULOS_PREDICCION: int = int(os.getenv("BODEGA_TOP_ARTICULOS_PREDICCION", "20"))
+    BODEGA_FORECAST_CACHE_TTL_MIN: int = int(os.getenv("BODEGA_FORECAST_CACHE_TTL_MIN", "60"))
+
+    # ── Módulo Venta Cruzada (RN-CS1/RN-CS2, docs/auditoria/25_modulo_cross_selling.md) ──
+    CROSS_SELL_TOP_N: int = int(os.getenv("CROSS_SELL_TOP_N", "5"))
+    CROSS_SELL_MIN_LIFT: float = float(os.getenv("CROSS_SELL_MIN_LIFT", "1.5"))
+    CROSS_SELL_PESO_MARGEN: float = float(os.getenv("CROSS_SELL_PESO_MARGEN", "0.3"))
+
     class Config:
         case_sensitive = True
 

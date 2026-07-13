@@ -64,15 +64,22 @@ export const Sidebar = () => {
                 end={item.subItems.length === 0}
                 to={item.path}
                 className={({ isActive }) =>
-                  `flex items-center px-3 py-2.5 rounded-lg transition-all duration-200 text-sm font-medium ${
+                  `relative flex items-center px-3 py-2.5 rounded-lg transition-all duration-200 text-sm font-medium focus-ring ${
                     isActive
                       ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
                       : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 border border-transparent'
                   }`
                 }
               >
-                <span className="mr-3">{item.icon}</span>
-                {item.label}
+                {({ isActive }) => (
+                  <>
+                    {isActive && (
+                      <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-cyan-400 animate-fade-in" />
+                    )}
+                    <span className="mr-3">{item.icon}</span>
+                    {item.label}
+                  </>
+                )}
               </NavLink>
               {item.subItems.length > 0 && (
                 <div className="ml-6 mt-1 space-y-1 border-l border-slate-800 pl-2">
@@ -82,7 +89,7 @@ export const Sidebar = () => {
                       key={sub.routeKey}
                       to={sub.path}
                       className={({ isActive }) =>
-                        `flex items-center px-3 py-2 rounded-lg transition-all duration-200 text-xs font-medium ${
+                        `flex items-center px-3 py-2 rounded-lg transition-all duration-200 text-xs font-medium focus-ring ${
                           isActive
                             ? 'text-teal-400 bg-teal-500/10 border border-teal-500/20'
                             : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
@@ -105,9 +112,9 @@ export const Sidebar = () => {
           onClick={closeSidebar}
           to="/settings" 
           className={({ isActive }) =>
-            `flex items-center px-3 py-2.5 rounded-lg transition-all duration-200 text-sm font-medium ${
-              isActive 
-                ? 'bg-slate-800/80 text-slate-200 border border-slate-700' 
+            `flex items-center px-3 py-2.5 rounded-lg transition-all duration-200 text-sm font-medium focus-ring ${
+              isActive
+                ? 'bg-slate-800/80 text-slate-200 border border-slate-700'
                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 border border-transparent'
             }`
           }

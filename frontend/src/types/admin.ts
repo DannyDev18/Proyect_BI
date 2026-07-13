@@ -16,6 +16,7 @@ export interface UserData {
   es_activo: boolean;
   sucursal: string | null;
   id_vendedor_origen: string | null;
+  codalm: string | null;
   role: { id: number; nombre: string };
   rol_id?: number;
 }
@@ -26,7 +27,14 @@ export interface UserPayload {
   rol_id: number;
   sucursal: string | null;
   id_vendedor_origen: string | null;
+  codalm: string | null;
+  todos_los_almacenes?: boolean;
   password?: string;
+}
+
+export interface AlmacenOption {
+  codalm: string;
+  nombre_almacen: string;
 }
 
 export interface ModelStatus {

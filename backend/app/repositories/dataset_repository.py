@@ -66,7 +66,15 @@ class DatasetRepository:
             return pd.read_sql(text(query), conn, params=params)
 
     def get_product_sales_history(self, producto_cod: str, limit_days: int = 100) -> pd.DataFrame:
-        """Serie diaria de unidades vendidas de un producto -- insumo de `predict_demand`."""
+        """Serie diaria de unidades vendidas de un producto -- insumo de `predict_demand`.
+
+        Usa `self.db.execute(...)` (no `self.db.connection()` + `pd.read_sql`): la
+        predicción de compras por categoría (docs/auditoria/24) llama este método hasta
+        `BODEGA_TOP_ARTICULOS_PREDICCION` veces en el mismo request/Session -- el patrón
+        `with self.db.connection() as conn:` cierra explícitamente la conexión ligada a
+        la Session ORM al salir del `with`, dejando cualquier `self.db.execute(...)`
+        posterior en el mismo request roto (`ResourceClosedError: This Connection is
+        closed`). `execute()` no tiene ese efecto secundario."""
         query = """
             SELECT f.fecha_completa as ds, SUM(v.cantidad) as y_quantity
             FROM edw.fact_ventas_detalle v
@@ -78,5 +86,5 @@ class DatasetRepository:
             ORDER BY f.fecha_completa DESC
             LIMIT :limit_days;
         """
-        with self.db.connection() as conn:
-            return pd.read_sql(text(query), conn, params={"prod": producto_cod, "limit_days": limit_days})
+        filas = self.db.execute(text(query), {"prod": producto_cod, "limit_days": limit_days}).mappings().all()
+        return pd.DataFrame(filas, columns=["ds", "y_quantity"])

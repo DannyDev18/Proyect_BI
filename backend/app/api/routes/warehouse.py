@@ -89,14 +89,14 @@ def get_kpis_bodega(
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
-    busqueda: str | None = None,
+    tipo_movimiento: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
 ) -> KpisBodegaResponse:
     """Los 6 KPIs del dashboard (§1.2), afectados por los filtros globales."""
     data = warehouse_service.get_kpis(
         sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
-        proveedor=proveedor, busqueda=busqueda,
+        proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
     )
     return KpisBodegaResponse(**data)
@@ -151,14 +151,14 @@ def get_rotacion_matriz(
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
-    busqueda: str | None = None,
+    tipo_movimiento: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
 ) -> RotacionMatrizResponse:
     """G2: matriz rotación × margen por producto (cuadrantes de prioridad)."""
     data = warehouse_service.get_rotacion_matriz(
         sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
-        proveedor=proveedor, busqueda=busqueda,
+        proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
     )
     return RotacionMatrizResponse(**data)
@@ -171,7 +171,7 @@ def get_top_productos(
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
-    busqueda: str | None = None,
+    tipo_movimiento: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
     limit: int = 20,
@@ -179,7 +179,7 @@ def get_top_productos(
     """G3: top N productos con mayor salida, con stock, días y tendencia."""
     data = warehouse_service.get_top_productos(
         sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
-        proveedor=proveedor, busqueda=busqueda,
+        proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         fecha_desde=fecha_desde, fecha_hasta=fecha_hasta, limit=min(limit, 100),
     )
     return [ProductoTopSalidas(**d) for d in data]
@@ -191,14 +191,14 @@ def get_salidas_categoria(
     sucursal_filtro: str | None = Depends(sucursal_bodega),
     almacen: str | None = None,
     proveedor: str | None = None,
-    busqueda: str | None = None,
+    tipo_movimiento: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
 ) -> list[CategoriaSalidas]:
     """G4: distribución de salidas por categoría con comparativa vs período anterior."""
     data = warehouse_service.get_salidas_categoria(
         sucursal=sucursal_filtro, almacen=almacen, proveedor=proveedor,
-        busqueda=busqueda, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
+        tipo_movimiento=tipo_movimiento, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
     )
     return [CategoriaSalidas(**d) for d in data]
 
@@ -211,13 +211,13 @@ def get_stock_reorden(
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
-    busqueda: str | None = None,
+    tipo_movimiento: str | None = None,
     solo_criticos: bool = False,
 ) -> Page[ProductoStockReorden]:
     """G5: estado de stock vs punto de reorden (RN-B1/B2). Paginado (docs/auditoria/24)."""
     pagina = warehouse_service.get_stock_reorden(
         pagination, sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
-        proveedor=proveedor, busqueda=busqueda, solo_criticos=solo_criticos,
+        proveedor=proveedor, tipo_movimiento=tipo_movimiento, solo_criticos=solo_criticos,
     )
     return Page(
         items=[ProductoStockReorden(**d) for d in pagina.items],
@@ -233,14 +233,14 @@ def get_necesidad_compra(
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
-    busqueda: str | None = None,
+    tipo_movimiento: str | None = None,
     horizonte_dias: int | None = None,
 ) -> NecesidadCompraResponse:
     """G6 y §3.3 (RN-B4): proyección de necesidad de compra. `horizonte_dias=45`
     produce el plan de fin de mes. `recomendados` paginado (docs/auditoria/24)."""
     data = warehouse_service.get_necesidad_compra(
         pagination, sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
-        proveedor=proveedor, busqueda=busqueda, horizonte_dias=horizonte_dias,
+        proveedor=proveedor, tipo_movimiento=tipo_movimiento, horizonte_dias=horizonte_dias,
     )
     recomendados = data["recomendados"]
     return NecesidadCompraResponse(
@@ -263,16 +263,18 @@ def get_inventario_matriz(
     warehouse_service: WarehouseServiceDep,
     sucursal_filtro: str | None = Depends(sucursal_bodega),
     pagination: PaginationParams = Depends(pagination_params),
+    almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
-    busqueda: str | None = None,
+    tipo_movimiento: str | None = None,
     estado: str | None = None,
 ) -> InventarioMatrizResponse:
     """§3.1: stock por producto en cada almacén, con estado (Crítico/Cerca/Seguro/Exceso).
-    Paginado (docs/auditoria/24)."""
+    Si se filtra por `almacen`, la matriz queda restringida a esa sola bodega (una
+    columna) en vez de mostrar todas. Paginado (docs/auditoria/24)."""
     data = warehouse_service.get_inventario_matriz(
-        pagination, sucursal=sucursal_filtro, categoria=categoria, proveedor=proveedor,
-        busqueda=busqueda, estado=estado,
+        pagination, sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
+        proveedor=proveedor, tipo_movimiento=tipo_movimiento, estado=estado,
     )
     productos = data["productos"]
     return InventarioMatrizResponse(
@@ -292,12 +294,12 @@ def get_transferencias_sugeridas(
     pagination: PaginationParams = Depends(pagination_params),
     categoria: str | None = None,
     proveedor: str | None = None,
-    busqueda: str | None = None,
+    tipo_movimiento: str | None = None,
 ) -> TransferenciasResponse:
     """§3.2 (RN-B3): transferencias inteligentes entre bodegas con prioridad y ahorro.
     Paginado (docs/auditoria/24)."""
     data = warehouse_service.get_transferencias_sugeridas(
-        pagination, sucursal=sucursal_filtro, categoria=categoria, proveedor=proveedor, busqueda=busqueda,
+        pagination, sucursal=sucursal_filtro, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
     )
     sugerencias = data["sugerencias"]
     return TransferenciasResponse(

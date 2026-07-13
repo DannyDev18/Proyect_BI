@@ -179,3 +179,77 @@ en el propio doc 22, secciones 4-6; scripts en `ml/notebooks/eda_22_analisis_var
 Sin cambios en el serving: el gráfico de Gerencia conserva los filtros sucursal/vendedor/
 almacén y la granularidad semana/mes (bucketización del walk-forward diario), que se aplican
 tanto al histórico como a la predicción.
+
+## Módulo Venta Cruzada (Cross-Selling) — re-análisis completo, 2026-07-13
+
+- **Alcance:** `docs/features/plan_modulo_cross_selling.md` §2.3 (Fases 2-3), auditoría
+  `docs/auditoria/25_modulo_cross_selling.md`. Contrato `recommendation` v0.1.0 → v0.2.0.
+- **Línea base a superar (v0.1.0):** co-ocurrencia direccional simple, min_support=0.005,
+  494 reglas, cobertura 87.9% sobre el último trimestre (auditoría 25 §1), sin
+  Precision@K/Recall@K medido (nunca se había hecho backtest formal).
+
+### EDA (`ml/notebooks/eda_cross_selling.py`, 463.214 líneas / 234.774 facturas, 2018-01-02..2026-07-13)
+
+1. Solo 44,7% de las facturas tienen 2+ productos distintos (universo útil para reglas).
+2. Concentración Pareto fuerte: el 5% de productos (317 de 6.340 `codart`) concentra 80,6% de
+   las líneas de venta.
+3. Estabilidad temporal MODERADA de las co-ocurrencias: solo 33% (10/30) de los pares más
+   frecuentes de 2024 siguen en el top-30 de 2026 — justifica probar varias ventanas de
+   entrenamiento (2/3/8 años) en vez de fijar una por defecto.
+4. Afinidad por sucursal fuertemente LOCAL: 0/20 de intersección entre el top-20 de pares de
+   las 2 sucursales de mayor volumen — limitación conocida, **no resuelta** en este cambio (el
+   módulo sigue sirviendo un único modelo global, igual que v0.1.0).
+
+### Backtest temporal (`ml/notebooks/experimentos_cross_selling.py`)
+
+Split cronológico (nunca aleatorio): corte=2026-04-14, train=hasta esa fecha, test=(corte,
+2026-07-13], 4.169 canastas de test con 2+ productos. Método de evaluación: "completado de
+canasta" — cada canasta de test se parte en contexto (primera mitad) y oculto (la otra
+mitad); se mide si el motor sugiere, a partir del contexto, los productos que realmente
+faltaban. 31 combinaciones evaluadas (co-ocurrencia re-tuneada × grid de min_support/min_lift,
+Apriori/FP-Growth vía `mlxtend`, item-item por similitud coseno, híbrido), cada una sobre
+ventanas de 2/3/8 años:
+
+| Estrategia | Ventana | min_support | min_lift | Cobertura | Precision@3 | **Precision@5** | Recall@5 | Hit-Rate@5 | Ticket medio ($) |
+|---|---|---|---|---|---|---|---|---|---|
+| **item_item (GANADOR)** | **2a** | — | — | **0.979** | **0.098** | **0.077** | **0.262** | **0.358** | 23.65 |
+| item_item | 3a | — | — | 0.982 | 0.088 | 0.074 | 0.252 | 0.343 | 22.42 |
+| item_item | 8a | — | — | 0.989 | 0.074 | 0.073 | 0.253 | 0.341 | 21.09 |
+| apriori_mlxtend / coocurrencia | 2a | 0.005 | — | 0.706 | 0.082 | 0.067 | 0.229 | 0.309 | 37.59 |
+| coocurrencia | 3a | 0.003 | — | 0.746 | 0.080 | 0.065 | 0.224 | 0.298 | 32.24 |
+| hibrido | 3a | 0.001 | 1.5 | **1.000** | 0.073 | 0.061 | 0.224 | 0.279 | 33.08 |
+| hibrido | 8a | 0.001 | 1.5 | 1.000 | 0.070 | 0.058 | 0.207 | 0.266 | 30.08 |
+| hibrido | 2a | 0.001 | 1.5 | 1.000 | 0.067 | 0.057 | 0.209 | 0.261 | 32.23 |
+
+(Tabla completa de las 31 combinaciones en la salida de
+`docker compose run --rm ml python notebooks/experimentos_cross_selling.py`, reproducible;
+resumen arriba con las filas representativas de cada estrategia/ventana.)
+
+**Decisión (regla §2.3.d: mejor Precision@5 con cobertura ≥ línea base 87.9%):** gana
+**item-item, ventana 2 años, top-20 vecinos** — Precision@5=0.077 (la más alta de las 31
+combinaciones), cobertura=97.9% (supera la línea base). El híbrido alcanza cobertura=100%
+pero con Precision@5 inferior (0.057-0.061): diluye la señal fuerte de item-item con
+popularidad de relleno cuando no hacía falta, así que se descarta pese a su cobertura
+perfecta — la regla de decisión prioriza precisión sobre cobertura una vez que la cobertura
+ya supera la línea base. Apriori/FP-Growth (`mlxtend`) confirma matemáticamente los mismos
+resultados que la co-ocurrencia manual (mismas filas en la tabla): se documenta como
+candidato evaluado, no aporta mejora sobre la implementación existente.
+
+**Trade-off documentado:** el ganador tiene menor `impacto_ticket_medio` (23.65 vs 37-38 de
+las reglas de asociación) — la co-ocurrencia tiende a acertar en productos de mayor valor
+unitario cuando acierta, pero acierta muchas menos veces. Se prioriza precisión/cobertura
+(more sugerencias útiles al vendedor) según la regla de decisión ya acordada en el plan, no
+el ticket medio de los aciertos.
+
+### Publicación
+
+`ml/notebooks/publicar_ganador_cross_selling.py` reentrena el artefacto final con TODA la
+ventana de 2 años disponible (129.890 líneas, 2024-07-13..2026-07-13, sin holdout — el
+backtest ya validó la estrategia). Contrato `recommendation` v0.2.0 pasado a `active`;
+`contract_validator` 6/6 OK. Esquema unificado del artefacto (`item_A, item_B, score, fuente,
+support, confidence`) documentado en `ml/contracts/models/recommendation.json` — el ganador
+(`fuente='item_item'`) deja `support`/`confidence` en NULL (no aplican a similitud coseno).
+
+**Pendiente explícito para la Fase 4 (backend, fuera de `ml/`):** `inference.py` /
+`prediction_service.py` deben leer `score`/`fuente` en vez de `lift` (v0.1.0). Documentado
+como `known_serving_mismatch` en el contrato.

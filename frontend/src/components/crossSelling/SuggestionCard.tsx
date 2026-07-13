@@ -47,7 +47,12 @@ export const SuggestionCard = ({ sugerencia, productoOrigenCod, clienteId, onAgr
     <div className="flex items-center justify-between gap-3 py-3 px-3 rounded-lg border border-slate-800 hover:border-slate-700 transition-colors">
       <div className="min-w-0">
         <p className="text-sm font-medium text-slate-200 truncate">{sugerencia.nombre}</p>
-        <p className="text-xs text-slate-500 font-mono">{sugerencia.codart} · ${sugerencia.precio.toFixed(2)}</p>
+        <p className="text-xs text-slate-500 font-mono">
+          {sugerencia.codart} · ${sugerencia.precio.toFixed(2)}
+          {sugerencia.margen_unitario != null && (
+            <span className="text-emerald-400"> · +${sugerencia.margen_unitario.toFixed(2)} margen</span>
+          )}
+        </p>
         <p className="text-xs text-slate-500 mt-1 italic truncate">{sugerencia.motivo}</p>
       </div>
       <button

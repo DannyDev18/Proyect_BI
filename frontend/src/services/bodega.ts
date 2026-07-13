@@ -26,7 +26,7 @@ export interface BodegaQueryFilters {
   almacen?: string | null;
   categoria?: string | null;
   proveedor?: string | null;
-  busqueda?: string | null;
+  tipo_movimiento?: string | null;
   fecha_desde?: string | null;
   fecha_hasta?: string | null;
 }
@@ -50,7 +50,7 @@ export const getKpisBodega = (filters: BodegaQueryFilters) =>
 
 export const getSalidasForecast = (filters: BodegaQueryFilters, productoCod?: string | null) =>
   api.get<SalidasForecast>(`${BASE}/salidas-forecast`, {
-    params: clean({ ...filters, busqueda: undefined, producto_cod: productoCod }),
+    params: clean({ ...filters, tipo_movimiento: undefined, producto_cod: productoCod }),
   });
 
 export const getRotacionMatriz = (filters: BodegaQueryFilters) =>
@@ -77,14 +77,14 @@ export const getNecesidadCompra = (filters: BodegaQueryFilters, horizonteDias: n
 export const getInventarioMatriz = (filters: BodegaQueryFilters, estado: string | null, pagination: PaginationQuery) =>
   api.get<InventarioMatriz>(`${BASE}/inventario-matriz`, {
     params: clean({
-      categoria: filters.categoria, proveedor: filters.proveedor,
-      busqueda: filters.busqueda, estado, ...pagination,
+      almacen: filters.almacen, categoria: filters.categoria, proveedor: filters.proveedor,
+      tipo_movimiento: filters.tipo_movimiento, estado, ...pagination,
     }),
   });
 
 export const getTransferenciasSugeridas = (filters: BodegaQueryFilters, pagination: PaginationQuery) =>
   api.get<Transferencias>(`${BASE}/transferencias-sugeridas`, {
-    params: clean({ categoria: filters.categoria, proveedor: filters.proveedor, busqueda: filters.busqueda, ...pagination }),
+    params: clean({ categoria: filters.categoria, proveedor: filters.proveedor, tipo_movimiento: filters.tipo_movimiento, ...pagination }),
   });
 
 export const getPrediccionComprasMes = (filters: BodegaQueryFilters, productoCod?: string | null) =>

@@ -12,13 +12,16 @@ from typing import Any
 
 import pandas as pd
 
+from app.core.config import settings
 from app.core.exceptions import ExternalDataError
 from app.ml import inference
 from app.ml.forecasting import walk_forward_forecast
 from app.ml.model_loader import ModelLoader
 from app.ml.preprocessing import build_preprocessing_pipeline, select_features_and_target
+from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.prediction_repository import PredictionRepository
+from app.repositories.recommendation_event_repository import RecommendationEventRepository
 
 logger = logging.getLogger("Backend.PredictionService")
 
@@ -29,6 +32,11 @@ logger = logging.getLogger("Backend.PredictionService")
 DIAS_A_PROYECTAR_POR_GRANULARIDAD = {"semana": 84, "mes": 180}
 DIAS_VISUALIZACION_HISTORIAL_POR_GRANULARIDAD = {"semana": 26 * 7, "mes": 24 * 31}
 
+# Fuentes del artefacto `association` cuyo `score` es un lift de asociación (>1 = afinidad
+# real): CROSS_SELL_MIN_LIFT solo aplica a estas. Ver contrato recommendation.json v0.2.0
+# ("score... NO es la misma escala matemática entre fuentes").
+_FUENTES_ESCALA_LIFT = {"coocurrencia", "apriori", "asociacion"}
+
 
 class PredictionService:
     def __init__(
@@ -36,10 +44,14 @@ class PredictionService:
         prediction_repo: PredictionRepository,
         dataset_repo: DatasetRepository,
         model_loader: ModelLoader,
+        catalog_repo: CatalogRepository | None = None,
+        recommendation_event_repo: RecommendationEventRepository | None = None,
     ):
         self.prediction_repo = prediction_repo
         self.dataset_repo = dataset_repo
         self.model_loader = model_loader
+        self.catalog_repo = catalog_repo
+        self.recommendation_event_repo = recommendation_event_repo
 
     # ── Caso de uso: Predicción de ventas (Gerencia) ───────────────────────────
     def get_sales_forecast(
@@ -308,17 +320,197 @@ class PredictionService:
     def get_product_recommendations(self, cliente_id: str) -> dict[str, Any]:
         historial = self.prediction_repo.get_client_purchase_history(cliente_id)
         try:
-            # H-10 cerrado en Fase 4: item_B ya es codart (no nombre_articulo), y el
-            # score expuesto es 'lift' (afinidad real), no 'support' (popularidad bruta).
+            # H-10 cerrado en Fase 4: item_B ya es codart (no nombre_articulo). Contrato
+            # v0.2.0 (docs/auditoria/25_...md): el ganador (item-item) expone `score`, no
+            # `lift` -- ver inference.get_recommendations.
             recs_df = inference.get_recommendations(self.model_loader, historial.ultimos_items or None)
             recomendaciones = [
-                {"producto_cod": str(row["item_B"]), "score": float(row["lift"])}
+                {"producto_cod": str(row["item_B"]), "score": float(row["score"])}
                 for _, row in recs_df.iterrows()
             ]
             return {"nombre_cliente": historial.nombre_cliente, "recomendaciones": recomendaciones}
         except Exception as e:
             logger.error(f"Fallo el motor de recomendaciones para cliente_id={cliente_id}: {e}")
             return {"nombre_cliente": historial.nombre_cliente, "recomendaciones": []}
+
+    # ── Caso de uso: Asistente de Venta Cruzada por canasta (docs/auditoria/25_...md) ──
+    def get_basket_recommendations(
+        self, items: list[str], cliente_id: str | None = None, top_n: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """RN-CS1: hasta `top_n` sugerencias enriquecidas con catálogo (nombre, precio,
+        categoría), excluyendo la canasta y lo ya comprado por el cliente. Fallback por
+        popularidad de categoría cuando ninguna regla del artefacto supera
+        `CROSS_SELL_MIN_LIFT`. Degrada con gracia (lista vacía) ante cualquier fallo del
+        modelo -- un widget roto no debe tumbar el asistente de venta."""
+        top_n = top_n or settings.CROSS_SELL_TOP_N
+        # Se pide un pool bastante más grande que top_n: no solo para reordenar por
+        # margen, sino porque la diversificación por categoría (RN-CS3, abajo) necesita
+        # suficientes candidatos de categorías distintas a la del producto en la canasta
+        # -- con un pool chico, los vecinos item-item de mayor score tienden a
+        # concentrarse en la misma categoría (hallazgo de uso real, auditoría 25 §6.1).
+        pool_n = max(top_n * 6, 30)
+        ya_comprados = []
+        if cliente_id and self.catalog_repo:
+            historial = self.prediction_repo.get_client_purchase_history(cliente_id, limit=50)
+            ya_comprados = historial.ultimos_items
+
+        try:
+            recs_df = inference.get_basket_recommendations(
+                self.model_loader, items, excluir=ya_comprados, top_n=pool_n,
+            )
+            # CROSS_SELL_MIN_LIFT solo tiene sentido para fuentes en escala de `lift`
+            # (>1 = afinidad real); el ganador del backtest (item-item) expone similitud
+            # coseno en [0,1] -- aplicarle el mismo umbral rechazaría TODAS las filas
+            # siempre (docs/auditoria/25_modulo_cross_selling.md, bug encontrado en la
+            # verificación end-to-end de esta fase). Otras fuentes de score no acotado
+            # a [0,1] se sirven tal cual, ya limitadas a `top_n` por inference.
+            candidatos = [
+                (str(row["item_B"]), float(row["score"]), str(row.get("fuente") or "asociacion"))
+                for _, row in recs_df.iterrows()
+                if str(row.get("fuente")) not in _FUENTES_ESCALA_LIFT or float(row["score"]) >= settings.CROSS_SELL_MIN_LIFT
+            ]
+        except Exception as e:
+            logger.error(f"Fallo el motor de recomendaciones por canasta para items={items}: {e}")
+            candidatos = []
+
+        if not candidatos and self.catalog_repo and items:
+            # RN-CS1 fallback: producto más vendido de la categoría del último producto
+            # de la canasta, excluyendo lo ya presente.
+            info_ultimo = self.catalog_repo.get_products_info([items[-1]]).get(items[-1])
+            if info_ultimo and info_ultimo["categoria"]:
+                top_cod = self.catalog_repo.get_top_producto_categoria(info_ultimo["categoria"], items + ya_comprados)
+                if top_cod:
+                    candidatos = [(top_cod, 0.0, "popularidad_categoria")]
+
+        if not candidatos or not self.catalog_repo:
+            return []
+
+        info_productos = self.catalog_repo.get_products_info([cod for cod, _, _ in candidatos])
+        sugerencias = []
+        for cod, score, fuente in candidatos:
+            info = info_productos.get(cod)
+            if not info:
+                continue
+            motivo = (
+                "Popular en esta categoría" if fuente == "popularidad_categoria"
+                else "Clientes con productos similares en su canasta también compraron este producto"
+            )
+            # RN-CS1: priorizar margen SOLO cuando es derivable (dim_producto.costo_promedio
+            # no nulo, auditoría 25 H25-4) -- factor multiplicativo sobre el score nativo de
+            # cada fuente (preserva el orden dentro de una misma fuente, no lo colapsa).
+            margen_unitario = info.get("margen_unitario")
+            factor_margen = 1.0
+            if margen_unitario is not None and info["precio"] > 0:
+                factor_margen = 1.0 + settings.CROSS_SELL_PESO_MARGEN * max(0.0, margen_unitario / info["precio"])
+            sugerencias.append({
+                "codart": cod, "nombre": info["nombre"], "precio": info["precio"],
+                "categoria": info["categoria"], "score": score, "motivo": motivo, "fuente": fuente,
+                "margen_unitario": margen_unitario,
+                "_orden": score * factor_margen,
+            })
+        sugerencias.sort(key=lambda s: s.pop("_orden"), reverse=True)
+        seleccion = self._diversificar_por_categoria(sugerencias, top_n)
+
+        # RN-CS3 (inyección de diversidad entre categorías): algunos productos tienen
+        # sus top-20 vecinos item-item TODOS en la misma categoría (p.ej. baterías --
+        # hallazgo de uso real, auditoría 25 §6.1): el tope por categoría de arriba no
+        # ayuda si no hay candidatos de OTRA categoría en el pool. Cuando la selección
+        # queda concentrada en una sola categoría, se reemplazan hasta 2 de las
+        # sugerencias de menor score por los mejores vendidos de OTRAS categorías --
+        # así el vendedor siempre ve opciones para ampliar la venta más allá de
+        # variantes del mismo producto.
+        categorias_representadas = {s["categoria"] for s in seleccion}
+        if len(categorias_representadas) <= 1 and self.catalog_repo and len(seleccion) > 1:
+            ya_incluidos = list({*(s["codart"] for s in seleccion), *items, *ya_comprados})
+            n_diversos = min(2, len(seleccion) - 1)
+            diversos = self.catalog_repo.get_top_productos_diversos(
+                list(categorias_representadas), ya_incluidos, n_diversos,
+            )
+            if diversos:
+                info_diversos = self.catalog_repo.get_products_info([d["codart"] for d in diversos])
+                nuevas = []
+                for d in diversos:
+                    info = info_diversos.get(d["codart"])
+                    if not info:
+                        continue
+                    nuevas.append({
+                        "codart": d["codart"], "nombre": info["nombre"], "precio": info["precio"],
+                        "categoria": info["categoria"], "score": 0.0,
+                        "motivo": "Producto popular de otra categoría — buena opción para ampliar la venta",
+                        "fuente": "popularidad_otra_categoria",
+                        "margen_unitario": info.get("margen_unitario"),
+                    })
+                if nuevas:
+                    seleccion = seleccion[: max(0, len(seleccion) - len(nuevas))] + nuevas
+
+        return seleccion
+
+    @staticmethod
+    def _diversificar_por_categoria(sugerencias: list[dict[str, Any]], top_n: int) -> list[dict[str, Any]]:
+        """RN-CS3: tope `CROSS_SELL_MAX_POR_CATEGORIA` de sugerencias por categoría entre
+        las `top_n` finales -- sin esto, el asistente devolvía solo variantes de la
+        categoría del producto en la canasta (hallazgo de uso real, auditoría 25 §6.1).
+        Primera pasada: respeta el tope y el orden ya calculado (score x margen).
+        Segunda pasada: si no alcanzaron `top_n` candidatos diversos, rellena con los
+        sobrantes en orden -- prioriza diversidad sin dejar huecos vacíos."""
+        seleccion: list[dict[str, Any]] = []
+        sobrantes: list[dict[str, Any]] = []
+        conteo_categoria: dict[str, int] = {}
+        for s in sugerencias:
+            cat = s["categoria"]
+            if conteo_categoria.get(cat, 0) < settings.CROSS_SELL_MAX_POR_CATEGORIA:
+                seleccion.append(s)
+                conteo_categoria[cat] = conteo_categoria.get(cat, 0) + 1
+            else:
+                sobrantes.append(s)
+            if len(seleccion) >= top_n:
+                break
+        if len(seleccion) < top_n:
+            seleccion.extend(sobrantes[: top_n - len(seleccion)])
+        return seleccion[:top_n]
+
+    def log_recommendation_event(
+        self,
+        usuario_id: int,
+        producto_origen_cod: str,
+        producto_sugerido_cod: str,
+        evento: str,
+        score_lift: float | None = None,
+        motivo: str | None = None,
+        cliente_id: str | None = None,
+    ) -> int | None:
+        if not self.recommendation_event_repo:
+            return None
+        cliente_sk = None
+        if cliente_id and self.catalog_repo:
+            cliente_sk = self.catalog_repo.get_cliente_sk_vigente(cliente_id)
+        event = self.recommendation_event_repo.log_event(
+            usuario_id=usuario_id, producto_origen_cod=producto_origen_cod,
+            producto_sugerido_cod=producto_sugerido_cod, evento=evento,
+            score_lift=score_lift, motivo=motivo, cliente_sk=cliente_sk,
+        )
+        return event.id
+
+    def get_top_combinaciones(self, limit: int | None = None) -> list[dict[str, Any]]:
+        if not self.catalog_repo:
+            return []
+        limit = limit or settings.CROSS_SELL_TOP_COMBINACIONES_N
+        return self.catalog_repo.get_top_combinaciones(limit=limit, dias=settings.CROSS_SELL_TOP_COMBINACIONES_DIAS)
+
+    def get_conversion_kpis(self, desde=None, hasta=None) -> dict[str, Any]:
+        if not self.recommendation_event_repo:
+            return {"sugerencias_mostradas": 0, "sugerencias_aceptadas": 0, "sugerencias_rechazadas": 0, "tasa_conversion_pct": 0.0}
+        return self.recommendation_event_repo.get_conversion_kpis(desde=desde, hasta=hasta)
+
+    def search_productos(self, query: str) -> list[dict[str, Any]]:
+        if not self.catalog_repo:
+            return []
+        return self.catalog_repo.search_productos(query)
+
+    def search_clientes(self, query: str) -> list[dict[str, Any]]:
+        if not self.catalog_repo:
+            return []
+        return self.catalog_repo.search_clientes(query)
 
     # ── Caso de uso: Segmentación RFM interactiva ─────────────────────────────
     def get_customer_segment(self, cliente_id: str) -> dict[str, Any]:

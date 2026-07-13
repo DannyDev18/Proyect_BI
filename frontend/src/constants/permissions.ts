@@ -7,7 +7,7 @@ export interface RouteConfig {
   nav?: { label: string };
 }
 
-export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'ventas' | 'ventas.metas' | 'settings';
+export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'ventas' | 'ventas.metas' | 'ventas.cross-selling' | 'settings';
 
 export const ROUTES: Record<RouteKey, RouteConfig> = {
   admin: {
@@ -54,6 +54,11 @@ export const ROUTES: Record<RouteKey, RouteConfig> = {
     path: '/ventas/metas',
     allowedRoles: ['administrador', 'gerencia', 'ventas'],
     nav: { label: 'Mi Meta y Comisión' },
+  },
+  'ventas.cross-selling': {
+    path: '/ventas/cross-selling',
+    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    nav: { label: 'Venta Cruzada' },
   },
   settings: {
     path: '/settings',

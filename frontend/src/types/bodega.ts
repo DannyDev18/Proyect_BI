@@ -17,11 +17,17 @@ export interface DemandaResponse {
 }
 
 // ── §1.1 Filtros globales ────────────────────────────────────────────────────
+export interface TipoMovimientoOption {
+  codigo: string;
+  etiqueta: string;
+}
+
 export interface FiltrosBodega {
   almacenes: string[];
   categorias: string[];
   proveedores: string[];
   sucursales: string[];
+  tipos_movimiento: TipoMovimientoOption[];
 }
 
 /** Estado de los filtros globales del dashboard (persistido en sesión). */
@@ -29,7 +35,7 @@ export interface BodegaFilterState {
   almacen: string | null;
   categoria: string | null;
   proveedor: string | null;
-  busqueda: string;
+  tipoMovimiento: string | null;
   fechaDesde: string | null; // YYYY-MM-DD
   fechaHasta: string | null;
 }

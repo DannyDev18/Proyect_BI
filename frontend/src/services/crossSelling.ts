@@ -1,9 +1,11 @@
 import { api } from './http';
 import type {
+  ClienteBusqueda,
   CrossSellEventoRequest,
   CrossSellKpis,
   CrossSellSugerenciasResponse,
   ProductoBusqueda,
+  TopCombinacionesResponse,
 } from '../types/crossSelling';
 
 const BASE = '/api/v1/analytics/ventas/cross-selling';
@@ -21,5 +23,11 @@ export const postCrossSellEvento = (payload: CrossSellEventoRequest) =>
 export const getCrossSellKpis = (desde?: string, hasta?: string) =>
   api.get<CrossSellKpis>(`${BASE}/kpis`, { params: { desde, hasta } });
 
+export const getCrossSellTopCombinaciones = () =>
+  api.get<TopCombinacionesResponse>(`${BASE}/top-combinaciones`);
+
 export const searchProductos = (q: string) =>
   api.get<ProductoBusqueda[]>(`${BASE}/productos`, { params: { q } });
+
+export const searchClientes = (q: string) =>
+  api.get<ClienteBusqueda[]>(`${BASE}/clientes`, { params: { q } });

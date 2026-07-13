@@ -8,7 +8,8 @@ import {
   Settings,
   LayoutDashboard,
   Users,
-  Target
+  Target,
+  Sparkles
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
@@ -25,6 +26,7 @@ const NAV_ICONS: Partial<Record<RouteKey, ReactNode>> = {
 const SUB_NAV_ICONS: Partial<Record<RouteKey, ReactNode>> = {
   'gerencia.metas': <Target size={16} />,
   'ventas.metas': <Target size={16} />,
+  'ventas.cross-selling': <Sparkles size={16} />,
 };
 
 export const Sidebar = () => {

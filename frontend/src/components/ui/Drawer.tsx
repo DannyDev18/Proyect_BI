@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 
@@ -49,7 +50,12 @@ export const Drawer = ({ open, onClose, title, children }: DrawerProps) => {
 
   if (!open) return null;
 
-  return (
+  // Portal a document.body: `position: fixed` solo es relativo al viewport si NINGÚN
+  // ancestro tiene `transform`/`filter`/`perspective`. `Layout.tsx` envuelve cada página
+  // en `.animate-route-enter` (transform: translateY), que crea un containing block
+  // propio -- sin portal, este panel queda recortado/mal posicionado dentro de esa capa
+  // (drawer con fondo visible pero sin contenido legible).
+  return createPortal(
     <div className="fixed inset-0 z-50 flex justify-end">
       <div
         className="absolute inset-0 bg-[var(--color-bg-overlay)] backdrop-blur-sm animate-overlay-enter"
@@ -77,6 +83,7 @@ export const Drawer = ({ open, onClose, title, children }: DrawerProps) => {
         </div>
         <div className="p-6">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };

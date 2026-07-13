@@ -16,6 +16,11 @@ from app.schemas.analytics import (
     SegmentacionClienteResponse, VPKPIVentas,
 )
 from app.schemas.commission import MiComisionResponse, PostGoalInvoiceItemResponse, PostGoalInvoicesResponse
+from app.schemas.cross_selling import (
+    ClienteBusqueda, CrossSellEventoRequest, CrossSellEventoResponse, CrossSellKpisResponse,
+    CrossSellSugerenciasRequest, CrossSellSugerenciasResponse, ProductoBusqueda, SugerenciaProducto,
+    TopCombinacionProducto, TopCombinacionesResponse,
+)
 
 router = APIRouter()
 
@@ -130,3 +135,69 @@ def get_post_goal_invoices(commission_service: CommissionServiceDep, current_use
     hoy = datetime.date.today()
     facturas = commission_service.get_post_goal_invoices(vendedor_origen, hoy.year, hoy.month)
     return PostGoalInvoicesResponse(facturas=[PostGoalInvoiceItemResponse(**f.__dict__) for f in facturas])
+
+
+# ── Asistente de Venta Cruzada (docs/auditoria/25_modulo_cross_selling.md) ──────────
+@router.post(
+    "/cross-selling/sugerencias", response_model=CrossSellSugerenciasResponse, dependencies=[Depends(vendedor_checker)],
+    summary="Sugerencias de venta cruzada para una canasta simulada",
+)
+def get_cross_sell_sugerencias(
+    body: CrossSellSugerenciasRequest, prediction_service: PredictionServiceDep,
+) -> CrossSellSugerenciasResponse:
+    sugerencias = prediction_service.get_basket_recommendations(body.items, body.cliente_id, body.top_n)
+    return CrossSellSugerenciasResponse(items=body.items, sugerencias=[SugerenciaProducto(**s) for s in sugerencias])
+
+
+@router.post(
+    "/cross-selling/eventos", response_model=CrossSellEventoResponse, dependencies=[Depends(vendedor_checker)],
+    summary="Registra un evento de telemetría (mostrada/aceptada/rechazada) de una sugerencia",
+)
+def post_cross_sell_evento(
+    body: CrossSellEventoRequest, prediction_service: PredictionServiceDep, current_user: CurrentUserDep,
+) -> CrossSellEventoResponse:
+    event_id = prediction_service.log_recommendation_event(
+        usuario_id=current_user.id,
+        producto_origen_cod=body.producto_origen_cod,
+        producto_sugerido_cod=body.producto_sugerido_cod,
+        evento=body.evento,
+        score_lift=body.score_lift,
+        motivo=body.motivo,
+        cliente_id=body.cliente_id,
+    )
+    return CrossSellEventoResponse(id=event_id or 0, evento=body.evento)
+
+
+@router.get(
+    "/cross-selling/kpis", response_model=CrossSellKpisResponse, dependencies=[Depends(vendedor_checker)],
+    summary="Tasa de conversión del módulo de Venta Cruzada (RN-CS2)",
+)
+def get_cross_sell_kpis(
+    prediction_service: PredictionServiceDep, desde: datetime.date | None = None, hasta: datetime.date | None = None,
+) -> CrossSellKpisResponse:
+    return CrossSellKpisResponse(**prediction_service.get_conversion_kpis(desde=desde, hasta=hasta))
+
+
+@router.get(
+    "/cross-selling/top-combinaciones", response_model=TopCombinacionesResponse, dependencies=[Depends(vendedor_checker)],
+    summary="Parejas de productos con mayor co-ocurrencia histórica en facturas (KPI accionable, no telemetría)",
+)
+def get_cross_sell_top_combinaciones(prediction_service: PredictionServiceDep) -> TopCombinacionesResponse:
+    combinaciones = prediction_service.get_top_combinaciones()
+    return TopCombinacionesResponse(combinaciones=[TopCombinacionProducto(**c) for c in combinaciones])
+
+
+@router.get(
+    "/cross-selling/productos", response_model=list[ProductoBusqueda], dependencies=[Depends(vendedor_checker)],
+    summary="Autocompletar producto por código o nombre (asistente de Venta Cruzada)",
+)
+def search_cross_sell_productos(q: str, prediction_service: PredictionServiceDep) -> list[ProductoBusqueda]:
+    return [ProductoBusqueda(**p) for p in prediction_service.search_productos(q)]
+
+
+@router.get(
+    "/cross-selling/clientes", response_model=list[ClienteBusqueda], dependencies=[Depends(vendedor_checker)],
+    summary="Autocompletar cliente por cédula/RUC o nombre (asistente de Venta Cruzada)",
+)
+def search_cross_sell_clientes(q: str, prediction_service: PredictionServiceDep) -> list[ClienteBusqueda]:
+    return [ClienteBusqueda(**c) for c in prediction_service.search_clientes(q)]

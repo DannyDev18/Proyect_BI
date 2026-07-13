@@ -18,6 +18,19 @@ CREATE INDEX idx_fis_prod       ON edw.Fact_Inventario_Snapshot (producto_sk);
 -- == 3. Índices Fact_Movimientos_Inventario ==
 CREATE INDEX idx_fmi_composite  ON edw.Fact_Movimientos_Inventario (fecha_sk, sucursal_sk, almacen_sk);
 CREATE INDEX idx_fmi_prod       ON edw.Fact_Movimientos_Inventario (producto_sk);
+-- Índice parcial para "top N artículos por salidas en un rango" (Bodega G1
+-- "Histórico y Predicción de Salidas"): cubre fecha_sk + producto_sk + cantidad_movimiento
+-- solo para filas de salida (es_salida = TRUE, ~67% de la tabla), permitiendo un
+-- Index Only Scan en vez de un Seq Scan completo (docs/auditoria/27_perf_salidas_forecast.md).
+CREATE INDEX idx_fmi_salidas_fecha_prod ON edw.Fact_Movimientos_Inventario (fecha_sk, producto_sk)
+    INCLUDE (cantidad_movimiento) WHERE es_salida;
+-- Filtro global "Tipo de movimiento" del dashboard de Bodega (WarehouseRepository.
+-- _filtros_snapshot): "¿qué productos tienen al menos un movimiento de este tiporg?"
+-- Sin este índice, el filtro escanea completo (tipo_movimiento no estaba indexado) y,
+-- al repetirse en varias CTEs de una misma consulta (KPIs, stock-reorden), agotaba la
+-- memoria compartida de Postgres y tumbaba esos endpoints con 500
+-- (docs/auditoria/28_bug_filtro_tipo_movimiento.md).
+CREATE INDEX idx_fmi_tipo_prod ON edw.Fact_Movimientos_Inventario (tipo_movimiento, producto_sk);
 
 -- == 4. Índices Fact_Compras ==
 CREATE INDEX idx_fc_compr       ON edw.Fact_Compras (fecha_sk, proveedor_sk);

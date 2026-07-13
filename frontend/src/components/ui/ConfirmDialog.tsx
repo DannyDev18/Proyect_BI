@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { Button } from './Button';
 
@@ -53,7 +54,10 @@ export const ConfirmDialog = ({ open, title, message, confirmLabel, onConfirm, o
 
   if (!open) return null;
 
-  return (
+  // Portal a document.body (mismo motivo que Drawer.tsx): sin esto, `position: fixed`
+  // queda relativo al wrapper `.animate-route-enter` de Layout.tsx (transform activo),
+  // no al viewport, y el modal se recorta/mal posiciona.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
         className="absolute inset-0 bg-[var(--color-bg-overlay)] backdrop-blur-sm animate-overlay-enter"
@@ -75,6 +79,7 @@ export const ConfirmDialog = ({ open, title, message, confirmLabel, onConfirm, o
           <Button variant="danger" loading={loading} onClick={onConfirm}>{confirmLabel}</Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };

@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     CROSS_SELL_TOP_N: int = int(os.getenv("CROSS_SELL_TOP_N", "5"))
     CROSS_SELL_MIN_LIFT: float = float(os.getenv("CROSS_SELL_MIN_LIFT", "1.5"))
     CROSS_SELL_PESO_MARGEN: float = float(os.getenv("CROSS_SELL_PESO_MARGEN", "0.3"))
+    # RN-CS3: tope de sugerencias de una misma categoría entre las CROSS_SELL_TOP_N finales
+    # -- evita que el asistente muestre solo variantes de la misma categoría del producto
+    # en la canasta (hallazgo de uso real, auditoría 25 §6.1) y fuerza diversidad para
+    # capturar venta cruzada real entre categorías distintas.
+    CROSS_SELL_MAX_POR_CATEGORIA: int = int(os.getenv("CROSS_SELL_MAX_POR_CATEGORIA", "2"))
+    # Ventana de análisis para el KPI "top combinaciones de productos" (§6.4): 2 años,
+    # misma ventana usada para entrenar el modelo ganador (item-item, ver auditoría 25 §"Estado").
+    CROSS_SELL_TOP_COMBINACIONES_DIAS: int = int(os.getenv("CROSS_SELL_TOP_COMBINACIONES_DIAS", "730"))
+    CROSS_SELL_TOP_COMBINACIONES_N: int = int(os.getenv("CROSS_SELL_TOP_COMBINACIONES_N", "3"))
 
     class Config:
         case_sensitive = True

@@ -14,6 +14,7 @@ from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository
 from app.repositories.prediction_repository import PredictionRepository
+from app.repositories.recommendation_event_repository import RecommendationEventRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.warehouse_repository import WarehouseRepository
@@ -66,6 +67,10 @@ def get_audit_repository(db: SessionDep) -> AuditRepository:
     return AuditRepository(db)
 
 
+def get_recommendation_event_repository(db: SessionDep) -> RecommendationEventRepository:
+    return RecommendationEventRepository(db)
+
+
 # ── Modelos ML (Singleton vía app.state, cargado en el lifespan de main.py) ──
 def get_model_loader(request: Request) -> ModelLoader:
     return request.app.state.model_loader
@@ -111,8 +116,14 @@ def get_prediction_service(
     prediction_repo: Annotated[PredictionRepository, Depends(get_prediction_repository)],
     dataset_repo: Annotated[DatasetRepository, Depends(get_dataset_repository)],
     model_loader: ModelLoaderDep,
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
+    recommendation_event_repo: Annotated[RecommendationEventRepository, Depends(get_recommendation_event_repository)],
 ) -> PredictionService:
-    return PredictionService(prediction_repo, dataset_repo, model_loader)
+    """Compone también CatalogRepository (enriquecimiento de catálogo) y
+    RecommendationEventRepository (telemetría RN-CS2) para el asistente de Venta
+    Cruzada por canasta (docs/auditoria/25_modulo_cross_selling.md), además del caso de
+    uso original por-cliente."""
+    return PredictionService(prediction_repo, dataset_repo, model_loader, catalog_repo, recommendation_event_repo)
 
 
 def get_goal_ml_service(

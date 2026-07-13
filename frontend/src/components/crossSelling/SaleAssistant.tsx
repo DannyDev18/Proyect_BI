@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import { ChartCard } from '../ui/ChartCard';
-import { SearchInput } from '../ui/SearchInput';
+import { Autocomplete } from '../ui/Autocomplete';
 import { AlertBadge } from '../ui/AlertBadge';
 import { SuggestionCard } from './SuggestionCard';
 import { useCrossSellSugerencias, useSearchProductos } from '../../hooks/crossSelling';
-import type { SugerenciaProducto } from '../../types/crossSelling';
+import type { ProductoBusqueda, SugerenciaProducto } from '../../types/crossSelling';
 
 interface CanastaItem {
   codart: string;
@@ -50,28 +50,21 @@ export const SaleAssistant = ({ clienteId }: SaleAssistantProps) => {
       height="h-auto"
     >
       <div className="space-y-4">
-        <div className="relative">
-          <SearchInput
-            placeholder="Buscar producto por código o nombre…"
-            onSearch={setBusqueda}
-            label="Agregar producto a la canasta simulada"
-          />
-          {search.data && search.data.length > 0 && busqueda && (
-            <ul className="absolute z-10 mt-1 w-full bg-slate-900 border border-slate-700 rounded-lg shadow-lg max-h-56 overflow-auto">
-              {search.data.map((p) => (
-                <li key={p.codart}>
-                  <button
-                    onClick={() => agregarACanasta(p.codart, p.nombre)}
-                    className="w-full text-left px-3 py-2 hover:bg-slate-800 text-sm text-slate-200 flex justify-between"
-                  >
-                    <span className="truncate">{p.nombre}</span>
-                    <span className="text-slate-500 font-mono text-xs ml-2 shrink-0">{p.codart}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+        <Autocomplete<ProductoBusqueda>
+          placeholder="Escribe el código o nombre del producto…"
+          label="Agregar producto a la canasta simulada"
+          loading={search.loading}
+          options={search.data}
+          onQueryChange={setBusqueda}
+          getKey={(p) => p.codart}
+          onSelect={(p) => agregarACanasta(p.codart, p.nombre)}
+          renderOption={(p) => (
+            <span className="flex justify-between">
+              <span className="truncate">{p.nombre}</span>
+              <span className="text-slate-500 font-mono text-xs ml-2 shrink-0">{p.codart}</span>
+            </span>
           )}
-        </div>
+        />
 
         {/* Canasta simulada */}
         {canasta.length > 0 && (

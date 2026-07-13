@@ -7,7 +7,6 @@ import { AlertBadge } from '../components/ui/AlertBadge';
 import { ErrorState } from '../components/ui/ErrorState';
 import { SearchInput } from '../components/ui/SearchInput';
 import { GlobalBranchSelector } from '../components/ui/GlobalBranchSelector';
-import { SaleAssistant } from '../components/crossSelling/SaleAssistant';
 import { useAuthStore } from '../store/authStore';
 import { pct } from '../utils/format';
 
@@ -172,9 +171,6 @@ export const DashboardVentas = () => {
           </ChartCard>
         </div>
       )}
-
-      {/* Asistente de Venta Cruzada (docs/auditoria/25_modulo_cross_selling.md) */}
-      <SaleAssistant clienteId={clienteId || null} />
     </div>
   );
 };

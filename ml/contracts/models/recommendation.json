@@ -2,7 +2,7 @@
   "name": "recommendation",
   "version": "0.2.0",
   "task": "recommendation",
-  "status": "draft",
+  "status": "active",
   "features": [
     {
       "name": "item_A",
@@ -62,11 +62,20 @@
     "description": "Excluir devoluciones y el centinela producto_sk=-1 ('producto desconocido', regla de negocio 12 CLAUDE.md); mismo filtro de estado vía dim_estado_documento (C-1). Implementado en ml/src/data/make_dataset.py::fetch_market_basket (agrega ahora `fecha` para el split temporal y un parámetro `ventana_anios`, Fase 3) y fetch_product_catalog (catálogo vigente `dim_producto` para precio/categoría/margen, usado por el backtest para estimar impacto en ticket).",
     "sql_condition": "JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion AND fvd.producto_sk <> -1"
   },
-  "library_versions": {},
-  "data_range": {},
+  "library_versions": {
+    "pandas": "2.3.3",
+    "scikit-learn": "1.9.0",
+    "mlxtend": "0.25.0"
+  },
+  "data_range": {
+    "ventana_anios": 2,
+    "fecha_min_entrenamiento": "2024-07-13",
+    "fecha_max_entrenamiento": "2026-07-13",
+    "n_lineas_entrenamiento": 129890
+  },
   "known_serving_mismatch": [
-    "PENDIENTE (Fase 4, fuera de alcance de este cambio): prediction_service.py / inference.py del backend todavía esperan las columnas v0.1.0 (item_A, item_B, support, confidence, lift) y ordenan por `lift`. Con v0.2.0 deben leer `score` (ranking genérico) y `fuente` (para el texto de motivo); este ajuste de serving se hace en la Fase 4 del plan (backend), no en este cambio de ml/.",
-    "H-10 heredado de v0.1.0 (cerrado en su momento): cada par de co-ocurrencia emite las dos filas direccionales A->B y B->A; se preserva en v0.2.0 para las fuentes coocurrencia/apriori."
+    "Fase 4 (backend, ver docs/auditoria/25_modulo_cross_selling.md): prediction_service.py / inference.py deben leer `score` (ranking genérico, NO comparable en escala entre fuentes) y `fuente` para el texto de 'motivo' diferenciado -- v0.1.0 leía `lift` directamente, v0.2.0 (ganador item_item) no tiene `lift` real, solo `score` (similitud coseno).",
+    "El ganador (item_item) NO emite `support`/`confidence` (quedan NULL): son propios de reglas de asociación, no aplican a similitud coseno. El backend debe tolerar NULL en esas columnas, no asumir que siempre vienen pobladas (ya contemplado en el diseño del schema `SugerenciaProducto` del backend, que no las expone directamente)."
   ],
-  "notes": "v0.2.0 en DRAFT (Fase 2, 2026-07-13, contrato-primero D-2, ANTES de re-entrenar): EDA en ml/notebooks/eda_cross_selling.py sobre 463.214 líneas de venta válidas / 234.774 facturas (2018-01-02 a 2026-07-13). Hallazgos que fijan el grid experimental de Fase 3: (1) solo 44,7% de las facturas tienen 2+ productos distintos (universo útil para reglas); (2) concentración Pareto fuerte -- el 5% de productos (317 de 6.340 codart) concentra 80,6% de las líneas, lo que favorece a las estrategias basadas en reglas/popularidad sobre catálogos de cola larga; (3) estabilidad temporal MODERADA de las co-ocurrencias: solo 33% (10/30) de los pares más frecuentes de 2024 siguen en el top-30 de 2026 -- justifica probar ventanas de 1-3 años en vez de todo el histórico o solo el último trimestre; (4) afinidad por sucursal fuertemente LOCAL: 0/20 de intersección entre el top-20 de pares de las 2 sucursales de mayor volumen -- señal real de heterogeneidad geográfica que el modelo global no captura (documentado como limitación conocida, no resuelta en este contrato: el módulo sirve un modelo global único, igual que v0.1.0). Grid fijado para Fase 3: min_support en {0.001, 0.003, 0.005}, umbral de lift en {ninguno, 1.5}, ventana en {2 años, 3 años, todo el histórico}, granularidad codart (se descarta clase/codgrupo como granularidad única: solo 22 categorías, demasiado grueso para una sugerencia útil de venta cruzada). Este bloque se completa con los resultados reales del backtest al pasar el contrato a `active`."
+  "notes": "v0.2.0 ACTIVE (Fase 3 cerrada, 2026-07-13). EDA (ml/notebooks/eda_cross_selling.py, 463.214 líneas / 234.774 facturas, 2018-01-02..2026-07-13): (1) 44,7% de facturas con 2+ productos; (2) Pareto fuerte -- 5% de productos (317/6.340) concentra 80,6% de las líneas; (3) estabilidad temporal MODERADA de co-ocurrencias (33% de los top-30 pares de 2024 siguen en el top-30 de 2026); (4) afinidad por sucursal fuertemente LOCAL (0/20 intersección top-20 entre las 2 sucursales de mayor volumen -- limitación conocida, no resuelta: el módulo sirve un modelo global único). Backtest temporal (ml/notebooks/experimentos_cross_selling.py, split en corte=2026-04-14, train=2024-07-13..2026-04-14, test=2026-04-14..2026-07-13, 4.169 canastas de test, contexto=mitad de la canasta / oculto=la otra mitad): compitieron co-ocurrencia re-tuneada (grid min_support x min_lift), Apriori/FP-Growth (mlxtend, resultados matemáticamente idénticos a la co-ocurrencia manual para pares), filtrado colaborativo item-item (similitud coseno, scikit-learn, top-20 vecinos) e híbrido (reglas+item_item+popularidad), cada uno sobre ventanas de 2/3/8 años. GANADOR: item-item, ventana 2 años -- Precision@5=0.0769 (mejor de todos los 31 candidatos evaluados), Recall@5=0.2624, Hit-Rate@5=0.3579, cobertura=97.9% (supera la línea base v0.1.0 de 87.9%, auditoría 25 §1). El híbrido alcanzó cobertura=100% pero con Precision@5 inferior (0.057-0.061) porque diluye la señal fuerte de item_item con popularidad de relleno; se descarta por la regla de decisión (mejor Precision@5 con cobertura>=línea base, no cobertura a toda costa). Todos los 31 experimentos (ganadores y perdedores) documentados en ml/REPORTE_MEJORA_MODELOS.md. Artefacto de producción reentrenado con TODA la ventana de 2 años (129.890 líneas, sin holdout) vía ml/notebooks/publicar_ganador_cross_selling.py -- el backtest ya validó la estrategia, este paso maximiza los datos servidos."
 }

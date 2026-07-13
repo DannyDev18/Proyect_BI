@@ -9,11 +9,17 @@ from app.schemas.pagination import Page
 
 
 # ── §1.1 Filtros globales ─────────────────────────────────────────────────────
+class TipoMovimientoOption(BaseModel):
+    codigo: str
+    etiqueta: str
+
+
 class FiltrosBodegaResponse(BaseModel):
     almacenes: List[str]
     categorias: List[str]
     proveedores: List[str]
     sucursales: List[str]
+    tipos_movimiento: List[TipoMovimientoOption]
 
 
 # ── §1.2 KPIs ─────────────────────────────────────────────────────────────────

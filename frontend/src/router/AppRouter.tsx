@@ -14,6 +14,7 @@ import { BodegaAlmacenes } from '../pages/BodegaAlmacenes.tsx';
 import { BodegaReportes } from '../pages/BodegaReportes.tsx';
 import { DashboardVentas } from '../pages/DashboardVentas.tsx';
 import { DashboardMetasVendedor } from '../pages/DashboardMetasVendedor.tsx';
+import { VentasCrossSelling } from '../pages/VentasCrossSelling.tsx';
 import { AccessDenied } from '../pages/AccessDenied.tsx';
 import { Settings } from '../pages/Settings.tsx';
 import { NotFound } from '../pages/NotFound.tsx';
@@ -114,6 +115,11 @@ export const AppRouter = () => {
             <Route path="metas" element={
               <ProtectedRoute routeKey="ventas.metas">
                 <DashboardMetasVendedor />
+              </ProtectedRoute>
+            } />
+            <Route path="cross-selling" element={
+              <ProtectedRoute routeKey="ventas.cross-selling">
+                <VentasCrossSelling />
               </ProtectedRoute>
             } />
           </Route>

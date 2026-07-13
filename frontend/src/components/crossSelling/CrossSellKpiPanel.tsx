@@ -24,11 +24,26 @@ export const CrossSellKpiPanel = () => {
     );
   }
 
+  const sinHistorial = (kpis.data?.sugerencias_mostradas ?? 0) === 0;
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <KpiCard title="Sugerencias Mostradas" value={kpis.data?.sugerencias_mostradas ?? 0} icon={Eye} trend="neutral" />
-      <KpiCard title="Sugerencias Aceptadas" value={kpis.data?.sugerencias_aceptadas ?? 0} icon={CheckCircle2} trend="neutral" />
-      <KpiCard title="Tasa de Conversión" value={kpis.data ? pct(kpis.data.tasa_conversion_pct) : '—'} icon={TrendingUp} trend={kpis.data && kpis.data.tasa_conversion_pct >= 20 ? 'up' : 'neutral'} />
+    <div>
+      <h3 className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3">
+        Impacto histórico del asistente
+      </h3>
+      {sinHistorial ? (
+        <p className="text-sm text-slate-500">
+          Aún no hay sugerencias registradas. Estos indicadores se acumulan conforme el
+          asistente se usa (esta página, arriba, ya te ayuda con el valor y margen de la
+          canasta actual).
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <KpiCard title="Sugerencias Mostradas" value={kpis.data?.sugerencias_mostradas ?? 0} icon={Eye} trend="neutral" />
+          <KpiCard title="Sugerencias Aceptadas" value={kpis.data?.sugerencias_aceptadas ?? 0} icon={CheckCircle2} trend="neutral" />
+          <KpiCard title="Tasa de Conversión" value={kpis.data ? pct(kpis.data.tasa_conversion_pct) : '—'} icon={TrendingUp} trend={kpis.data && kpis.data.tasa_conversion_pct >= 20 ? 'up' : 'neutral'} />
+        </div>
+      )}
     </div>
   );
 };

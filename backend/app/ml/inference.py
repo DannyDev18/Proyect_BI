@@ -79,8 +79,12 @@ def detect_anomalies(loader: ModelLoader, X: pd.DataFrame) -> pd.DataFrame:
 def get_recommendations(loader: ModelLoader, item_history: list | None = None, top_n: int = 5) -> pd.DataFrame:
     """H-10 (cerrado en Fase 3/4): el artefacto reconstruido emite reglas DIRECCIONALES
     (una fila A->B y otra B->A por cada par), así que filtrar solo por `item_A` ya no
-    pierde la mitad de las coincidencias como con el motor legacy simétrico. Se ordena
-    por `lift` (afinidad real) en vez de `support`/`co_occurrences` (popularidad bruta).
+    pierde la mitad de las coincidencias como con el motor legacy simétrico.
+
+    Contrato v0.2.0 (docs/auditoria/25_modulo_cross_selling.md): el ganador del backtest
+    (filtrado colaborativo item-item) expone `score` (ranking genérico, no comparable en
+    escala con `lift`) en vez de `lift` -- se ordena por `score` para servir cualquier
+    estrategia publicada bajo este contrato.
 
     `item_history` puede ser el historial de un cliente (caso original) o los productos
     más vendidos de un vendedor (integración Metas y Comisiones: sugerir qué más vender
@@ -88,8 +92,28 @@ def get_recommendations(loader: ModelLoader, item_history: list | None = None, t
     rules = loader.get('association')
     _validate_features_or_raise(loader, 'association', rules.columns)
     if item_history:
-        return rules[rules['item_A'].isin(item_history)].sort_values('lift', ascending=False).head(top_n)
-    return rules.sort_values('lift', ascending=False).head(max(top_n, 10))
+        return rules[rules['item_A'].isin(item_history)].sort_values('score', ascending=False).head(top_n)
+    return rules.sort_values('score', ascending=False).head(max(top_n, 10))
+
+
+def get_basket_recommendations(loader: ModelLoader, canasta: list[str], excluir: list[str], top_n: int) -> pd.DataFrame:
+    """Recomendación por canasta (asistente de Venta Cruzada, docs/auditoria/25_...md):
+    filtra reglas por `item_A` en la canasta simulada, excluye lo ya presente en la
+    canasta y lo ya comprado por el cliente (`excluir`), agrega por `item_B` (máximo
+    `score` entre todos los productos de la canasta que lo sugieren) y ordena
+    descendente. Reutiliza el mismo artefacto/contrato `association` que
+    `get_recommendations` (por-cliente) -- ambos casos de uso comparten inference.py y
+    el mismo artefacto, solo cambian las heurísticas en el servicio (plan §2.3.e)."""
+    rules = loader.get('association')
+    _validate_features_or_raise(loader, 'association', rules.columns)
+    if not canasta:
+        return rules.iloc[0:0]
+    excluidos = set(canasta) | set(excluir)
+    candidatas = rules[rules['item_A'].isin(canasta) & ~rules['item_B'].isin(excluidos)]
+    if candidatas.empty:
+        return candidatas
+    mejor_por_item_b = candidatas.loc[candidatas.groupby('item_B')['score'].idxmax()]
+    return mejor_por_item_b.sort_values('score', ascending=False).head(top_n)
 
 
 def predict_segmentation(loader: ModelLoader, X_rfm: pd.DataFrame) -> pd.Series:

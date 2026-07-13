@@ -6,7 +6,7 @@ interface BodegaFiltersStore extends BodegaFilterState {
   setAlmacen: (almacen: string | null) => void;
   setCategoria: (categoria: string | null) => void;
   setProveedor: (proveedor: string | null) => void;
-  setBusqueda: (busqueda: string) => void;
+  setTipoMovimiento: (tipoMovimiento: string | null) => void;
   setRangoFechas: (desde: string | null, hasta: string | null) => void;
   reset: () => void;
 }
@@ -15,7 +15,7 @@ const initial: BodegaFilterState = {
   almacen: null,
   categoria: null,
   proveedor: null,
-  busqueda: '',
+  tipoMovimiento: null,
   fechaDesde: null,
   fechaHasta: null,
 };
@@ -29,7 +29,7 @@ export const useBodegaFiltersStore = create<BodegaFiltersStore>()(
       setAlmacen: (almacen) => set({ almacen }),
       setCategoria: (categoria) => set({ categoria }),
       setProveedor: (proveedor) => set({ proveedor }),
-      setBusqueda: (busqueda) => set({ busqueda }),
+      setTipoMovimiento: (tipoMovimiento) => set({ tipoMovimiento }),
       setRangoFechas: (fechaDesde, fechaHasta) => set({ fechaDesde, fechaHasta }),
       reset: () => set(initial),
     }),
@@ -45,7 +45,7 @@ export const toQueryFilters = (s: BodegaFilterState) => ({
   almacen: s.almacen,
   categoria: s.categoria,
   proveedor: s.proveedor,
-  busqueda: s.busqueda || null,
+  tipo_movimiento: s.tipoMovimiento,
   fecha_desde: s.fechaDesde,
   fecha_hasta: s.fechaHasta,
 });

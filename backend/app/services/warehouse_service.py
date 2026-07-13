@@ -24,7 +24,7 @@ from app.ml import inference
 from app.ml.forecasting import walk_forward_forecast
 from app.ml.model_loader import ModelLoader
 from app.repositories.dataset_repository import DatasetRepository
-from app.repositories.warehouse_repository import WarehouseRepository
+from app.repositories.warehouse_repository import TIPOS_MOVIMIENTO, WarehouseRepository
 from app.schemas.pagination import Page, PaginationParams, paginar
 
 logger = logging.getLogger("Backend.WarehouseService")
@@ -120,18 +120,22 @@ class WarehouseService:
 
     # ── Filtros globales (§1.1) ──────────────────────────────────────────────
     def get_filtros(self, analytics_repo_catalogos: dict[str, list[str]]) -> dict[str, Any]:
-        return {**analytics_repo_catalogos, "proveedores": self.repo.get_proveedores()}
+        return {
+            **analytics_repo_catalogos,
+            "proveedores": self.repo.get_proveedores(),
+            "tipos_movimiento": TIPOS_MOVIMIENTO,
+        }
 
     # ── KPIs (§1.2) ──────────────────────────────────────────────────────────
     def get_kpis(
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, fecha_desde: str | None = None,
+        tipo_movimiento: str | None = None, fecha_desde: str | None = None,
         fecha_hasta: str | None = None,
     ) -> dict[str, Any]:
         desde, hasta, _, _ = self._defaults_rango(fecha_desde, fecha_hasta)
         filtros = dict(sucursal=sucursal, almacen=almacen, categoria=categoria,
-                       proveedor=proveedor, busqueda=busqueda)
+                       proveedor=proveedor, tipo_movimiento=tipo_movimiento)
 
         productos = [self._enriquecer_producto(r) for r in self.repo.get_inventario_productos(**filtros)]
         periodo = self.repo.get_kpis_periodo(desde, hasta, **filtros)
@@ -142,7 +146,7 @@ class WarehouseService:
         fin_mes_anterior = (primer_dia_mes - datetime.timedelta(days=1)).isoformat()
         previo = self.repo.get_snapshot_total_a_fecha(
             fin_mes_anterior, sucursal=sucursal, almacen=almacen, categoria=categoria,
-            proveedor=proveedor, busqueda=busqueda,
+            proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         )
 
         # H24-x: `actual["total_skus"]` es el tamaño del catálogo completo (SAP expone TODO
@@ -219,7 +223,7 @@ class WarehouseService:
                 "valor_total": round(valor_total, 2),
                 "tendencia_pct": self._tendencia_pct(valor_total, previo["valor_total"]) if previo else None,
                 "top_categorias": self.repo.get_valor_por_categoria(
-                    sucursal=sucursal, almacen=almacen, proveedor=proveedor, busqueda=busqueda,
+                    sucursal=sucursal, almacen=almacen, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
                 ),
             },
             "tasa_stockout": {
@@ -257,7 +261,7 @@ class WarehouseService:
             fila = next(
                 (r for r in self.repo.get_inventario_productos(
                     sucursal=sucursal, almacen=almacen, categoria=categoria,
-                    proveedor=proveedor, busqueda=None,
+                    proveedor=proveedor, tipo_movimiento=None,
                 ) if r["codart"] == producto_cod),
                 None,
             )
@@ -434,7 +438,7 @@ class WarehouseService:
         )
         inv = next(
             (r for r in self.repo.get_inventario_productos(
-                sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor, busqueda=None,
+                sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor, tipo_movimiento=None,
             ) if r["codart"] == producto_cod),
             None,
         )
@@ -465,12 +469,12 @@ class WarehouseService:
         # es lo que pide el requerimiento "artículos con más ventas", auditoría 24 H24-1).
         candidatos = self.repo.get_rotacion_productos(
             desde_hist, hasta_hist, sucursal=sucursal, almacen=almacen, categoria=categoria,
-            proveedor=proveedor, busqueda=None, limit=500,
+            proveedor=proveedor, tipo_movimiento=None, limit=500,
         )
         top_n = sorted(candidatos, key=lambda c: -c["unidades_vendidas"])[:settings.BODEGA_TOP_ARTICULOS_PREDICCION]
         inventario_por_codart = {
             r["codart"]: r for r in self.repo.get_inventario_productos(
-                sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor, busqueda=None,
+                sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor, tipo_movimiento=None,
             )
         }
 
@@ -544,13 +548,13 @@ class WarehouseService:
     def get_rotacion_matriz(
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, fecha_desde: str | None = None,
+        tipo_movimiento: str | None = None, fecha_desde: str | None = None,
         fecha_hasta: str | None = None,
     ) -> dict[str, Any]:
         desde, hasta, _, _ = self._defaults_rango(fecha_desde, fecha_hasta)
         filas = self.repo.get_rotacion_productos(
             desde, hasta, sucursal=sucursal, almacen=almacen, categoria=categoria,
-            proveedor=proveedor, busqueda=busqueda,
+            proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         )
         dias_rango = max(
             (datetime.date.fromisoformat(hasta) - datetime.date.fromisoformat(desde)).days, 1,
@@ -586,14 +590,14 @@ class WarehouseService:
     def get_top_productos(
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, fecha_desde: str | None = None,
+        tipo_movimiento: str | None = None, fecha_desde: str | None = None,
         fecha_hasta: str | None = None, limit: int = 20,
     ) -> list[dict[str, Any]]:
         desde, hasta, desde_prev, hasta_prev = self._defaults_rango(fecha_desde, fecha_hasta)
         dias_rango = max((datetime.date.fromisoformat(hasta) - datetime.date.fromisoformat(desde)).days, 1)
         filas = self.repo.get_salidas_por_producto(
             desde, hasta, desde_prev, hasta_prev, sucursal=sucursal, almacen=almacen,
-            categoria=categoria, proveedor=proveedor, busqueda=busqueda, limit=limit,
+            categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento, limit=limit,
         )
         out = []
         for f in filas:
@@ -611,13 +615,13 @@ class WarehouseService:
 
     def get_salidas_categoria(
         self, sucursal: str | None = None, almacen: str | None = None,
-        proveedor: str | None = None, busqueda: str | None = None,
+        proveedor: str | None = None, tipo_movimiento: str | None = None,
         fecha_desde: str | None = None, fecha_hasta: str | None = None,
     ) -> list[dict[str, Any]]:
         desde, hasta, desde_prev, hasta_prev = self._defaults_rango(fecha_desde, fecha_hasta)
         filas = self.repo.get_salidas_por_categoria(
             desde, hasta, desde_prev, hasta_prev, sucursal=sucursal, almacen=almacen,
-            proveedor=proveedor, busqueda=busqueda,
+            proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         )
         total = sum(f["unidades"] for f in filas) or 1.0
         return [
@@ -633,7 +637,7 @@ class WarehouseService:
     def _stock_reorden_filas(
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, solo_criticos: bool = False,
+        tipo_movimiento: str | None = None, solo_criticos: bool = False,
     ) -> list[dict[str, Any]]:
         """Lista completa ordenada (sin paginar) -- consumida por el endpoint paginado
         y por los reportes internos (§2), que necesitan el dataset completo."""
@@ -641,7 +645,7 @@ class WarehouseService:
             self._enriquecer_producto(r)
             for r in self.repo.get_inventario_productos(
                 sucursal=sucursal, almacen=almacen, categoria=categoria,
-                proveedor=proveedor, busqueda=busqueda,
+                proveedor=proveedor, tipo_movimiento=tipo_movimiento,
             )
         ]
         orden_estado = {ESTADO_CRITICO: 0, ESTADO_CERCA: 1, ESTADO_SEGURO: 2, ESTADO_EXCESO: 3}
@@ -661,11 +665,11 @@ class WarehouseService:
     def get_stock_reorden(
         self, pagination: PaginationParams, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, solo_criticos: bool = False,
+        tipo_movimiento: str | None = None, solo_criticos: bool = False,
     ) -> Page[dict[str, Any]]:
         filas = self._stock_reorden_filas(
             sucursal=sucursal, almacen=almacen, categoria=categoria,
-            proveedor=proveedor, busqueda=busqueda, solo_criticos=solo_criticos,
+            proveedor=proveedor, tipo_movimiento=tipo_movimiento, solo_criticos=solo_criticos,
         )
         return paginar(filas, pagination)
 
@@ -675,7 +679,7 @@ class WarehouseService:
     def _necesidad_compra_completo(
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, horizonte_dias: int | None = None,
+        tipo_movimiento: str | None = None, horizonte_dias: int | None = None,
     ) -> dict[str, Any]:
         """`recomendados`/`no_comprar` completos (sin paginar) -- consumido por el
         endpoint paginado y por los reportes internos (§2), que necesitan el total."""
@@ -684,7 +688,7 @@ class WarehouseService:
             self._enriquecer_producto(r)
             for r in self.repo.get_inventario_productos(
                 sucursal=sucursal, almacen=almacen, categoria=categoria,
-                proveedor=proveedor, busqueda=busqueda,
+                proveedor=proveedor, tipo_movimiento=tipo_movimiento,
             )
         ]
         hoy = datetime.date.today()
@@ -747,11 +751,11 @@ class WarehouseService:
     def get_necesidad_compra(
         self, pagination: PaginationParams, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, horizonte_dias: int | None = None,
+        tipo_movimiento: str | None = None, horizonte_dias: int | None = None,
     ) -> dict[str, Any]:
         completo = self._necesidad_compra_completo(
             sucursal=sucursal, almacen=almacen, categoria=categoria,
-            proveedor=proveedor, busqueda=busqueda, horizonte_dias=horizonte_dias,
+            proveedor=proveedor, tipo_movimiento=tipo_movimiento, horizonte_dias=horizonte_dias,
         )
         return {
             **completo,
@@ -775,12 +779,16 @@ class WarehouseService:
 
     # ── Panel §3.1: matriz de inventario por almacén ─────────────────────────
     def _inventario_matriz_completo(
-        self, sucursal: str | None = None, categoria: str | None = None,
-        proveedor: str | None = None, busqueda: str | None = None,
+        self, sucursal: str | None = None, almacen: str | None = None, categoria: str | None = None,
+        proveedor: str | None = None, tipo_movimiento: str | None = None,
         estado: str | None = None,
     ) -> dict[str, Any]:
+        # `almacen`: si el usuario lo filtra, la matriz se restringe a esa sola bodega
+        # (una columna) en vez de mostrar todas -- stock_total/punto_reorden/estado se
+        # recalculan solo sobre las filas devueltas, así que quedan consistentes.
         filas = self.repo.get_stock_por_almacen(
-            sucursal=sucursal, categoria=categoria, proveedor=proveedor, busqueda=busqueda,
+            sucursal=sucursal, almacen=almacen, categoria=categoria,
+            proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         )
         almacenes = sorted({f["almacen"] for f in filas})
         por_producto: dict[str, dict[str, Any]] = {}
@@ -816,13 +824,13 @@ class WarehouseService:
         return {"almacenes": almacenes, "productos": productos}
 
     def get_inventario_matriz(
-        self, pagination: PaginationParams, sucursal: str | None = None, categoria: str | None = None,
-        proveedor: str | None = None, busqueda: str | None = None,
+        self, pagination: PaginationParams, sucursal: str | None = None, almacen: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None, tipo_movimiento: str | None = None,
         estado: str | None = None,
     ) -> dict[str, Any]:
         completo = self._inventario_matriz_completo(
-            sucursal=sucursal, categoria=categoria, proveedor=proveedor,
-            busqueda=busqueda, estado=estado,
+            sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor,
+            tipo_movimiento=tipo_movimiento, estado=estado,
         )
         return {
             "almacenes": completo["almacenes"],
@@ -832,10 +840,10 @@ class WarehouseService:
     # ── Panel §3.2 (RN-B3): transferencias inteligentes ──────────────────────
     def _transferencias_completo(
         self, sucursal: str | None = None, categoria: str | None = None,
-        proveedor: str | None = None, busqueda: str | None = None,
+        proveedor: str | None = None, tipo_movimiento: str | None = None,
     ) -> dict[str, Any]:
         filas = self.repo.get_stock_por_almacen(
-            sucursal=sucursal, categoria=categoria, proveedor=proveedor, busqueda=busqueda,
+            sucursal=sucursal, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         )
         por_producto: dict[str, list[dict[str, Any]]] = {}
         for f in filas:
@@ -922,10 +930,10 @@ class WarehouseService:
 
     def get_transferencias_sugeridas(
         self, pagination: PaginationParams, sucursal: str | None = None, categoria: str | None = None,
-        proveedor: str | None = None, busqueda: str | None = None,
+        proveedor: str | None = None, tipo_movimiento: str | None = None,
     ) -> dict[str, Any]:
         completo = self._transferencias_completo(
-            sucursal=sucursal, categoria=categoria, proveedor=proveedor, busqueda=busqueda,
+            sucursal=sucursal, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         )
         return {
             **completo,

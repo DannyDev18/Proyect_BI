@@ -19,7 +19,7 @@ El dashboard debe contar con los siguientes filtros que afectan a todos los grá
 - **Selector de Categoría**: Filtrar por categoría de producto (BAT, REP, Z-999, HER, SON, LED01, KARCH, etc.) con opción "Todas las categorías".
 - **Selector de Rango de Fechas**: Permite seleccionar un período personalizado con fecha de inicio y fecha de fin.
 - **Selector de Proveedor**: Filtrar por proveedor para identificar qué artículos se compran a cada uno.
-- **Buscar por Código o Nombre de Artículo**: Búsqueda rápida para localizar un producto específico.
+- **Selector de Tipo de Movimiento (Kardex)**: Filtra artículos según el tipo de movimiento de Kardex que han tenido (Ventas/facturas, Transferencias entre bodegas, Egresos, Compras, Devoluciones, Ingresos, Ajustes de bodega, Ajustes/decrementos — catálogo `kardex.tiporg`, docs/auditoria/02_reglas_negocio_validadas.md §3), con opción "Todos los movimientos".
 
 **Comportamiento**: Todos los gráficos y KPIs se actualizan automáticamente al cambiar cualquier filtro. Los filtros deben persistir en la sesión del usuario.
 

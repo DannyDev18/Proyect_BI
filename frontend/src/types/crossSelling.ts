@@ -9,6 +9,7 @@ export interface SugerenciaProducto {
   score: number;
   motivo: string;
   fuente: string;
+  margen_unitario: number | null;
 }
 
 export interface CrossSellSugerenciasResponse {
@@ -39,4 +40,22 @@ export interface ProductoBusqueda {
   nombre: string;
   categoria: string;
   precio: number;
+  margen_unitario: number | null;
+}
+
+export interface ClienteBusqueda {
+  cliente_id: string;
+  nombre: string;
+}
+
+export interface TopCombinacionProducto {
+  codart_a: string;
+  nombre_a: string;
+  codart_b: string;
+  nombre_b: string;
+  facturas: number;
+}
+
+export interface TopCombinacionesResponse {
+  combinaciones: TopCombinacionProducto[];
 }

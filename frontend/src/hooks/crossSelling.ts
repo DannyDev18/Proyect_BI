@@ -2,7 +2,9 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   getCrossSellKpis,
   getCrossSellSugerencias,
+  getCrossSellTopCombinaciones,
   postCrossSellEvento,
+  searchClientes,
   searchProductos,
 } from '../services/crossSelling';
 import { qk } from '../constants/queryKeys';
@@ -32,9 +34,22 @@ export const useCrossSellKpis = (desde?: string, hasta?: string) =>
     queryFn: () => getCrossSellKpis(desde, hasta).then((r) => r.data),
   }));
 
+export const useCrossSellTopCombinaciones = () =>
+  wrap(useQuery({
+    queryKey: qk.crossSelling.topCombinaciones(),
+    queryFn: () => getCrossSellTopCombinaciones().then((r) => r.data),
+  }));
+
 export const useSearchProductos = (q: string) =>
   wrap(useQuery({
     queryKey: qk.crossSelling.productos(q),
     queryFn: () => searchProductos(q).then((r) => r.data),
+    enabled: q.trim().length >= 2,
+  }));
+
+export const useSearchClientes = (q: string) =>
+  wrap(useQuery({
+    queryKey: qk.crossSelling.clientes(q),
+    queryFn: () => searchClientes(q).then((r) => r.data),
     enabled: q.trim().length >= 2,
   }));

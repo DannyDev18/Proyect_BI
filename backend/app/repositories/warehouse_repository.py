@@ -19,7 +19,22 @@ from sqlalchemy.orm import Session
 
 from app.utils.validators import sanitize_date_str
 
-EXCLUIR_CODART = {"Z-9001"} 
+EXCLUIR_CODART = {"Z-9001"}
+
+# Catálogo cerrado de kardex.tiporg (docs/auditoria/02_reglas_negocio_validadas.md §3):
+# usado tanto para validar el filtro `tipo_movimiento` como para poblar el selector
+# del frontend (WarehouseService.get_filtros).
+TIPOS_MOVIMIENTO = [
+    {"codigo": "FAC", "etiqueta": "Ventas (facturas)"},
+    {"codigo": "TRA", "etiqueta": "Transferencias entre bodegas"},
+    {"codigo": "EGR", "etiqueta": "Egresos"},
+    {"codigo": "CPA", "etiqueta": "Compras"},
+    {"codigo": "DEV", "etiqueta": "Devoluciones"},
+    {"codigo": "ING", "etiqueta": "Ingresos"},
+    {"codigo": "BOD", "etiqueta": "Ajustes de bodega"},
+    {"codigo": "DEC", "etiqueta": "Ajustes / decrementos"},
+]
+
 
 class WarehouseRepository:
     def __init__(self, db: Session):
@@ -29,7 +44,7 @@ class WarehouseRepository:
     @staticmethod
     def _filtros_snapshot(
         sucursal: str | None, almacen: str | None, categoria: str | None,
-        proveedor: str | None, busqueda: str | None,
+        proveedor: str | None, tipo_movimiento: str | None,
     ) -> tuple[str, dict[str, Any]]:
         """Filtros para queries basadas en el snapshot (alias fijos: su=dim_sucursal,
         al=dim_almacen, p=dim_producto)."""
@@ -61,9 +76,26 @@ class WarehouseRepository:
                 "WHERE pr.nombre_proveedor = :proveedor)"
             )
             params["proveedor"] = proveedor
-        if busqueda:
-            filtros.append("(p.codart ILIKE :busqueda OR p.nombre_articulo ILIKE :busqueda)")
-            params["busqueda"] = f"%{busqueda}%"
+        if tipo_movimiento:
+            # Filtro por tipo de movimiento de Kardex (kardex.tiporg, regla de negocio §3):
+            # solo incluye artículos con AL MENOS UN movimiento de ese tipo (FAC=venta,
+            # TRA=transferencia entre bodegas, EGR=egreso, CPA=compra, DEV=devolución,
+            # BOD=ajuste de bodega, ING=ingreso, DEC=ajuste/decremento). FAC en particular
+            # matchea ~462k de las ~949k filas del hecho (casi todo el catálogo alguna vez
+            # se vendió) -- muy poco selectivo. El IN anidado por producto_sk (en vez de
+            # unir primero a dim_producto por codart) deja que Postgres resuelva un Hash/
+            # Nested Loop Semi Join que se detiene en el primer movimiento por producto,
+            # en vez de materializar las 462k filas antes de deduplicar: medido 113ms →
+            # 12ms contra el EDW real, evitando el `DiskFull` de /dev/shm (64MB) que
+            # tumbaba /kpis y otros endpoints con varias CTEs que repiten este filtro
+            # (docs/auditoria/28_bug_filtro_tipo_movimiento.md).
+            filtros.append(
+                "p.codart IN (SELECT p2.codart FROM edw.dim_producto p2 "
+                "WHERE p2.producto_sk IN (SELECT fmi.producto_sk "
+                "FROM edw.fact_movimientos_inventario fmi "
+                "WHERE fmi.tipo_movimiento = :tipo_movimiento))"
+            )
+            params["tipo_movimiento"] = tipo_movimiento
         clausula = (" AND " + " AND ".join(filtros)) if filtros else ""
         return clausula, params
 
@@ -86,7 +118,7 @@ class WarehouseRepository:
     # ── Surtido real por almacén (KPI "Artículos en Inventario") ────────────
     def get_skus_surtido(
         self, sucursal: str | None = None, almacen: str | None = None,
-        categoria: str | None = None, proveedor: str | None = None, busqueda: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None, tipo_movimiento: str | None = None,
     ) -> int:
         """Tamaño real del surtido de un almacén/sucursal. `vi_mv_existencias` (SAP) no
         distingue "nunca asignado a este almacén" de "agotado temporalmente": siempre expone
@@ -96,7 +128,7 @@ class WarehouseRepository:
         AL MENOS UN movimiento histórico de kardex en el almacén (fact_movimientos_inventario,
         cualquier dirección -- regla de negocio 3); verificado que ningún codart con stock
         actual > 0 carece de movimiento histórico, así que nunca subcuenta lo realmente activo."""
-        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, busqueda)
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         query = f"""
             SELECT COUNT(DISTINCT p.codart)
             FROM edw.fact_movimientos_inventario m
@@ -120,12 +152,12 @@ class WarehouseRepository:
     def get_inventario_productos(
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, dias_salidas: int = 30,
+        tipo_movimiento: str | None = None, dias_salidas: int = 30,
     ) -> list[dict[str, Any]]:
         """Una fila por codart: stock/valor del último snapshot (sumado sobre los
         almacenes filtrados) + salidas de los últimos `dias_salidas` días + salidas del
         período previo equivalente (tendencia)."""
-        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, busqueda)
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         params["dias"] = dias_salidas
 
         query = f"""
@@ -194,9 +226,9 @@ class WarehouseRepository:
         self, fecha_desde: str | None, fecha_hasta: str | None,
         sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None,
+        tipo_movimiento: str | None = None,
     ) -> dict[str, Any]:
-        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, busqueda)
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         rango = self._rango_fechas(fecha_desde, fecha_hasta, params)
 
         # Rotación (RN-B5): costo de ventas del período / inventario promedio del
@@ -243,12 +275,12 @@ class WarehouseRepository:
 
     def get_snapshot_total_a_fecha(
         self, fecha_corte: str | None, sucursal: str | None = None, almacen: str | None = None,
-        categoria: str | None = None, proveedor: str | None = None, busqueda: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None, tipo_movimiento: str | None = None,
     ) -> dict[str, Any] | None:
         """Totales (SKUs, valor) del snapshot más reciente <= fecha_corte (o el último
         disponible si fecha_corte es None). Para la tendencia "vs mes anterior" (H23-2:
         si no existe snapshot previo devuelve None y el frontend muestra '—')."""
-        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, busqueda)
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         fecha_corte = sanitize_date_str(fecha_corte)
         corte = ""
         if fecha_corte:
@@ -285,10 +317,10 @@ class WarehouseRepository:
 
     def get_valor_por_categoria(
         self, sucursal: str | None = None, almacen: str | None = None,
-        proveedor: str | None = None, busqueda: str | None = None, limit: int = 5,
+        proveedor: str | None = None, tipo_movimiento: str | None = None, limit: int = 5,
     ) -> list[dict[str, Any]]:
         """Top categorías por valor de inventario del último snapshot (KPI 5)."""
-        where_extra, params = self._filtros_snapshot(sucursal, almacen, None, proveedor, busqueda)
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, None, proveedor, tipo_movimiento)
         params["limit"] = limit
         query = f"""
             WITH ultimo AS (SELECT MAX(fecha_sk) AS fecha_sk FROM edw.fact_inventario_snapshot)
@@ -314,29 +346,41 @@ class WarehouseRepository:
         top_n: int | None = None,
     ) -> list[dict[str, Any]]:
         """Serie diaria de unidades salidas. `producto_cod` restringe a un artículo;
-        `top_n` restringe a los N artículos con más salida del rango (para "Top 10")."""
+        `top_n` restringe a los N artículos con más salida del rango (para "Top 10").
+
+        Los JOIN a `dim_almacen`/`dim_sucursal` son condicionales: solo se agregan si el
+        usuario realmente filtra por esa dimensión (`_filtros_snapshot` solo referencia
+        los alias `al`/`su` en el WHERE cuando `almacen`/`sucursal` vienen seteados).
+        Unirlos siempre -- aunque no filtren nada -- desvía al planner del índice parcial
+        `idx_fmi_salidas_fecha_prod` (fecha_sk, producto_sk) WHERE es_salida hacia un Seq
+        Scan completo de fact_movimientos_inventario (~950k filas): medido 63ms → 7ms al
+        quitar los JOIN innecesarios en el caso sin filtro de almacén/sucursal (el caso
+        del gráfico "Histórico y Predicción de Salidas" con "Top 10 productos")."""
         where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, None)
         rango = self._rango_fechas(fecha_desde, fecha_hasta, params)
+        join_al = "JOIN edw.dim_almacen  al ON {m}.almacen_sk = al.almacen_sk" if almacen else ""
+        join_su = "JOIN edw.dim_sucursal su ON {m}.sucursal_sk = su.sucursal_sk" if sucursal else ""
+
         filtro_prod = ""
         if producto_cod:
             filtro_prod = "AND p.codart = :producto_cod"
             params["producto_cod"] = producto_cod
         filtro_top = ""
         if top_n and not producto_cod:
-            filtro_top = """
+            filtro_top = f"""
                 AND p.codart IN (
                     SELECT p2.codart
                     FROM edw.fact_movimientos_inventario m2
                     JOIN edw.dim_fecha d ON m2.fecha_sk = d.fecha_sk
                     JOIN edw.dim_producto p2 ON m2.producto_sk = p2.producto_sk
-                    JOIN edw.dim_almacen  al ON m2.almacen_sk = al.almacen_sk
-                    JOIN edw.dim_sucursal su ON m2.sucursal_sk = su.sucursal_sk
+                    {join_al.format(m='m2')}
+                    {join_su.format(m='m2')}
                     WHERE m2.es_salida {where_extra} {rango}
                     GROUP BY p2.codart
                     ORDER BY SUM(m2.cantidad_movimiento) DESC
                     LIMIT :top_n
                 )
-            """.format(where_extra=where_extra, rango=rango)
+            """
             params["top_n"] = top_n
 
         query = f"""
@@ -344,8 +388,8 @@ class WarehouseRepository:
             FROM edw.fact_movimientos_inventario m
             JOIN edw.dim_fecha d ON m.fecha_sk = d.fecha_sk
             JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
-            JOIN edw.dim_almacen  al ON m.almacen_sk = al.almacen_sk
-            JOIN edw.dim_sucursal su ON m.sucursal_sk = su.sucursal_sk
+            {join_al.format(m='m')}
+            {join_su.format(m='m')}
             WHERE m.es_salida {where_extra} {rango} {filtro_prod} {filtro_top}
             GROUP BY d.fecha_completa
             ORDER BY d.fecha_completa
@@ -358,11 +402,11 @@ class WarehouseRepository:
         self, fecha_desde: str | None, fecha_hasta: str | None,
         sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, limit: int = 200,
+        tipo_movimiento: str | None = None, limit: int = 200,
     ) -> list[dict[str, Any]]:
         """Por producto: costo de ventas y margen del período (fact_ventas_detalle) +
         stock/valor del último snapshot. El servicio calcula rotación y cuadrantes."""
-        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, busqueda)
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         rango = self._rango_fechas(fecha_desde, fecha_hasta, params)
         params["limit"] = limit
 
@@ -425,11 +469,11 @@ class WarehouseRepository:
         fecha_desde_prev: str | None, fecha_hasta_prev: str | None,
         sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
-        busqueda: str | None = None, limit: int = 20,
+        tipo_movimiento: str | None = None, limit: int = 20,
     ) -> list[dict[str, Any]]:
         """Top N productos por unidades salidas en el rango, con el rango previo
         (tendencia §1.3-G3) y stock del último snapshot."""
-        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, busqueda)
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         rango = self._rango_fechas(fecha_desde, fecha_hasta, params)
         params["limit"] = limit
         # Rango previo con parámetros propios (mismos filtros dimensionales).
@@ -498,9 +542,9 @@ class WarehouseRepository:
         self, fecha_desde: str | None, fecha_hasta: str | None,
         fecha_desde_prev: str | None, fecha_hasta_prev: str | None,
         sucursal: str | None = None, almacen: str | None = None,
-        proveedor: str | None = None, busqueda: str | None = None,
+        proveedor: str | None = None, tipo_movimiento: str | None = None,
     ) -> list[dict[str, Any]]:
-        where_extra, params = self._filtros_snapshot(sucursal, almacen, None, proveedor, busqueda)
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, None, proveedor, tipo_movimiento)
         rango = self._rango_fechas(fecha_desde, fecha_hasta, params)
         prev_params: dict[str, Any] = {}
         rango_prev = self._rango_fechas(fecha_desde_prev, fecha_hasta_prev, prev_params)
@@ -559,14 +603,16 @@ class WarehouseRepository:
     # ── Panel §3: stock por producto × almacén (matriz y transferencias) ───
     def get_stock_por_almacen(
         self, sucursal: str | None = None, categoria: str | None = None,
-        proveedor: str | None = None, busqueda: str | None = None,
-        dias_salidas: int = 30, limit: int = 500,
+        proveedor: str | None = None, tipo_movimiento: str | None = None,
+        almacen: str | None = None, dias_salidas: int = 30, limit: int = 500,
     ) -> list[dict[str, Any]]:
         """Una fila por (codart, almacén) con stock del último snapshot y salidas de los
         últimos `dias_salidas` días EN ESE almacén — insumo de la matriz §3.1 y de la
-        lógica de transferencias RN-B3 (excedente/déficit por bodega)."""
-        # `almacen` no aplica aquí: la matriz siempre muestra todas las bodegas.
-        where_extra, params = self._filtros_snapshot(sucursal, None, categoria, proveedor, busqueda)
+        lógica de transferencias RN-B3 (excedente/déficit por bodega). `almacen` es
+        opcional: la matriz de §3.1 lo usa para restringir a una sola bodega cuando el
+        usuario filtra por almacén; las transferencias (§3.2) lo dejan en None porque
+        necesitan comparar TODAS las bodegas entre sí (origen/destino)."""
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         params["dias"] = dias_salidas
         params["limit"] = limit
 

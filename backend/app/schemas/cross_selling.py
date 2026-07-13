@@ -12,6 +12,8 @@ class SugerenciaProducto(BaseModel):
     score: float
     motivo: str
     fuente: str  # 'asociacion' | 'popularidad_categoria' | lo que declare el contrato ganador
+    # None cuando dim_producto.costo_promedio es NULL/0 (H25-4): no se inventa un costo.
+    margen_unitario: float | None = None
 
 
 class CrossSellSugerenciasRequest(BaseModel):
@@ -44,6 +46,12 @@ class ProductoBusqueda(BaseModel):
     nombre: str
     categoria: str
     precio: float
+    margen_unitario: float | None = None
+
+
+class ClienteBusqueda(BaseModel):
+    cliente_id: str
+    nombre: str
 
 
 class CrossSellKpisResponse(BaseModel):
@@ -51,3 +59,18 @@ class CrossSellKpisResponse(BaseModel):
     sugerencias_aceptadas: int
     sugerencias_rechazadas: int
     tasa_conversion_pct: float
+
+
+class TopCombinacionProducto(BaseModel):
+    """Pareja de productos con mayor co-ocurrencia histórica en facturas válidas
+    (docs/auditoria/25_modulo_cross_selling.md §6.4): ejemplo concreto y accionable
+    de qué ofrecer, sin depender de telemetría acumulada del asistente."""
+    codart_a: str
+    nombre_a: str
+    codart_b: str
+    nombre_b: str
+    facturas: int
+
+
+class TopCombinacionesResponse(BaseModel):
+    combinaciones: list[TopCombinacionProducto]

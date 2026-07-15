@@ -96,6 +96,35 @@ export interface MiComision {
   dias_restantes_mes: number;
   en_alerta_cierre: boolean;
   mensaje_alerta: string | null;
+  // Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md):
+  // poblados solo cuando el backend corre en modo "sombra"/"variable" (COMISION_MODO).
+  comision_variable?: number | null;
+  nivel_variable?: NivelComision | null;
+  desglose_variable?: DesgloseComisionVariable | null;
+}
+
+export interface DesgloseLineaComision {
+  codart: string;
+  grupo: string;
+  base_comisionable: number;
+  tasa_pct: number;
+  factor_estrategico: number;
+  factor_credito: number;
+  comision_linea: number;
+  sin_costo: boolean;
+  pendiente_aprobacion: boolean;
+}
+
+export interface DesgloseComisionVariable {
+  comision_base: number;
+  comision_post_tipo: number;
+  nivel: NivelComision;
+  multiplicador_cumplimiento: number;
+  comision_post_cumplimiento: number;
+  devoluciones_estimadas: number;
+  bonos_total: number;
+  comision_final: number;
+  desglose_lineas: DesgloseLineaComision[];
 }
 
 export interface PostGoalInvoiceItem {

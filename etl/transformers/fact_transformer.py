@@ -35,20 +35,49 @@ def transformar_ventas_detalle(df: pd.DataFrame) -> pd.DataFrame:
     df['valor_descuento'] = df['subtotal_bruto'] - df['subtotal_neto']
     df['valor_iva'] = df['subtotal_neto'] * pd.to_numeric(df.get('porceiva'), errors='coerce').fillna(0.0)
     df['total_linea'] = df['subtotal_neto'] + df['valor_iva']
-    df['costo_unitario'] = pd.to_numeric(df.get('ultcos'), errors='coerce')
-    df['costo_total'] = df['cantidad'] * df['costo_unitario']
-    df['margen_bruto'] = df['subtotal_neto'] - df['costo_total']
-    df.drop(columns=['cantid', 'preuni', 'desren', 'totren', 'ultcos', 'porceiva'],
+
+    # Auditoría 34 (H-15): regla de negocio #5 ya validada ("el costo de inventario solo
+    # aplica cuando renglonesfacturas.desinv = 'S'") -- antes se calculaba costo/margen
+    # para TODAS las líneas sin condicionar por 'desinv', atribuyendo costo indebido a
+    # líneas no inventariables (904 líneas, ~$68 mil, confirmado contra Producción). Si
+    # 'desinv' no viene en el origen (p.ej. un extractor que aún no lo trae), se asume
+    # 'S' (comportamiento anterior) para no romper otros consumidores en silencio.
+    desinv = df['desinv'].astype(str).str.strip().str.upper() if 'desinv' in df.columns else pd.Series('S', index=df.index)
+    aplica_costo = desinv == 'S'
+    costo_unitario_bruto = pd.to_numeric(df.get('ultcos'), errors='coerce')
+    df['costo_unitario'] = costo_unitario_bruto.where(aplica_costo)
+    df['costo_total'] = (df['cantidad'] * costo_unitario_bruto).where(aplica_costo)
+    df['margen_bruto'] = np.where(aplica_costo, df['subtotal_neto'] - df['costo_total'], np.nan)
+
+    # Auditoría 34 (H-13): 'es_linea_servicio' se deriva de 'bienser' A NIVEL DE LÍNEA
+    # (renglonesfacturas.bienser: 'S'=servicio, 'B'=bien) -- NO de dim_producto.es_servicio,
+    # que depende de articulos.bienser, un flag del maestro casi sin uso real en Producción
+    # (1 fila en 'S' de 8.152 artículos, contra 58.407 líneas reales en 'S'). Es la fuente
+    # que commission_engine necesita para el grupo S (RN-CM1); antes ninguna línea real
+    # activaba esa rama porque dim_producto.es_servicio era siempre False.
+    df['es_linea_servicio'] = (
+        df['bienser'].astype(str).str.strip().str.upper() == 'S' if 'bienser' in df.columns else False
+    )
+
+    df.drop(columns=['cantid', 'preuni', 'desren', 'totren', 'ultcos', 'porceiva', 'bienser', 'desinv'],
             errors='ignore', inplace=True)
 
-    # Auditoría 08 (F2): costo_unitario/costo_total alimentan margen_bruto — un NULL real de
-    # SAP (artículo sin costeo) no debe convertirse en 0.0, o el margen se infla al 100%.
+    # Auditoría 08 (F2) / Auditoría 34 (H-15): costo_unitario/costo_total/margen_bruto pueden
+    # quedar NULL a propósito -- artículo sin costeo (F2 original) o línea con desinv='N'
+    # (H-15) -- y NO deben convertirse en 0.0: un margen_bruto=0.0 activaría la ruta normal
+    # de comisión con base 0 en vez de la Salvaguarda 2 ("línea sin costo" -> tasa mínima
+    # sobre valor) de commission_engine._calcular_linea, que depende de `margen_bruto is None`.
+    # Antes 'margen_bruto' NO estaba en permitir_nulos (inconsistente con su propio comentario
+    # original) -- no importaba mientras el 100% de las líneas tenía costo (auditoría 30, H1),
+    # pero con H-15 aplicando NULL a 904 líneas reales (desinv='N') sí lo activa.
     df = normalizar_numericos(df, [
         'cantidad', 'precio_unitario', 'subtotal_bruto',
         'valor_descuento', 'subtotal_neto', 'valor_iva', 'total_linea',
-        'margen_bruto'
     ])
-    df = normalizar_numericos(df, ['costo_unitario', 'costo_total'], permitir_nulos=['costo_unitario', 'costo_total'])
+    df = normalizar_numericos(
+        df, ['costo_unitario', 'costo_total', 'margen_bruto'],
+        permitir_nulos=['costo_unitario', 'costo_total', 'margen_bruto'],
+    )
 
     # Calcular pct_margen. A diferencia de margen_bruto/costo_total (que sí pueden quedar NULL
     # cuando SAP no tiene costo del artículo — auditoría 10), pct_margen es NOT NULL por
@@ -134,7 +163,7 @@ def transformar_compras(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def transformar_cobros_cxc(df: pd.DataFrame) -> pd.DataFrame:
-    df = normalizar_strings(df, ['codemp', 'codcli', 'codven', 'codforpag', 'num_transaccion'])
+    df = normalizar_strings(df, ['codemp', 'codcli', 'codven', 'codforpag', 'num_transaccion', 'establ'])
     if 'dias_vencimiento' in df.columns:
         df['dias_vencimiento'] = pd.to_numeric(df['dias_vencimiento'], errors='coerce').fillna(0).astype(int)
     df = normalizar_numericos(df, ['valor_cobrado', 'saldo_documento'])

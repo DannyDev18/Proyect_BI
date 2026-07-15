@@ -1,11 +1,20 @@
 # backend/app/api/routes/goals.py
+import datetime
+
 from fastapi import APIRouter, Depends, status
 
 from app.api.dependencies import (
-    AnalyticsServiceDep, CommissionServiceDep, GoalMLServiceDep, GoalsServiceDep, resolve_sucursal_filter,
+    AnalyticsServiceDep, CommissionConfigServiceDep, CommissionServiceDep, CommissionSimulationServiceDep,
+    GoalMLServiceDep, GoalsServiceDep, resolve_sucursal_filter,
 )
 from app.core.deps import CurrentUserDep, PermissionChecker
 from app.schemas.commission import CommissionTrackingResponse, VendorCommissionRowResponse
+from app.schemas.commission_config import (
+    ConfigVendedorPayload, ConfigVendedoresResponse, ConfigVendedorResponse, FactorCreditoResponse,
+    FactoresCreditoPayload, FactoresCreditoResponse, LineasSinCostoResponse, LineaSinCostoResponse,
+    MatrizCategoriaPayload, MatrizCategoriaResponse, MatrizCategoriasResponse, PerfilCategoriaResponse,
+    PerfilCategoriasResponse, SimulacionRequest, SimulacionResponse, SimulacionVendedorMesResponse,
+)
 from app.schemas.goal import (
     CategoryRecommendationItem, GoalReviewPayload, GoalsAISummaryResponse, GoalTrackingResponse, VendorRiskItem,
 )
@@ -103,3 +112,118 @@ def review_goal(
         comision_base_pct=payload.comision_base_pct,
     )
     return {"message": f"Meta {payload.estado.lower()}"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md)
+# ══════════════════════════════════════════════════════════════════════════════════
+@router.get(
+    "/commission-config/matriz", response_model=MatrizCategoriasResponse, dependencies=[Depends(only_management)],
+    summary="Matriz de categorías/tasas vigente (A/B/C/S/X)",
+)
+def get_matriz_categorias(commission_config_service: CommissionConfigServiceDep) -> MatrizCategoriasResponse:
+    return MatrizCategoriasResponse(reglas=[MatrizCategoriaResponse(**r) for r in commission_config_service.get_matriz()])
+
+
+@router.post(
+    "/commission-config/matriz", response_model=MatrizCategoriaResponse, status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(only_management)], summary="Crea/actualiza una regla de categoría (cierra la vigencia anterior)",
+)
+def upsert_matriz_categoria(
+    payload: MatrizCategoriaPayload, commission_config_service: CommissionConfigServiceDep, current_user: CurrentUserDep,
+) -> MatrizCategoriaResponse:
+    r = commission_config_service.upsert_regla_categoria(
+        clase=payload.clase, subclase=payload.subclase, grupo=payload.grupo, tasa_pct=payload.tasa_pct,
+        base=payload.base, factor_estrategico=payload.factor_estrategico, creado_por=current_user.id,
+    )
+    return MatrizCategoriaResponse(**r)
+
+
+@router.get(
+    "/commission-config/credito", response_model=FactoresCreditoResponse, dependencies=[Depends(only_management)],
+    summary="Factores de ajuste por plazo de crédito vigentes",
+)
+def get_factores_credito(commission_config_service: CommissionConfigServiceDep) -> FactoresCreditoResponse:
+    return FactoresCreditoResponse(
+        factores=[FactorCreditoResponse(**f) for f in commission_config_service.get_factores_credito()],
+    )
+
+
+@router.put(
+    "/commission-config/credito", response_model=FactoresCreditoResponse, dependencies=[Depends(only_management)],
+    summary="Reemplaza la matriz de crédito vigente completa",
+)
+def replace_factores_credito(
+    payload: FactoresCreditoPayload, commission_config_service: CommissionConfigServiceDep,
+) -> FactoresCreditoResponse:
+    nuevos = commission_config_service.replace_factores_credito([f.model_dump() for f in payload.factores])
+    return FactoresCreditoResponse(factores=[FactorCreditoResponse(**f) for f in nuevos])
+
+
+@router.get(
+    "/commission-config/vendedores", response_model=ConfigVendedoresResponse, dependencies=[Depends(only_management)],
+    summary="Tipo (externo/interno) y parámetros por vendedor",
+)
+def get_config_vendedores(commission_config_service: CommissionConfigServiceDep) -> ConfigVendedoresResponse:
+    return ConfigVendedoresResponse(
+        vendedores=[ConfigVendedorResponse(**v) for v in commission_config_service.get_config_vendedores()],
+    )
+
+
+@router.put(
+    "/commission-config/vendedores/{vendedor_origen}", response_model=ConfigVendedorResponse,
+    dependencies=[Depends(only_management)], summary="Crea/actualiza el tipo de un vendedor (externo/interno)",
+)
+def upsert_config_vendedor(
+    vendedor_origen: str, payload: ConfigVendedorPayload, commission_config_service: CommissionConfigServiceDep,
+) -> ConfigVendedorResponse:
+    v = commission_config_service.upsert_config_vendedor(
+        vendedor_origen=vendedor_origen, tipo=payload.tipo, factor_tipo=payload.factor_tipo,
+        fecha_ingreso=payload.fecha_ingreso,
+    )
+    return ConfigVendedorResponse(**v)
+
+
+@router.post(
+    "/commission-simulation", response_model=SimulacionResponse, dependencies=[Depends(only_management)],
+    summary="Simulación retroactiva N meses: esquema plano vs. variable (Fase 2 del plan)",
+)
+def post_commission_simulation(
+    payload: SimulacionRequest, commission_simulation_service: CommissionSimulationServiceDep,
+) -> SimulacionResponse:
+    r = commission_simulation_service.simular(meses=payload.meses, anio_desde=payload.anio_desde, mes_desde=payload.mes_desde)
+    return SimulacionResponse(
+        meses_simulados=r.meses_simulados, vendedores_simulados=r.vendedores_simulados,
+        costo_total_plana=r.costo_total_plana, costo_total_variable=r.costo_total_variable,
+        margen_bruto_total=r.margen_bruto_total,
+        pct_comision_sobre_margen_plana=r.pct_comision_sobre_margen_plana,
+        pct_comision_sobre_margen_variable=r.pct_comision_sobre_margen_variable,
+        detalle=[SimulacionVendedorMesResponse(**d.__dict__) for d in r.detalle],
+    )
+
+
+@router.get(
+    "/commission-analysis/categorias", response_model=PerfilCategoriasResponse, dependencies=[Depends(only_management)],
+    summary="Perfil de margen por categoría (24 meses) -- insumo de la clasificación A/B/C/S/X (Fase 1)",
+)
+def get_commission_analysis_categorias(
+    commission_config_service: CommissionConfigServiceDep, meses: int = 24,
+) -> PerfilCategoriasResponse:
+    return PerfilCategoriasResponse(
+        perfiles=[PerfilCategoriaResponse(**p) for p in commission_config_service.get_perfil_categorias(meses)],
+    )
+
+
+@router.get(
+    "/lineas-sin-costo", response_model=LineasSinCostoResponse, dependencies=[Depends(only_management)],
+    summary="Salvaguarda 2: líneas del período sin costo registrado en SAP (margen no calculable)",
+)
+def get_lineas_sin_costo(
+    commission_config_service: CommissionConfigServiceDep, anio: int | None = None, mes: int | None = None,
+) -> LineasSinCostoResponse:
+    hoy = datetime.date.today()
+    anio = anio or hoy.year
+    mes = mes or hoy.month
+    return LineasSinCostoResponse(
+        lineas=[LineaSinCostoResponse(**l) for l in commission_config_service.get_lineas_sin_costo(anio, mes)],
+    )

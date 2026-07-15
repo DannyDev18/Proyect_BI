@@ -7,7 +7,10 @@ export interface RouteConfig {
   nav?: { label: string };
 }
 
-export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'ventas' | 'ventas.metas' | 'ventas.cross-selling' | 'settings';
+export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'ventas' | 'ventas.metas' | 'ventas.cross-selling' | 'ventas.cartera360' | 'settings';
+// Nota: 'bodega.compras' (Compras y Proveedores) y 'gerencia.cartera' (Cartera y Flujo de
+// Caja) se retiraron del alcance -- ver docs/auditoria/31_.../33_... para el análisis de
+// datos que motivó su implementación original y esta decisión de descope.
 
 export const ROUTES: Record<RouteKey, RouteConfig> = {
   admin: {
@@ -59,6 +62,11 @@ export const ROUTES: Record<RouteKey, RouteConfig> = {
     path: '/ventas/cross-selling',
     allowedRoles: ['administrador', 'gerencia', 'ventas'],
     nav: { label: 'Venta Cruzada' },
+  },
+  'ventas.cartera360': {
+    path: '/ventas/cartera360',
+    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    nav: { label: 'Cartera 360' },
   },
   settings: {
     path: '/settings',

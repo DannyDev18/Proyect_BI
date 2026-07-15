@@ -1,18 +1,19 @@
 -- Extracción de la tabla articulos (Dimensión Producto/Artículo)
-SELECT 
+-- Auditoría 34 (H-14): 'subcodcla' existe en SAP y está 100% poblado (50 valores
+-- distintos, codemp='01') -- se traía como NULL sin motivo, bloqueando la resolución
+-- por (clase, subclase) que ya soporta commission_engine._resolver_regla.
+SELECT
     codemp,
     codart,
     nomart AS nombre_articulo,
     codcla AS clase,
     NULL AS nombre_clase,
-    NULL AS subclase,
+    subcodcla AS subclase,
     NULL AS nombre_subclase,
     coduni AS unidad,
     NULL AS nombre_unidad,
     prec01 AS precio_oficial,
-    ultcos AS costo_promedio,   -- OJO: 'ultcos' es el ÚLTIMO costo, no un promedio. El nombre de
-                                -- la columna del DW (dim_producto.costo_promedio) se conserva para no
-                                -- alterar el esquema. Ver docs/auditoria/02_reglas_negocio_validadas.md §9.
+    ultcos AS ultimo_costo,
     estado,
     fecult
 FROM

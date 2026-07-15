@@ -10,7 +10,8 @@ SELECT
     saldodoc AS saldo_documento, -- Saldo pendiente
     diasvence AS dias_vencimiento, -- Días de vencimiento
     codforpag,       -- Forma de pago asociada
-    tiporg AS tipo_doc
+    tiporg AS tipo_doc,
+    establ           -- Auditoría 31 (H2): faltaba para resolver sucursal_sk (caía a -1 en el 100% de las filas)
 FROM
     cuentasporcobrar
 WHERE 

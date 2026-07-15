@@ -120,6 +120,18 @@
   to   { opacity: 1; }
 }
 
+/* Accessible focus ring — replaces ad-hoc hover-only borders on interactive elements.
+   Defined via @utility (not a plain class in @layer utilities) so it can be both used
+   directly as a className AND referenced from @apply (e.g. .input-field below) — Tailwind
+   v4's @apply only recognizes registered utilities, not arbitrary CSS classes. */
+@utility focus-ring {
+  outline: none;
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--color-bg-base), 0 0 0 4px var(--ring-focus);
+    border-radius: 8px;
+  }
+}
+
 @layer utilities {
   .animate-fade-in-up  { animation: fade-in-up  0.4s ease-out both; }
   .animate-fade-in     { animation: fade-in     0.3s ease-out both; }
@@ -150,15 +162,6 @@
   .stagger-children > *:nth-child(6) { animation-delay: 300ms; }
   .stagger-children > *:nth-child(n+7) { animation-delay: 340ms; }
 
-  /* Accessible focus ring — replaces ad-hoc hover-only borders on interactive elements */
-  .focus-ring {
-    outline: none;
-  }
-  .focus-ring:focus-visible {
-    box-shadow: 0 0 0 2px var(--color-bg-base), 0 0 0 4px var(--ring-focus);
-    border-radius: 8px;
-  }
-
   /* Skeleton shimmer */
   .skeleton {
     background: linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%);
@@ -177,6 +180,12 @@
   }
   .card-hover {
     @apply transition-colors duration-200 hover:border-slate-700;
+  }
+
+  /* Bare text/number input — same visual language as <Select>, for compact inline
+     forms (ej. paneles de configuración de gerencia) that don't need a full component. */
+  .input-field {
+    @apply bg-slate-950 border border-slate-700 text-slate-300 rounded-md outline-none px-3 py-2 text-sm hover:border-slate-600 focus-ring disabled:opacity-40 disabled:cursor-not-allowed;
   }
 
   @media (prefers-reduced-motion: reduce) {

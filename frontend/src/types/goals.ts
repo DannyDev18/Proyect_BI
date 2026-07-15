@@ -51,4 +51,8 @@ export interface VendorCommissionRow {
   tasa_aplicada_pct: number;
   comision_devengada: number;
   estado: string;
+  // Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md):
+  // null salvo que el backend corra en modo "sombra"/"variable" (COMISION_MODO).
+  comision_variable?: number | null;
+  nivel_variable?: NivelComision | null;
 }

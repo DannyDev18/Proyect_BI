@@ -72,16 +72,30 @@ def transformar_clientes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def transformar_productos(df: pd.DataFrame) -> pd.DataFrame:
-    df = normalizar_strings(df, ['codemp', 'codart', 'nombre_articulo', 'clase', 'nombre_clase', 
+    # Auditoría 34: 'ultcos' es el ÚLTIMO costo, no un promedio -- el extractor ahora lo
+    # trae con el alias correcto ('ultimo_costo'), pero la columna del DW se conserva
+    # como 'costo_promedio' (edw.dim_producto.costo_promedio) para no alterar el
+    # esquema; se renombra aquí, igual que fact_transformer.py hace con 'numfac'.
+    df = df.rename(columns={'ultimo_costo': 'costo_promedio'})
+
+    df = normalizar_strings(df, ['codemp', 'codart', 'nombre_articulo', 'clase', 'nombre_clase',
                                  'subclase', 'nombre_subclase', 'unidad', 'nombre_unidad', 'estado'])
     df = normalizar_numericos(df, ['precio_oficial', 'costo_promedio'])
     df = normalizar_estado(df, 'estado')
     # Auditoría 08 (F8): mismo riesgo de violar el índice único parcial SCD2 que en clientes.
     df = deduplicar(df, clave_natural=['codemp', 'codart'])
 
+    # Auditoría 34 (H-13): 'es_servicio' NO se deriva de articulos.bienser -- ese flag del
+    # maestro de artículo casi no se usa en Producción (1 fila en 'S' de 8.152, auditoría
+    # 34 §11.3-bis). La clasificación real bien/servicio vive por LÍNEA de transacción
+    # (renglonesfacturas.bienser, 58.407 líneas 'S' reales) y se resuelve a nivel de
+    # fact_ventas_detalle (fact_transformer.transformar_ventas_detalle), no aquí. Este
+    # campo de dim_producto queda como atributo informativo de catálogo, no como fuente
+    # de verdad para el motor de comisiones variables (commission_engine usa el campo de
+    # la línea, no el del producto).
     if 'es_servicio' not in df.columns:
         df['es_servicio'] = False
-        
+
     # SCD-2
     if 'fecha_inicio_vigencia' not in df.columns:
         df['fecha_inicio_vigencia'] = pd.Timestamp.now().date()

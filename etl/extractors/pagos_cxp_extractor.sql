@@ -24,4 +24,4 @@ SELECT
 FROM
     cuentasporpagar
 WHERE
-    codemp = '{CODEMP}';
+    codemp = '{CODEMP}' AND fecemi >= '{FECHA_DESDE}';

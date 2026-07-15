@@ -25,9 +25,15 @@ CREATE TABLE edw.Fact_Ventas_Detalle (
     costo_total         NUMERIC(15,4),
     margen_bruto        NUMERIC(15,4),
     pct_margen          NUMERIC(8,4) NOT NULL,
+    es_linea_servicio   BOOLEAN NOT NULL DEFAULT FALSE,
     fecha_carga         TIMESTAMP DEFAULT NOW()
 );
 COMMENT ON TABLE edw.Fact_Ventas_Detalle IS 'Hechos detallados de transacciones de venta.';
+COMMENT ON COLUMN edw.Fact_Ventas_Detalle.es_linea_servicio IS
+    'Auditoría 34 (H-13): derivado de renglonesfacturas.bienser (línea de transacción), NO
+     de dim_producto.es_servicio (articulos.bienser casi no se usa en Producción: 1 fila en
+     ''S'' de 8.152 artículos, contra 58.407 líneas reales en ''S''). Fuente real para el
+     grupo S (servicios) del motor de Comisiones Variables (commission_engine.py).';
 COMMENT ON COLUMN edw.Fact_Ventas_Detalle.pct_margen IS
     'margen_bruto / subtotal_neto. Convención (auditoría 07 H8): si subtotal_neto = 0
      (promociones/cortesías con precio 0), pct_margen = 0, no NULL ni error de carga.';

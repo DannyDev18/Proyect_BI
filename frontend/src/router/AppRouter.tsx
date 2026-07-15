@@ -15,6 +15,7 @@ import { BodegaReportes } from '../pages/BodegaReportes.tsx';
 import { DashboardVentas } from '../pages/DashboardVentas.tsx';
 import { DashboardMetasVendedor } from '../pages/DashboardMetasVendedor.tsx';
 import { VentasCrossSelling } from '../pages/VentasCrossSelling.tsx';
+import { VentasCartera360 } from '../pages/VentasCartera360.tsx';
 import { AccessDenied } from '../pages/AccessDenied.tsx';
 import { Settings } from '../pages/Settings.tsx';
 import { NotFound } from '../pages/NotFound.tsx';
@@ -120,6 +121,11 @@ export const AppRouter = () => {
             <Route path="cross-selling" element={
               <ProtectedRoute routeKey="ventas.cross-selling">
                 <VentasCrossSelling />
+              </ProtectedRoute>
+            } />
+            <Route path="cartera360" element={
+              <ProtectedRoute routeKey="ventas.cartera360">
+                <VentasCartera360 />
               </ProtectedRoute>
             } />
           </Route>

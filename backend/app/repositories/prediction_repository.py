@@ -9,7 +9,8 @@ nombres y semántica entre entrenamiento y serving (H-03 churn, H-04 anomalías,
 RFM) que hacía que estos endpoints nunca produjeran una predicción válida."""
 from typing import NamedTuple
 
-from sqlalchemy import text
+import pandas as pd
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 
@@ -67,6 +68,36 @@ class PredictionRepository:
         monetary_value = float(res[1]) if res[1] is not None else 0.0
         average_ticket = monetary_value / frequency if frequency > 0 else 0.0
         return ChurnFeatures(frequency=frequency, monetary_value=monetary_value, average_ticket=average_ticket)
+
+    def get_churn_features_batch(self, cliente_ids: list[str]) -> pd.DataFrame:
+        """Misma feature de `get_churn_features`, pero para un lote de clientes en UNA
+        sola consulta (mismo contrato de columnas que `ChurnFeatures`) -- usada por el
+        módulo Cartera 360 (docs/features/propuesta_nuevos_modulos_roi.md §4) para
+        rerankear un conjunto acotado de candidatos con el churn real del modelo, sin
+        recorrer la cartera completa con una consulta por cliente (auditoría 32 H1)."""
+        if not cliente_ids:
+            return pd.DataFrame(columns=["cliente_id", "frequency", "monetary_value", "average_ticket"])
+        query = text("""
+            SELECT
+                l.id_cliente_transaccional AS cliente_id,
+                COUNT(DISTINCT f.fecha_completa) AS frequency,
+                COALESCE(SUM(v.subtotal_neto), 0) AS monetary_value
+            FROM edw.fact_ventas_detalle v
+            JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
+            JOIN edw.dim_cliente c ON v.cliente_sk = c.cliente_sk
+            JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
+            JOIN edw.dim_estado_documento ed ON v.estado_documento_sk = ed.estado_documento_sk
+            WHERE l.id_cliente_transaccional IN :cliente_ids
+              AND ed.estado_documento_sk <> -1
+            GROUP BY l.id_cliente_transaccional
+        """).bindparams(bindparam("cliente_ids", expanding=True))
+        df = pd.read_sql(query, self.db.connection(), params={"cliente_ids": cliente_ids})
+        df["frequency"] = df["frequency"].astype(float)
+        df["monetary_value"] = df["monetary_value"].astype(float)
+        df["average_ticket"] = df.apply(
+            lambda r: r["monetary_value"] / r["frequency"] if r["frequency"] > 0 else 0.0, axis=1,
+        )
+        return df
 
     def get_transaction_features(self, transaccion_id: str) -> AnomalyFeatures | None:
         query = """

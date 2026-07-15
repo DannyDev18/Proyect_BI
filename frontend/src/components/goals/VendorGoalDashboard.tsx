@@ -179,6 +179,51 @@ export const VendorGoalDashboard = () => {
           </div>
         </ChartCard>
 
+        {/* Comisiones Variables (piloto en sombra): solo se muestra si el backend está
+            calculando el esquema por margen/categoría en paralelo (COMISION_MODO=sombra). */}
+        {comision.data?.comision_variable != null && (
+          <ChartCard
+            title="Con el sistema nuevo habrías ganado"
+            badge={{ label: 'Piloto en sombra', variant: 'ml' }}
+            height="h-[220px]"
+          >
+            <div className="grid grid-cols-2 gap-4 h-full items-center">
+              <div className="flex flex-col items-center text-center gap-1">
+                <Wallet size={20} className="text-amber-400" aria-hidden="true" />
+                <span className="font-mono text-2xl font-semibold text-amber-300">
+                  {fmtMoney(comision.data.comision_variable)}
+                </span>
+                <span className="text-xs text-slate-500">Comisión variable (margen/categoría)</span>
+              </div>
+              <div className="flex flex-col items-center text-center gap-1">
+                <Wallet size={20} className="text-teal-400" aria-hidden="true" />
+                <span className="font-mono text-2xl font-semibold text-slate-100">
+                  {fmtMoney(comision.data.comision_devengada)}
+                </span>
+                <span className="text-xs text-slate-500">Comisión actual (tasa plana)</span>
+              </div>
+              <p className="col-span-2 text-xs text-slate-500 text-center">
+                Comparación simulada -- no afecta tu pago actual mientras el piloto esté en sombra.
+              </p>
+              {comision.data.desglose_variable && (
+                <details className="col-span-2 text-xs text-slate-400">
+                  <summary className="cursor-pointer text-center text-teal-400 hover:text-teal-300">
+                    Ver cómo se calculó
+                  </summary>
+                  <ul className="mt-2 space-y-1 font-mono">
+                    <li className="flex justify-between"><span>Base por línea (categoría/margen)</span><span>{fmtMoney(comision.data.desglose_variable.comision_base)}</span></li>
+                    <li className="flex justify-between"><span>× Tipo de vendedor</span><span>{fmtMoney(comision.data.desglose_variable.comision_post_tipo)}</span></li>
+                    <li className="flex justify-between"><span>× Cumplimiento ({comision.data.desglose_variable.multiplicador_cumplimiento.toFixed(2)}×, {NIVEL_CONFIG[comision.data.desglose_variable.nivel].label})</span><span>{fmtMoney(comision.data.desglose_variable.comision_post_cumplimiento)}</span></li>
+                    <li className="flex justify-between"><span>− Devoluciones estimadas</span><span>{fmtMoney(comision.data.desglose_variable.devoluciones_estimadas)}</span></li>
+                    <li className="flex justify-between"><span>+ Bonos (venta cruzada, cliente nuevo, cobranza)</span><span>{fmtMoney(comision.data.desglose_variable.bonos_total)}</span></li>
+                    <li className="flex justify-between border-t border-slate-800 pt-1 text-teal-300 font-semibold"><span>Total</span><span>{fmtMoney(comision.data.desglose_variable.comision_final)}</span></li>
+                  </ul>
+                </details>
+              )}
+            </div>
+          </ChartCard>
+        )}
+
         {/* Recomendaciones de productos -- reglas de asociación */}
         <ChartCard
           title="Productos recomendados para cerrar tu meta"

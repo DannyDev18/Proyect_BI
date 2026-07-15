@@ -36,6 +36,27 @@ class VendorTransactionFeatures(NamedTuple):
     margen: float
 
 
+class CommissionLineRow(NamedTuple):
+    """Una línea de venta a grano `fact_ventas_detalle` con las columnas mínimas del
+    motor variable (`commission_engine.LineaComisionable`), ver
+    docs/features/plan_integracion_comisiones_variables.md §3.3.
+
+    `es_servicio` viene de `fact_ventas_detalle.es_linea_servicio` (grano línea, derivado
+    de `renglonesfacturas.bienser` en el ETL), NO de `dim_producto.es_servicio` (grano
+    producto): auditoría 34 (H-13) confirmó contra Producción que el flag del maestro de
+    artículo (`articulos.bienser`) casi no se usa (1 fila en 'S' de 8.152), mientras que
+    la línea de transacción sí tiene 58.407 líneas reales en 'S' -- usar el atributo de
+    producto dejaba el grupo S del motor de comisiones variables sin datos reales."""
+    codart: str
+    clase: str
+    subclase: str | None
+    es_servicio: bool
+    subtotal_neto: float
+    margen_bruto: float | None
+    valor_descuento: float
+    dias_plazo: int
+
+
 class VendorRecentSales(NamedTuple):
     """Un vendedor con actividad en el mes anterior al objetivo -- insumo mínimo de
     `GoalMLService.generate_proposals` para saber a quién generarle una meta y cuántas
@@ -199,6 +220,35 @@ class GoalRepository:
             }
             for r in rows
         ]
+
+    def get_vendor_devoluciones_period(self, vendedor_origen: str, anio: int, mes: int) -> float:
+        """Monto devuelto por el vendedor (todas sus sucursales) en el período -- insumo
+        directo del motor variable (`devoluciones_mes`), separado de `get_vendor_net_sales_period`
+        (que ya lo resta de la venta) porque el motor variable lo necesita como valor
+        propio para estimar la comisión asociada a la devolución (§3.2 del plan)."""
+        query = text("""
+            SELECT COALESCE(SUM(fd.total_linea_devolucion), 0.0)
+            FROM edw.fact_devoluciones fd
+            JOIN edw.dim_fecha d ON fd.fecha_sk = d.fecha_sk
+            JOIN edw.dim_vendedor v ON fd.vendedor_sk = v.vendedor_sk
+            WHERE v.codven = :vendedor AND d.anio = :anio AND d.mes = :mes
+        """)
+        row = self.db.execute(query, {"vendedor": vendedor_origen, "anio": anio, "mes": mes}).fetchone()
+        return float(row[0]) if row and row[0] is not None else 0.0
+
+    def get_vendors_with_sales_in_period(self, anio: int, mes: int) -> list[str]:
+        """Vendedores (código) con al menos una línea de venta válida en el período --
+        usado por la simulación retroactiva para no iterar sobre todo `dim_vendedor`."""
+        query = text("""
+            SELECT DISTINCT v.codven
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1 AND d.anio = :anio AND d.mes = :mes AND v.codven <> '-1'
+        """)
+        rows = self.db.execute(query, {"anio": anio, "mes": mes}).fetchall()
+        return [str(r[0]) for r in rows]
 
     def get_vendor_net_sales_period(self, vendedor_origen: str, anio: int, mes: int) -> float:
         """Venta Neta (ventas - devoluciones, de TODAS las sucursales del vendedor) en un
@@ -377,12 +427,14 @@ class GoalRepository:
         return [str(r[0]) for r in rows]
 
     def get_product_categories(self, codarts: list[str]) -> dict[str, str]:
-        """`codart` -> `nombre_clase` (categoría) -- usado para agregar las reglas de
-        recomendación por categoría en el panel gerencial (integración ML)."""
+        """`codart` -> `clase` (categoría) -- usado para agregar las reglas de
+        recomendación por categoría en el panel gerencial (integración ML). RN-CM2
+        (auditoría 30, H2): se usa el código `clase`, no `nombre_clase` -- 100% vacío en
+        el catálogo vigente, mostraría "Sin categoría" para cada producto."""
         if not codarts:
             return {}
         query = text("""
-            SELECT codart, nombre_clase FROM edw.dim_producto
+            SELECT codart, clase FROM edw.dim_producto
             WHERE codart = ANY(:codarts) AND es_vigente = true
         """)
         rows = self.db.execute(query, {"codarts": codarts}).fetchall()
@@ -402,3 +454,200 @@ class GoalRepository:
         self.db.commit()
         self.db.refresh(goal)
         return goal
+
+    # ── Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md,
+    # docs/auditoria/30_comisiones_variables.md) ────────────────────────────────────
+    def get_commission_lines(self, vendedor_origen: str, anio: int, mes: int) -> list[CommissionLineRow]:
+        """Líneas de venta del vendedor (todas sus sucursales) en el período -- grano
+        central del motor variable. RN-CM2 (auditoría 30, H2): se trae `clase`/`subclase`
+        por código, `nombre_clase` está vacío en el 100% del catálogo vigente."""
+        query = text("""
+            SELECT p.codart, p.clase, p.subclase, f.es_linea_servicio,
+                   f.subtotal_neto, f.margen_bruto, f.valor_descuento, fp.dias_plazo
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+            JOIN edw.dim_formapago fp ON f.formapago_sk = fp.formapago_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1
+              AND v.codven = :vendedor AND d.anio = :anio AND d.mes = :mes
+        """)
+        rows = self.db.execute(query, {"vendedor": vendedor_origen, "anio": anio, "mes": mes}).fetchall()
+        return [
+            CommissionLineRow(
+                codart=str(r[0]), clase=str(r[1] or "*"), subclase=(str(r[2]) if r[2] else None),
+                es_servicio=bool(r[3]), subtotal_neto=float(r[4]),
+                margen_bruto=(float(r[5]) if r[5] is not None else None),
+                valor_descuento=float(r[6] or 0.0), dias_plazo=int(r[7] or 0),
+            )
+            for r in rows
+        ]
+
+    def get_margin_profile_by_category(self, meses: int = 24) -> list[dict]:
+        """Perfil de margen por categoría (`clase`/`subclase`), agregado con
+        SUM(margen)/SUM(venta) -- RN-CM3 (auditoría 30, H3): un AVG por línea se
+        distorsiona por líneas de subtotal casi nulo (cortesías/redondeos). Insumo del
+        clasificador automático A/B/C/S/X (Fase 1 del plan). `es_linea_servicio` viene de
+        `fact_ventas_detalle` (grano línea, auditoría 34 H-13), no de `dim_producto.es_servicio`
+        -- mismo motivo que `get_commission_lines`."""
+        query = text("""
+            WITH Periodo AS (
+                SELECT MAX(d.anio) AS anio_max, MAX(d.mes) AS mes_max FROM edw.dim_fecha d
+                JOIN edw.fact_ventas_detalle f ON f.fecha_sk = d.fecha_sk
+            ),
+            Corte AS (
+                SELECT (anio_max * 12 + mes_max - :meses) AS mes_absoluto_desde FROM Periodo
+            )
+            SELECT p.clase, f.es_linea_servicio,
+                   SUM(f.subtotal_neto) AS venta_total,
+                   SUM(f.margen_bruto) AS margen_total,
+                   COUNT(DISTINCT v.codven) AS num_vendedores,
+                   COUNT(*) AS num_lineas,
+                   COALESCE(SUM(f.valor_descuento) / NULLIF(SUM(f.subtotal_neto + f.valor_descuento), 0), 0) AS tasa_descuento_prom
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+            JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            CROSS JOIN Corte
+            WHERE ed.estado_documento_sk <> -1
+              AND (d.anio * 12 + d.mes) >= Corte.mes_absoluto_desde
+            GROUP BY p.clase, f.es_linea_servicio
+            ORDER BY venta_total DESC
+        """)
+        rows = self.db.execute(query, {"meses": meses}).fetchall()
+        resultado = []
+        for r in rows:
+            venta_total = float(r[2] or 0.0)
+            margen_total = float(r[3] or 0.0)
+            resultado.append({
+                "clase": str(r[0] or "(sin clase)"), "es_servicio": bool(r[1]),
+                "venta_total": venta_total, "margen_total": margen_total,
+                "margen_pct": round((margen_total / venta_total * 100), 2) if venta_total else 0.0,
+                "num_vendedores": int(r[4]), "num_lineas": int(r[5]),
+                "tasa_descuento_prom_pct": round(float(r[6] or 0.0) * 100, 2),
+            })
+        return resultado
+
+    def get_lines_without_cost(self, anio: int, mes: int, limit: int = 200) -> list[dict]:
+        """Salvaguarda 2: líneas del período sin costo registrado (`margen_bruto IS
+        NULL`), para el reporte a gerencia (`/gerencia/goals/lineas-sin-costo`)."""
+        query = text("""
+            SELECT p.codart, v.codven, SUM(f.subtotal_neto) AS venta_afectada, COUNT(*) AS num_lineas
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+            JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1 AND f.margen_bruto IS NULL
+              AND d.anio = :anio AND d.mes = :mes
+            GROUP BY p.codart, v.codven
+            ORDER BY venta_afectada DESC
+            LIMIT :limit
+        """)
+        rows = self.db.execute(query, {"anio": anio, "mes": mes, "limit": limit}).fetchall()
+        return [
+            {"codart": str(r[0]), "vendedor_origen": str(r[1]), "venta_afectada": float(r[2]), "num_lineas": int(r[3])}
+            for r in rows
+        ]
+
+    def get_vendor_credit_profile(self, vendedor_origen: str, anio: int, mes: int) -> dict:
+        """% de ventas a crédito, plazo promedio (`dim_formapago.dias_plazo`) y días de
+        cobro promedio reales (`fact_cobros_cxc.dias_vencimiento`) del vendedor en el
+        período -- insumo del Bono 3 (cobranza sana) y del análisis de Fase 1."""
+        query = text("""
+            WITH Ventas AS (
+                SELECT
+                    SUM(f.subtotal_neto) AS venta_total,
+                    SUM(f.subtotal_neto) FILTER (WHERE fp.dias_plazo > 0) AS venta_credito,
+                    AVG(fp.dias_plazo) FILTER (WHERE fp.dias_plazo > 0) AS plazo_promedio
+                FROM edw.fact_ventas_detalle f
+                JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_formapago fp ON f.formapago_sk = fp.formapago_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                WHERE ed.estado_documento_sk <> -1
+                  AND v.codven = :vendedor AND d.anio = :anio AND d.mes = :mes
+            ),
+            Cobros AS (
+                SELECT AVG(cx.dias_vencimiento) AS dias_cobro_promedio
+                FROM edw.fact_cobros_cxc cx
+                JOIN edw.dim_fecha d ON cx.fecha_sk = d.fecha_sk
+                JOIN edw.dim_vendedor v ON cx.vendedor_sk = v.vendedor_sk
+                WHERE v.codven = :vendedor AND d.anio = :anio AND d.mes = :mes
+            )
+            SELECT
+                COALESCE(Ventas.venta_total, 0), COALESCE(Ventas.venta_credito, 0),
+                Ventas.plazo_promedio, Cobros.dias_cobro_promedio
+            FROM Ventas CROSS JOIN Cobros
+        """)
+        row = self.db.execute(query, {"vendedor": vendedor_origen, "anio": anio, "mes": mes}).fetchone()
+        if not row:
+            return {"pct_venta_credito": 0.0, "plazo_promedio_dias": None, "dias_cobro_promedio": None}
+        venta_total, venta_credito = float(row[0]), float(row[1])
+        return {
+            "pct_venta_credito": round((venta_credito / venta_total * 100), 2) if venta_total else 0.0,
+            "plazo_promedio_dias": (round(float(row[2]), 1) if row[2] is not None else None),
+            "dias_cobro_promedio": (round(float(row[3]), 1) if row[3] is not None else None),
+        }
+
+    def get_new_or_reactivated_clients(self, vendedor_origen: str, anio: int, mes: int, meses_inactividad: int) -> int:
+        """№ de clientes que compraron al vendedor en el período y NO tenían compras
+        (de ningún vendedor) en los `meses_inactividad` meses previos -- Bono 2 (cliente
+        nuevo/reactivado)."""
+        query = text("""
+            WITH ClientesDelMes AS (
+                SELECT DISTINCT f.cliente_sk
+                FROM edw.fact_ventas_detalle f
+                JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                WHERE ed.estado_documento_sk <> -1
+                  AND v.codven = :vendedor AND d.anio = :anio AND d.mes = :mes AND f.cliente_sk <> -1
+            ),
+            ClientesConHistorial AS (
+                SELECT DISTINCT f.cliente_sk
+                FROM edw.fact_ventas_detalle f
+                JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                WHERE ed.estado_documento_sk <> -1
+                  AND f.cliente_sk IN (SELECT cliente_sk FROM ClientesDelMes)
+                  AND (d.anio * 12 + d.mes) BETWEEN (:anio * 12 + :mes - :meses_inactividad) AND (:anio * 12 + :mes - 1)
+            )
+            SELECT COUNT(*) FROM ClientesDelMes
+            WHERE cliente_sk NOT IN (SELECT cliente_sk FROM ClientesConHistorial)
+        """)
+        row = self.db.execute(query, {
+            "vendedor": vendedor_origen, "anio": anio, "mes": mes, "meses_inactividad": meses_inactividad,
+        }).fetchone()
+        return int(row[0]) if row else 0
+
+    def get_cross_sell_accepted_amount(self, vendedor_origen: str, anio: int, mes: int) -> float:
+        """Monto de venta del período en productos que fueron sugeridos y ACEPTADOS por
+        el asistente de venta cruzada (`public.recomendaciones_eventos`, evento
+        `aceptada`) para este vendedor -- Bono 1. Aproximación documentada: la telemetría
+        no referencia la línea de venta exacta, así que se suma la venta real del período
+        en los `codart` sugeridos-aceptados por usuarios ligados a este vendedor
+        (`public.usuarios.id_vendedor_origen`)."""
+        query = text("""
+            WITH ProductosAceptados AS (
+                SELECT DISTINCT re.producto_sugerido_cod
+                FROM public.recomendaciones_eventos re
+                JOIN public.usuarios u ON re.usuario_id = u.id
+                WHERE u.id_vendedor_origen = :vendedor
+                  AND re.evento = 'aceptada'
+                  AND EXTRACT(YEAR FROM re.fecha) = :anio AND EXTRACT(MONTH FROM re.fecha) = :mes
+            )
+            SELECT COALESCE(SUM(f.subtotal_neto), 0)
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1
+              AND v.codven = :vendedor AND d.anio = :anio AND d.mes = :mes
+              AND p.codart IN (SELECT producto_sugerido_cod FROM ProductosAceptados)
+        """)
+        row = self.db.execute(query, {"vendedor": vendedor_origen, "anio": anio, "mes": mes}).fetchone()
+        return float(row[0]) if row and row[0] is not None else 0.0

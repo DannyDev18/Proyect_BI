@@ -40,10 +40,12 @@ from statistics import NormalDist
 
 import pandas as pd
 
+from app.core.config import settings
 from app.core.exceptions import ExternalDataError, ModelContractError, ValidationError
 from app.ml import inference
 from app.ml.forecasting import walk_forward_forecast
 from app.ml.model_loader import ModelLoader
+from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository, VendorMonthlySales
 from app.services.goal_calculation_engine import IQRGoalCalculationEngine, RegistroMensual
@@ -128,11 +130,13 @@ class GoalMLService:
         dataset_repo: DatasetRepository,
         model_loader: ModelLoader,
         calculation_engine: IQRGoalCalculationEngine | None = None,
+        commission_config_repo: CommissionConfigRepository | None = None,
     ):
         self.goal_repo = goal_repo
         self.dataset_repo = dataset_repo
         self.model_loader = model_loader
         self.calculation_engine = calculation_engine or IQRGoalCalculationEngine()
+        self.commission_config_repo = commission_config_repo
 
     # ── Generación de metas (estadística pura: IQR sobre Venta Neta, sin ML) ───────────
     def generate_proposals(self, anio: int, mes: int, factor_presion: float = 1.0) -> int:
@@ -145,13 +149,27 @@ class GoalMLService:
 
         `factor_presion` (el mismo slider de "presión comercial" que ya usaba el
         generador anterior) se pasa como `factor_crecimiento` del motor estadístico --
-        mismo rol: empuje comercial adicional sobre la tendencia ya calculada."""
-        vendedores = self.goal_repo.get_vendors_with_recent_sales(anio, mes)
-        registros_afectados = 0
+        mismo rol: empuje comercial adicional sobre la tendencia ya calculada.
 
+        Ajuste por tipo de vendedor (docs/features/plan_integracion_comisiones_variables.md
+        §2, brecha B1): si hay `commission_config_repo` disponible, la meta base se
+        multiplica por `COMISION_META_FACTOR_EXTERNO`/`_INTERNO` según
+        `comision_config_vendedor.tipo`; un vendedor "nuevo" (fecha_ingreso dentro de
+        `COMISION_VENDEDOR_NUEVO_MESES`) recibe `COMISION_VENDEDOR_NUEVO_FACTOR` del
+        promedio del equipo en vez de su propio histórico (insuficiente/inexistente)."""
+        vendedores = self.goal_repo.get_vendors_with_recent_sales(anio, mes)
+        base_por_vendedor: dict[str, float] = {}
         for t in vendedores:
             sugerencia = self.suggest_goal(t.vendedor_origen, factor_crecimiento=factor_presion)
-            meta_monto = sugerencia.meta_sugerida_estadistica
+            base_por_vendedor[t.vendedor_origen] = sugerencia.meta_sugerida_estadistica
+
+        promedio_equipo = (
+            sum(base_por_vendedor.values()) / len(base_por_vendedor) if base_por_vendedor else 0.0
+        )
+
+        registros_afectados = 0
+        for t in vendedores:
+            meta_monto = self._ajustar_meta_por_tipo(t.vendedor_origen, base_por_vendedor[t.vendedor_origen], promedio_equipo, anio, mes)
             meta_unidades = max(0.0, float(t.unidades_anterior or 0.0) * factor_presion)
 
             existing = self.goal_repo.find_proposal(anio, mes, t.vendedor_origen)
@@ -164,6 +182,22 @@ class GoalMLService:
 
         self.goal_repo.commit()
         return registros_afectados
+
+    def _ajustar_meta_por_tipo(
+        self, vendedor_origen: str, meta_base: float, promedio_equipo: float, anio: int, mes: int,
+    ) -> float:
+        if self.commission_config_repo is None:
+            return meta_base
+        config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor_origen)
+
+        if config_vendedor and config_vendedor.fecha_ingreso:
+            meses_antiguedad = (anio - config_vendedor.fecha_ingreso.year) * 12 + (mes - config_vendedor.fecha_ingreso.month)
+            if 0 <= meses_antiguedad < settings.COMISION_VENDEDOR_NUEVO_MESES:
+                return round(promedio_equipo * settings.COMISION_VENDEDOR_NUEVO_FACTOR, 2)
+
+        tipo = config_vendedor.tipo if config_vendedor else "externo"
+        factor = settings.COMISION_META_FACTOR_EXTERNO if tipo == "externo" else settings.COMISION_META_FACTOR_INTERNO
+        return round(meta_base * factor, 2)
 
     def suggest_goal(
         self, vendedor_origen: str, factor_estacional: float = 1.0, factor_crecimiento: float = 1.0,
@@ -236,7 +270,7 @@ class GoalMLService:
         if not top_productos:
             return []
         recs_df = inference.get_recommendations(self.model_loader, top_productos, top_n=top_n)
-        return [RecomendacionComercial(producto_cod=str(row["item_B"]), score_afinidad=float(row["lift"])) for _, row in recs_df.iterrows()]
+        return [RecomendacionComercial(producto_cod=str(row["item_B"]), score_afinidad=float(row["score"])) for _, row in recs_df.iterrows()]
 
     # ── Pronóstico de cierre ───────────────────────────────────────────────────
     def forecast_cierre(self, sucursal: str | None, meta_mensual: float) -> ForecastCierre:
@@ -294,7 +328,7 @@ class GoalMLService:
                 categoria_origen=categorias.get(str(row["item_A"]), "Desconocida"),
                 categoria_sugerida=categorias.get(str(row["item_B"]), "Desconocida"),
                 producto_sugerido=str(row["item_B"]),
-                score_afinidad=float(row["lift"]),
+                score_afinidad=float(row["score"]),
             )
             for _, row in rules_df.iterrows()
         ]

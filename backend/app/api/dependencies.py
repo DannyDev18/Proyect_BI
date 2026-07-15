@@ -10,7 +10,9 @@ from app.core.deps import CurrentUserDep, SessionDep
 from app.ml.model_loader import ModelLoader
 from app.repositories.analytics_repository import AnalyticsRepository
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.cartera360_repository import Cartera360Repository
 from app.repositories.catalog_repository import CatalogRepository
+from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository
 from app.repositories.prediction_repository import PredictionRepository
@@ -20,7 +22,10 @@ from app.repositories.user_repository import UserRepository
 from app.repositories.warehouse_repository import WarehouseRepository
 from app.services.analytics_service import AnalyticsService
 from app.services.audit_service import AuditService
+from app.services.cartera360_service import Cartera360Service
+from app.services.commission_config_service import CommissionConfigService
 from app.services.commission_service import CommissionService
+from app.services.commission_simulation_service import CommissionSimulationService
 from app.services.goal_ml_service import GoalMLService
 from app.services.goals_service import GoalsService
 from app.services.prediction_service import PredictionService
@@ -69,6 +74,14 @@ def get_audit_repository(db: SessionDep) -> AuditRepository:
 
 def get_recommendation_event_repository(db: SessionDep) -> RecommendationEventRepository:
     return RecommendationEventRepository(db)
+
+
+def get_commission_config_repository(db: SessionDep) -> CommissionConfigRepository:
+    return CommissionConfigRepository(db)
+
+
+def get_cartera360_repository(db: SessionDep) -> Cartera360Repository:
+    return Cartera360Repository(db)
 
 
 # ── Modelos ML (Singleton vía app.state, cargado en el lifespan de main.py) ──
@@ -130,11 +143,13 @@ def get_goal_ml_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
     dataset_repo: Annotated[DatasetRepository, Depends(get_dataset_repository)],
     model_loader: ModelLoaderDep,
+    commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
 ) -> GoalMLService:
     """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_...md):
     compone `GoalRepository` + `DatasetRepository` + `ModelLoader` (para `anomaly` y
-    `sales_rf`, no para metas -- `goals_rf` fue decomisionado)."""
-    return GoalMLService(goal_repo, dataset_repo, model_loader)
+    `sales_rf`, no para metas -- `goals_rf` fue decomisionado) + `CommissionConfigRepository`
+    (ajuste de meta por tipo de vendedor, docs/features/plan_integracion_comisiones_variables.md)."""
+    return GoalMLService(goal_repo, dataset_repo, model_loader, commission_config_repo=commission_config_repo)
 
 
 def get_warehouse_service(
@@ -156,10 +171,27 @@ def get_audit_service(
 
 def get_commission_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+    commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
 ) -> CommissionService:
-    """Liquidación de comisiones (docs/modulo_metas.md): reutiliza `GoalRepository`
-    (venta real vs. meta) -- no necesita un repositorio propio."""
-    return CommissionService(goal_repo)
+    """Liquidación de comisiones (docs/modulo_metas.md, docs/features/
+    plan_integracion_comisiones_variables.md): compone `GoalRepository` (venta real vs.
+    meta) + `CommissionConfigRepository` (matriz/crédito/tipo vendedor del esquema
+    variable, activo según `settings.COMISION_MODO`)."""
+    return CommissionService(goal_repo, commission_config_repo)
+
+
+def get_commission_simulation_service(
+    goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+    commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
+) -> CommissionSimulationService:
+    return CommissionSimulationService(goal_repo, commission_config_repo)
+
+
+def get_commission_config_service(
+    commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
+    goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+) -> CommissionConfigService:
+    return CommissionConfigService(commission_config_repo, goal_repo)
 
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
@@ -169,9 +201,26 @@ GoalsServiceDep = Annotated[GoalsService, Depends(get_goals_service)]
 PredictionServiceDep = Annotated[PredictionService, Depends(get_prediction_service)]
 GoalMLServiceDep = Annotated[GoalMLService, Depends(get_goal_ml_service)]
 CommissionServiceDep = Annotated[CommissionService, Depends(get_commission_service)]
+CommissionSimulationServiceDep = Annotated[CommissionSimulationService, Depends(get_commission_simulation_service)]
+CommissionConfigServiceDep = Annotated[CommissionConfigService, Depends(get_commission_config_service)]
+CommissionConfigRepositoryDep = Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)]
 WarehouseServiceDep = Annotated[WarehouseService, Depends(get_warehouse_service)]
 AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
 CatalogRepositoryDep = Annotated[CatalogRepository, Depends(get_catalog_repository)]
+
+
+def get_cartera360_service(
+    cartera360_repo: Annotated[Cartera360Repository, Depends(get_cartera360_repository)],
+    prediction_service: PredictionServiceDep,
+    catalog_repo: CatalogRepositoryDep,
+) -> Cartera360Service:
+    """Módulo Ventas — Cartera de Clientes 360 (docs/features/propuesta_nuevos_modulos_roi.md
+    §4, auditoría 32): compone `PredictionService` (churn/RFM/cross-sell ya servidos, sin
+    modelos nuevos) con el triage estadístico de `Cartera360Repository`."""
+    return Cartera360Service(cartera360_repo, prediction_service, catalog_repo)
+
+
+Cartera360ServiceDep = Annotated[Cartera360Service, Depends(get_cartera360_service)]
 
 
 # ── Resolución de sucursal por rol ────────────────────────────────────────────

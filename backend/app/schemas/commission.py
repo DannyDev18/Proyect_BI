@@ -13,6 +13,8 @@ class VendorCommissionRowResponse(BaseModel):
     tasa_aplicada_pct: float
     comision_devengada: float
     estado: str
+    comision_variable: Optional[float] = None
+    nivel_variable: Optional[str] = None
 
 
 class CommissionTrackingResponse(BaseModel):
@@ -33,6 +35,9 @@ class MiComisionResponse(BaseModel):
     dias_restantes_mes: int
     en_alerta_cierre: bool
     mensaje_alerta: Optional[str] = None
+    comision_variable: Optional[float] = None
+    nivel_variable: Optional[str] = None
+    desglose_variable: Optional[dict] = None
 
 
 class PostGoalInvoiceItemResponse(BaseModel):

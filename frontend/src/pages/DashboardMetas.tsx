@@ -1,8 +1,16 @@
+import { useState } from 'react';
 import { GoalsConsole } from '../components/goals/GoalsConsole';
 import { GoalsAISummaryPanel } from '../components/goals/GoalsAISummaryPanel';
 import { CommissionTracker } from '../components/goals/CommissionTracker';
+import { CommissionConfigPanel } from '../components/goals/CommissionConfigPanel';
+import { CommissionSimulationPanel } from '../components/goals/CommissionSimulationPanel';
+import { Tabs } from '../components/ui/Tabs';
+
+type VistaMetas = 'operacion' | 'configuracion' | 'simulacion';
 
 export const DashboardMetas = () => {
+  const [vista, setVista] = useState<VistaMetas>('operacion');
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap justify-between items-center gap-3 animate-fade-in">
@@ -12,13 +20,30 @@ export const DashboardMetas = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1">
-          <GoalsConsole />
-      </div>
+      <Tabs
+        value={vista}
+        onChange={(v) => setVista(v as VistaMetas)}
+        items={[
+          { value: 'operacion', label: 'Operación' },
+          { value: 'configuracion', label: 'Comisiones Variables · Config' },
+          { value: 'simulacion', label: 'Comisiones Variables · Simulación' },
+        ]}
+      />
 
-      <CommissionTracker />
+      {vista === 'operacion' && (
+        <>
+          <div className="grid grid-cols-1">
+            <GoalsConsole />
+          </div>
 
-      <GoalsAISummaryPanel />
+          <CommissionTracker />
+
+          <GoalsAISummaryPanel />
+        </>
+      )}
+
+      {vista === 'configuracion' && <CommissionConfigPanel />}
+      {vista === 'simulacion' && <CommissionSimulationPanel />}
     </div>
   );
 };

@@ -47,6 +47,12 @@ export function CommissionTracker() {
 
   const tracking = useCommissionTracking(period.anio, period.mes);
   const totalComision = tracking.data.reduce((sum, f) => sum + f.comision_devengada, 0);
+  // Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md):
+  // `comision_variable` solo viene poblado cuando el backend corre en modo "sombra"/
+  // "variable" (COMISION_MODO) -- la columna se agrega dinámicamente, sin romper el
+  // panel para instalaciones que sigan en modo "plana".
+  const modoSombraActivo = tracking.data.some((f) => f.comision_variable != null);
+  const totalComisionVariable = tracking.data.reduce((sum, f) => sum + (f.comision_variable ?? 0), 0);
 
   const columns: DataTableColumn<VendorCommissionRow>[] = [
     { key: 'vendedor', header: 'Vendedor', render: (f) => <span className="font-semibold text-teal-50">{f.vendedor}</span> },
@@ -61,10 +67,20 @@ export function CommissionTracker() {
     { key: 'tasa', header: 'Tasa', render: (f) => <span className="text-slate-400">{f.tasa_aplicada_pct.toFixed(2)}%</span> },
     {
       key: 'comision',
-      header: 'Comisión',
+      header: 'Comisión (plana)',
       numeric: true,
       render: (f) => <span className="font-semibold text-teal-300">{fmtMoney(f.comision_devengada)}</span>,
     },
+    ...(modoSombraActivo ? [{
+      key: 'comision_variable',
+      header: 'Comisión (variable · piloto)',
+      numeric: true,
+      render: (f: VendorCommissionRow) => (
+        f.comision_variable != null
+          ? <span className="font-semibold text-amber-300">{fmtMoney(f.comision_variable)}</span>
+          : <span className="text-slate-600">—</span>
+      ),
+    } as DataTableColumn<VendorCommissionRow>] : []),
   ];
 
   return (
@@ -95,9 +111,17 @@ export function CommissionTracker() {
       <div className="bg-slate-800/50 rounded-lg p-5 border border-slate-700/50">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-slate-200">Cumplimiento real y comisión por vendedor</h3>
-          <div className="flex items-center gap-1.5 text-sm text-slate-400">
-            <Gift size={14} className="text-teal-400" aria-hidden="true" />
-            Total del período: <span className="font-mono text-teal-300 font-semibold">{fmtMoney(totalComision)}</span>
+          <div className="flex items-center gap-4 text-sm text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <Gift size={14} className="text-teal-400" aria-hidden="true" />
+              Total plana: <span className="font-mono text-teal-300 font-semibold">{fmtMoney(totalComision)}</span>
+            </div>
+            {modoSombraActivo && (
+              <div className="flex items-center gap-1.5">
+                <Gift size={14} className="text-amber-400" aria-hidden="true" />
+                Total variable: <span className="font-mono text-amber-300 font-semibold">{fmtMoney(totalComisionVariable)}</span>
+              </div>
+            )}
           </div>
         </div>
 

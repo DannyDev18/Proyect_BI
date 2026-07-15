@@ -44,6 +44,19 @@ export const qk = {
     aiSummary: () => ['goals', 'ai-summary'] as const,
     commissionTracking: (anio: number, mes: number) => ['goals', 'commission-tracking', anio, mes] as const,
   },
+  commissionConfig: {
+    matriz: () => ['commission-config', 'matriz'] as const,
+    credito: () => ['commission-config', 'credito'] as const,
+    vendedores: () => ['commission-config', 'vendedores'] as const,
+    perfilCategorias: (meses: number) => ['commission-config', 'perfil-categorias', meses] as const,
+    lineasSinCosto: (anio: number | undefined, mes: number | undefined) =>
+      ['commission-config', 'lineas-sin-costo', anio, mes] as const,
+  },
+  cartera360: {
+    listaTrabajo: () => ['cartera360', 'lista-trabajo'] as const,
+    detalleCliente: (clienteId: string) => ['cartera360', 'detalle-cliente', clienteId] as const,
+    tasaRecuperacion: () => ['cartera360', 'tasa-recuperacion'] as const,
+  },
   crossSelling: {
     sugerencias: (items: string[], clienteId: string | null | undefined) =>
       ['cross-selling', 'sugerencias', items, clienteId] as const,

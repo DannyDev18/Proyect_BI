@@ -91,6 +91,52 @@ class Settings(BaseSettings):
     CROSS_SELL_TOP_COMBINACIONES_DIAS: int = int(os.getenv("CROSS_SELL_TOP_COMBINACIONES_DIAS", "730"))
     CROSS_SELL_TOP_COMBINACIONES_N: int = int(os.getenv("CROSS_SELL_TOP_COMBINACIONES_N", "3"))
 
+    # ── Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md,
+    # docs/auditoria/30_comisiones_variables.md) ──────────────────────────────────
+    # `COMISION_MODO` ES el mecanismo de rollback: "plana" (comportamiento actual,
+    # default), "sombra" (calcula ambos esquemas, paga/expone el plano como oficial),
+    # "variable" (el esquema por margen/categoría pasa a ser el oficial).
+    COMISION_MODO: str = os.getenv("COMISION_MODO", "plana")
+    COMISION_TOPE_DESCUENTO_PCT: float = float(os.getenv("COMISION_TOPE_DESCUENTO_PCT", "30.0"))
+    COMISION_TASA_MINIMA_SIN_COSTO_PCT: float = float(os.getenv("COMISION_TASA_MINIMA_SIN_COSTO_PCT", "5.0"))
+    # RN-CM1/RN-CM3 (auditoría 30, H3): líneas con |subtotal_neto| bajo este umbral se
+    # reclasifican a grupo X (tasa 0) -- evita que cortesías/redondeos con subtotal casi
+    # nulo distorsionen el margen ponderado o generen ratios margen/venta absurdos.
+    COMISION_UMBRAL_SUBTOTAL_X: float = float(os.getenv("COMISION_UMBRAL_SUBTOTAL_X", "1.0"))
+    COMISION_BONO_CLIENTE_NUEVO: float = float(os.getenv("COMISION_BONO_CLIENTE_NUEVO", "50.0"))
+    COMISION_BONO_CROSS_SELL_PCT: float = float(os.getenv("COMISION_BONO_CROSS_SELL_PCT", "5.0"))
+    COMISION_BONO_COBRANZA_PCT: float = float(os.getenv("COMISION_BONO_COBRANZA_PCT", "5.0"))
+    COMISION_BONO_COBRANZA_DIAS: int = int(os.getenv("COMISION_BONO_COBRANZA_DIAS", "30"))
+    COMISION_MESES_CLIENTE_REACTIVADO: int = int(os.getenv("COMISION_MESES_CLIENTE_REACTIVADO", "6"))
+    # Multiplicadores de cumplimiento del esquema VARIABLE (propuesta §3.3: 1.2/1.0/0.7/piso;
+    # distintos de los tramos del esquema plano en `commission_engine.calcular_comision`,
+    # que se mantiene intacto para el rollback) -- configurables para que la negociación
+    # con gerencia (Fase 3 del plan) no requiera código.
+    COMISION_MULT_EXCELENTE: float = float(os.getenv("COMISION_MULT_EXCELENTE", "1.2"))
+    COMISION_MULT_CERCA: float = float(os.getenv("COMISION_MULT_CERCA", "0.7"))
+    COMISION_PISO_LEJOS: float = float(os.getenv("COMISION_PISO_LEJOS", "0.0"))
+    # Factor por tipo de vendedor (brecha B1, auditoría 30): dim_vendedor no distingue
+    # externo/interno -- default aplicado cuando un vendedor no tiene fila en
+    # comision_config_vendedor (se asume externo, factor 1.0, sin penalizar a nadie
+    # hasta que gerencia clasifique explícitamente).
+    COMISION_FACTOR_EXTERNO_DEFAULT: float = float(os.getenv("COMISION_FACTOR_EXTERNO_DEFAULT", "1.0"))
+    COMISION_FACTOR_INTERNO_DEFAULT: float = float(os.getenv("COMISION_FACTOR_INTERNO_DEFAULT", "0.70"))
+    COMISION_META_FACTOR_EXTERNO: float = float(os.getenv("COMISION_META_FACTOR_EXTERNO", "1.10"))
+    COMISION_META_FACTOR_INTERNO: float = float(os.getenv("COMISION_META_FACTOR_INTERNO", "0.95"))
+    COMISION_VENDEDOR_NUEVO_MESES: int = int(os.getenv("COMISION_VENDEDOR_NUEVO_MESES", "3"))
+    COMISION_VENDEDOR_NUEVO_FACTOR: float = float(os.getenv("COMISION_VENDEDOR_NUEVO_FACTOR", "0.60"))
+
+    # ── Módulo Ventas: Cartera de Clientes 360 (docs/features/propuesta_nuevos_modulos_roi.md
+    # §4, auditoría 32) ─────────────────────────────────────────────────────────
+    # Tope de la lista de trabajo devuelta al vendedor (la cartera completa puede tener
+    # miles de clientes — auditoría 32 H1 — pero la lista diaria debe ser accionable).
+    VENTAS360_MAX_CARTERA: int = int(os.getenv("VENTAS360_MAX_CARTERA", "100"))
+    # Candidatos a los que SÍ se les consulta el churn real del modelo (en un solo lote,
+    # `PredictionService.get_churn_risk_batch`) antes del rerank final -- acota el costo
+    # de inferencia sin recorrer carteras de hasta 31,000 clientes (auditoría 32 H1,
+    # mejora de verificación 2026-07-14: la priorización original no usaba el modelo real).
+    VENTAS360_CANDIDATOS_ENRIQUECER: int = int(os.getenv("VENTAS360_CANDIDATOS_ENRIQUECER", "300"))
+
     class Config:
         case_sensitive = True
 

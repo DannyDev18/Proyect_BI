@@ -74,11 +74,14 @@ class _DummyClusterer:
 
 
 def _dummy_rules_df():
+    """Mismo contrato que el modelo `association` publicado (filtrado colaborativo
+    item-item, `score` en `[0,1]`) -- no el `lift` del algoritmo Apriori descartado en
+    la competencia de modelos (ver `ml/REPORTE_MEJORA_MODELOS.md`)."""
     import pandas as pd
     return pd.DataFrame({
         "item_A": ["A1", "A2"],
         "item_B": ["B1", "B2"],
         "support": [0.1, 0.2],
         "confidence": [0.5, 0.6],
-        "lift": [0.8, 0.6],
+        "score": [0.8, 0.6],
     })

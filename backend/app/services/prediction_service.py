@@ -298,6 +298,35 @@ class PredictionService:
             logger.error(f"Fallo inferencia de churn para cliente_id={cliente_id}: {e}")
             return {"probabilidad_abandono": 0.0, "riesgo_alto": False}
 
+    def get_churn_risk_batch(self, cliente_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Misma inferencia que `get_churn_risk`, pero para un lote de clientes con UNA
+        sola consulta + UNA sola llamada vectorizada al modelo (en vez de N round-trips)
+        -- usada por Cartera 360 para rerankear un conjunto acotado de candidatos con el
+        churn real (auditoría 32 H1: nunca recorrer la cartera completa con inferencia
+        por cliente)."""
+        if not cliente_ids:
+            return {}
+        df_features = self.prediction_repo.get_churn_features_batch(cliente_ids)
+        if df_features.empty:
+            return {cid: {"probabilidad_abandono": 0.0, "riesgo_alto": False} for cid in cliente_ids}
+        try:
+            df_live = df_features[["frequency", "monetary_value", "average_ticket"]]
+            preds = inference.predict_churn(self.model_loader, df_live)
+            resultado = {
+                str(row["cliente_id"]): {
+                    "probabilidad_abandono": round(float(preds["churn_probability"].iloc[i]) * 100, 2),
+                    "riesgo_alto": bool(preds["churn_probability"].iloc[i] > 0.5),
+                }
+                for i, row in df_features.reset_index(drop=True).iterrows()
+            }
+        except Exception as e:
+            logger.error(f"Fallo inferencia de churn en lote ({len(cliente_ids)} clientes): {e}")
+            resultado = {}
+        # Clientes sin historial suficiente (no aparecieron en df_features) degradan a 0%.
+        for cid in cliente_ids:
+            resultado.setdefault(cid, {"probabilidad_abandono": 0.0, "riesgo_alto": False})
+        return resultado
+
     # ── Caso de uso: Detección de anomalías transaccionales (Admin) ───────────
     def get_anomaly_status(self, transaccion_id: str) -> dict[str, Any]:
         features = self.prediction_repo.get_transaction_features(transaccion_id)

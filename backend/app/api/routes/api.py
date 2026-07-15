@@ -1,7 +1,7 @@
 # backend/app/api/routes/api.py
 from fastapi import APIRouter
 
-from app.api.routes import admin, admin_ml, analytics, auth, goals, roles, sales, users, warehouse
+from app.api.routes import admin, admin_ml, analytics, auth, cartera360, goals, roles, sales, users, warehouse
 
 api_router = APIRouter()
 
@@ -11,6 +11,7 @@ api_router.include_router(roles.router, prefix="/roles", tags=["🏷️ Roles"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["📊 Analytics & KPIs (Gerencia)"])
 api_router.include_router(warehouse.router, prefix="/analytics/bodega", tags=["📦 Analytics (Bodega)"])
 api_router.include_router(sales.router, prefix="/analytics/ventas", tags=["🛒 Analytics (Ventas)"])
+api_router.include_router(cartera360.router, prefix="/analytics/ventas/cartera360", tags=["📇 Analytics (Ventas · Cartera 360)"])
 api_router.include_router(admin.router, prefix="/analytics/admin", tags=["🛡️ Analytics (Admin/Fraude)"])
 api_router.include_router(admin_ml.router, prefix="/admin/modelos", tags=["🤖 MLOps Admin"])
 api_router.include_router(goals.router, prefix="/gerencia/goals", tags=["🎯 Metas y Comisiones"])

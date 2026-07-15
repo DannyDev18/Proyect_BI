@@ -105,3 +105,77 @@ COMMENT ON TABLE public.recomendaciones_eventos IS
 
 CREATE INDEX IF NOT EXISTS idx_recomendaciones_eventos_fecha ON public.recomendaciones_eventos(fecha);
 CREATE INDEX IF NOT EXISTS idx_recomendaciones_eventos_evento ON public.recomendaciones_eventos(evento);
+
+-- ── 5. Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md,
+-- docs/auditoria/30_comisiones_variables.md) ─────────────────────────────────────
+-- Espejo del DDL para volúmenes nuevos; en desarrollo estas tablas también se crean
+-- vía `Base.metadata.create_all` (app/models/commission_config.py) al arrancar el
+-- backend -- ambos caminos deben mantenerse sincronizados.
+
+CREATE TABLE IF NOT EXISTS public.comision_matriz_categorias (
+    id                  SERIAL PRIMARY KEY,
+    clase               VARCHAR(5)  NOT NULL,      -- edw.dim_producto.clase; '*' = default
+    subclase            VARCHAR(5),                -- NULL = toda la clase
+    grupo               VARCHAR(1)  NOT NULL CHECK (grupo IN ('A','B','C','S','X')),
+    tasa_pct            NUMERIC(6,3) NOT NULL CHECK (tasa_pct >= 0 AND tasa_pct <= 100),
+    base                VARCHAR(10) NOT NULL DEFAULT 'margen' CHECK (base IN ('margen','valor')),
+    factor_estrategico  NUMERIC(4,2) NOT NULL DEFAULT 1.0 CHECK (factor_estrategico >= 0.5 AND factor_estrategico <= 1.5),
+    vigente_desde       DATE NOT NULL,
+    vigente_hasta       DATE,
+    creado_por          INTEGER REFERENCES public.usuarios(id) ON DELETE SET NULL,
+    fecha_creacion      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+COMMENT ON TABLE public.comision_matriz_categorias IS
+    'Matriz de tasas por categoría (grupo A/B/C/S/X) del esquema de Comisiones Variables.
+     Indexada por código clase/subclase (edw.dim_producto.nombre_clase está 100% vacío en
+     el catálogo actual, ver auditoría 30 H2). Con vigencias: nunca se edita historia.';
+
+CREATE INDEX IF NOT EXISTS idx_comision_matriz_vigencia
+    ON public.comision_matriz_categorias(clase, subclase, vigente_desde, vigente_hasta);
+
+CREATE TABLE IF NOT EXISTS public.comision_factores_credito (
+    id                  SERIAL PRIMARY KEY,
+    dias_desde          INTEGER NOT NULL CHECK (dias_desde >= 0),
+    dias_hasta          INTEGER,                   -- NULL = sin tope superior
+    factor              NUMERIC(4,2) NOT NULL CHECK (factor >= 0 AND factor <= 1.5),
+    pct_al_facturar     NUMERIC(5,2) NOT NULL DEFAULT 100.0,  -- reservado fase 2 (split cobranza)
+    vigente_desde       DATE NOT NULL,
+    vigente_hasta       DATE
+);
+COMMENT ON TABLE public.comision_factores_credito IS
+    'Factores de ajuste por plazo de crédito de la venta. Auditoría 30 (H4): el EDW actual
+     solo tiene tráfico real en 0 y 30 días -- los tramos > 30 días son configuración
+     latente sin datos históricos que la respalden todavía.';
+
+CREATE TABLE IF NOT EXISTS public.comision_config_vendedor (
+    id                  SERIAL PRIMARY KEY,
+    id_vendedor_origen  VARCHAR(15) NOT NULL UNIQUE,
+    tipo                VARCHAR(10) NOT NULL DEFAULT 'externo' CHECK (tipo IN ('externo','interno')),
+    factor_tipo         NUMERIC(4,2) NOT NULL DEFAULT 1.0 CHECK (factor_tipo >= 0 AND factor_tipo <= 1.5),
+    fecha_ingreso       DATE,
+    activo              BOOLEAN NOT NULL DEFAULT TRUE
+);
+COMMENT ON TABLE public.comision_config_vendedor IS
+    'Tipo (externo/interno) y parámetros de comisión por vendedor -- cubre la brecha B1
+     (auditoría 30): edw.dim_vendedor no distingue externo/interno ni tiene fecha de
+     ingreso, así que se gestiona en public.* por gerencia, no en el EDW.';
+
+CREATE TABLE IF NOT EXISTS public.comision_liquidaciones (
+    id                  SERIAL PRIMARY KEY,
+    anio                INTEGER NOT NULL,
+    mes                 INTEGER NOT NULL CHECK (mes BETWEEN 1 AND 12),
+    id_vendedor_origen  VARCHAR(15) NOT NULL,
+    esquema             VARCHAR(10) NOT NULL CHECK (esquema IN ('plana','variable')),
+    modo                VARCHAR(10) NOT NULL CHECK (modo IN ('sombra','oficial')),
+    comision_total      NUMERIC(15,4) NOT NULL,
+    detalle_json        JSONB NOT NULL,
+    fecha_calculo       TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE (anio, mes, id_vendedor_origen, esquema, modo)
+);
+COMMENT ON TABLE public.comision_liquidaciones IS
+    'Snapshot congelado de una liquidación mensual (piloto en sombra y cierre oficial).
+     detalle_json guarda el desglose línea/categoría/crédito/bonos completo -- salvaguarda
+     6 (transparencia total): el vendedor ve exactamente cómo se calculó cada peso.';
+
+CREATE INDEX IF NOT EXISTS idx_comision_liquidaciones_periodo
+    ON public.comision_liquidaciones(anio, mes, id_vendedor_origen);

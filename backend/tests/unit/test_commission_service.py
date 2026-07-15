@@ -4,6 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.core.config import settings
+from app.services.commission_engine import ComisionVariableCalculada, NivelCumplimiento
 from app.services.commission_service import CommissionService
 
 
@@ -15,6 +17,15 @@ def goal_repo():
 @pytest.fixture
 def service(goal_repo):
     return CommissionService(goal_repo)
+
+
+def _cv_dummy(comision_final: float = 100.0) -> ComisionVariableCalculada:
+    return ComisionVariableCalculada(
+        comision_base=comision_final, comision_post_tipo=comision_final,
+        nivel=NivelCumplimiento.META, multiplicador_cumplimiento=1.0,
+        comision_post_cumplimiento=comision_final, devoluciones_estimadas=0.0,
+        bonos_total=0.0, comision_final=comision_final, desglose_lineas=(),
+    )
 
 
 def test_get_commission_tracking_calcula_comision_por_fila(service, goal_repo):
@@ -127,3 +138,85 @@ def test_get_post_goal_invoices_delega_al_repositorio(service, goal_repo):
     assert len(facturas) == 1
     assert facturas[0].num_factura == "F001"
     goal_repo.get_post_goal_invoices.assert_called_once_with("VEN01", 2026, 6, 10000.0)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Snapshot de liquidación: mapeo de `settings.COMISION_MODO` -> `modo` de la BD
+# (auditoría 34, H-4). `comision_liquidaciones.modo` tiene un CHECK ('sombra','oficial'),
+# distinto del vocabulario del backend ('plana'/'sombra'/'variable') -- pasar el valor
+# de `COMISION_MODO` tal cual violaba el CHECK en modo "variable".
+# ══════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def commission_config_repo():
+    repo = MagicMock()
+    repo.get_matriz_as_reglas.return_value = []
+    repo.get_factores_credito_as_rangos.return_value = []
+    repo.get_config_vendedor.return_value = None
+    return repo
+
+
+@pytest.fixture
+def service_variable(goal_repo, commission_config_repo):
+    return CommissionService(goal_repo, commission_config_repo)
+
+
+def test_snapshot_modo_variable_se_persiste_como_oficial(service_variable, goal_repo, commission_config_repo, monkeypatch):
+    monkeypatch.setattr(settings, "COMISION_MODO", "variable")
+    goal_repo.get_commission_lines.return_value = []
+    goal_repo.get_vendor_devoluciones_period.return_value = 0.0
+    goal_repo.get_cross_sell_accepted_amount.return_value = 0.0
+    goal_repo.get_new_or_reactivated_clients.return_value = 0
+    goal_repo.get_vendor_credit_profile.return_value = {"dias_cobro_promedio": None}
+    goal_repo.get_goal_for_period.return_value = MagicMock(monto_meta=10000.0, comision_base_pct=7.0, bono_sobrecumplimiento=0.0)
+    goal_repo.get_vendor_net_sales_period.return_value = 9000.0
+
+    service_variable.get_my_commission("VEN01", 2020, 1)  # período cerrado -> persiste snapshot
+
+    commission_config_repo.save_liquidacion.assert_called_once()
+    kwargs = commission_config_repo.save_liquidacion.call_args.kwargs
+    assert kwargs["modo"] == "oficial"
+
+
+def test_snapshot_modo_sombra_se_persiste_igual(service_variable, goal_repo, commission_config_repo, monkeypatch):
+    monkeypatch.setattr(settings, "COMISION_MODO", "sombra")
+    goal_repo.get_commission_lines.return_value = []
+    goal_repo.get_vendor_devoluciones_period.return_value = 0.0
+    goal_repo.get_cross_sell_accepted_amount.return_value = 0.0
+    goal_repo.get_new_or_reactivated_clients.return_value = 0
+    goal_repo.get_vendor_credit_profile.return_value = {"dias_cobro_promedio": None}
+    goal_repo.get_goal_for_period.return_value = MagicMock(monto_meta=10000.0, comision_base_pct=7.0, bono_sobrecumplimiento=0.0)
+    goal_repo.get_vendor_net_sales_period.return_value = 9000.0
+
+    service_variable.get_my_commission("VEN01", 2020, 1)
+
+    kwargs = commission_config_repo.save_liquidacion.call_args.kwargs
+    assert kwargs["modo"] == "sombra"
+
+
+def test_snapshot_no_se_persiste_en_modo_plana(service_variable, goal_repo, commission_config_repo, monkeypatch):
+    monkeypatch.setattr(settings, "COMISION_MODO", "plana")
+    goal_repo.get_goal_for_period.return_value = MagicMock(monto_meta=10000.0, comision_base_pct=7.0, bono_sobrecumplimiento=0.0)
+    goal_repo.get_vendor_net_sales_period.return_value = 9000.0
+
+    resultado = service_variable.get_my_commission("VEN01", 2020, 1)
+
+    assert resultado.comision_variable is None
+    commission_config_repo.save_liquidacion.assert_not_called()
+
+
+def test_snapshot_no_se_persiste_en_mes_en_curso(service_variable, goal_repo, commission_config_repo, monkeypatch):
+    """Salvaguarda 6 existente: el mes en curso no se congela porque su cálculo cambia
+    con cada consulta -- confirmamos que sigue vigente tras el fix de H-4."""
+    monkeypatch.setattr(settings, "COMISION_MODO", "variable")
+    hoy = datetime.date.today()
+    goal_repo.get_commission_lines.return_value = []
+    goal_repo.get_vendor_devoluciones_period.return_value = 0.0
+    goal_repo.get_cross_sell_accepted_amount.return_value = 0.0
+    goal_repo.get_new_or_reactivated_clients.return_value = 0
+    goal_repo.get_vendor_credit_profile.return_value = {"dias_cobro_promedio": None}
+    goal_repo.get_goal_for_period.return_value = MagicMock(monto_meta=10000.0, comision_base_pct=7.0, bono_sobrecumplimiento=0.0)
+    goal_repo.get_vendor_net_sales_period.return_value = 9000.0
+
+    service_variable.get_my_commission("VEN01", hoy.year, hoy.month)
+
+    commission_config_repo.save_liquidacion.assert_not_called()

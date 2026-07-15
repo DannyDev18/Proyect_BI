@@ -32,23 +32,42 @@ sucursal_ventas = resolve_sucursal_filter(allow_override=False)
 def get_sales_goals(
     analytics_service: AnalyticsServiceDep,
     sucursal_filtro: str | None = Depends(sucursal_ventas),
+    anio: int | None = None,
+    mes: int | None = None,
 ) -> VPKPIVentas:
-    """KPIs de ventas: metas, ranking y proyecciones del período vigente."""
-    kpis = analytics_service.get_sales_kpis(sucursal=sucursal_filtro)
+    """KPIs de ventas: metas, ranking y proyecciones. Por defecto el período vigente;
+    `anio`/`mes` permiten consultar un período anterior (docs/auditoria/
+    34_actualizacion_modulo_ventas.md, H-V3)."""
+    kpis = analytics_service.get_sales_kpis(sucursal=sucursal_filtro, anio=anio, mes=mes)
     return VPKPIVentas(**kpis)
 
 
+def _codven_restriccion(current_user: CurrentUserDep) -> str | None:
+    """RLS de cartera (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V2): rol
+    `ventas` queda restringido a su propia cartera; gerencia/administrador consultan
+    cualquier cliente (mismo criterio de privilegio que `resolve_sucursal_filter`)."""
+    if current_user.role.nombre in ("administrador", "gerencia"):
+        return None
+    return current_user.id_vendedor_origen
+
+
 @router.get("/churn-risk", response_model=ChurnResponse, dependencies=[Depends(vendedor_checker)])
-def get_churn_risk_by_client(cliente_id: str, prediction_service: PredictionServiceDep) -> ChurnResponse:
+def get_churn_risk_by_client(
+    cliente_id: str, prediction_service: PredictionServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+) -> ChurnResponse:
     """Riesgo de abandono de un cliente vía el clasificador entrenado."""
-    res = prediction_service.get_churn_risk(cliente_id)
+    res = prediction_service.get_churn_risk(cliente_id, codven_restriccion)
     return ChurnResponse(cliente_id=cliente_id, probabilidad_abandono=res["probabilidad_abandono"], riesgo_alto=res["riesgo_alto"])
 
 
 @router.get("/recommendations", response_model=RecomendacionResponse, dependencies=[Depends(vendedor_checker)])
-def get_recommendations_for_client(cliente_id: str, prediction_service: PredictionServiceDep) -> RecomendacionResponse:
+def get_recommendations_for_client(
+    cliente_id: str, prediction_service: PredictionServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+) -> RecomendacionResponse:
     """Productos que frecuentemente se venden junto con las últimas compras del cliente."""
-    res = prediction_service.get_product_recommendations(cliente_id)
+    res = prediction_service.get_product_recommendations(cliente_id, codven_restriccion)
     return RecomendacionResponse(
         cliente_id=cliente_id,
         recomendaciones=[RecomendacionProducto(**r) for r in res["recomendaciones"]],
@@ -56,9 +75,12 @@ def get_recommendations_for_client(cliente_id: str, prediction_service: Predicti
 
 
 @router.get("/clientes/{cliente_cod}/segmento", response_model=SegmentacionClienteResponse, dependencies=[Depends(vendedor_checker)])
-def get_customer_segmentation(cliente_cod: str, prediction_service: PredictionServiceDep) -> SegmentacionClienteResponse:
+def get_customer_segmentation(
+    cliente_cod: str, prediction_service: PredictionServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+) -> SegmentacionClienteResponse:
     """Segmento comercial (RFM + K-Means) de un cliente, calculado al vuelo."""
-    res = prediction_service.get_customer_segment(cliente_cod)
+    res = prediction_service.get_customer_segment(cliente_cod, codven_restriccion)
     return SegmentacionClienteResponse(cliente_id=cliente_cod, segmento=res["segmento"], nombre_segmento=res["nombre_segmento"])
 
 

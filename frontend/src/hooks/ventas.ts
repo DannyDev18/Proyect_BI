@@ -11,10 +11,12 @@ const EMPTY_INVOICES: PostGoalInvoiceItem[] = [];
 const errorMessage = (error: unknown): string | null =>
   error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
 
-export const useSalesGoals = () => {
+/** `anio`/`mes` opcionales para consultar un período anterior (docs/auditoria/
+ * 34_actualizacion_modulo_ventas.md, H-V3) -- omitidos, el backend usa el vigente. */
+export const useSalesGoals = (anio?: number, mes?: number) => {
   const query = useQuery({
-    queryKey: qk.ventas.goals(),
-    queryFn: () => getSalesGoals().then((r) => r.data),
+    queryKey: qk.ventas.goals(anio, mes),
+    queryFn: () => getSalesGoals(anio, mes).then((r) => r.data),
   });
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };

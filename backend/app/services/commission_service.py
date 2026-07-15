@@ -12,8 +12,10 @@ from dataclasses import asdict, dataclass
 from app.core.config import settings
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.goal_repository import GoalRepository
+from app.services.commission_bonus import calcular_bonos_periodo
 from app.services.commission_engine import (
-    ComisionVariableCalculada, ConfigComisionVariable, LineaComisionable, calcular_comision, calcular_comision_variable,
+    ComisionVariableCalculada, ConfigComisionVariable, DesgloseLinea, LineaComisionable, NivelCumplimiento,
+    calcular_comision, calcular_comision_variable, fecha_referencia_periodo,
 )
 
 # Alerta de cierre (docs/modulo_metas.md, Fase 3 "PROPUESTA IA"): última semana del mes,
@@ -89,7 +91,6 @@ class CommissionService:
                 cv = self._calcular_variable(r["id_vendedor_origen"], anio, mes, r["venta_neta"], r["monto_meta"])
                 comision_variable = cv.comision_final
                 nivel_variable = cv.nivel.value
-                self._persistir_snapshot(anio, mes, r["id_vendedor_origen"], cv, modo)
 
             resultado.append(VendorCommissionRow(
                 id=r["id"], vendedor=r["vendedor"], monto_meta=c.monto_meta,
@@ -127,7 +128,6 @@ class CommissionService:
             comision_variable = cv.comision_final
             nivel_variable = cv.nivel.value
             desglose_variable = self._serializar_desglose(cv)
-            self._persistir_snapshot(anio, mes, vendedor_origen, cv, settings.COMISION_MODO)
 
         return MiComision(
             vendedor_origen=vendedor_origen, anio=anio, mes=mes,
@@ -138,11 +138,42 @@ class CommissionService:
             comision_variable=comision_variable, nivel_variable=nivel_variable, desglose_variable=desglose_variable,
         )
 
+    # `settings.COMISION_MODO` ("plana"/"sombra"/"variable") es el mecanismo de rollback
+    # del backend; `comision_liquidaciones.modo` es un CHECK constraint de solo
+    # ('sombra','oficial') -- son dos vocabularios distintos a propósito (el de la BD
+    # describe si la liquidación es un piloto o el cierre oficial, no el modo del
+    # backend). Pasar `COMISION_MODO` tal cual violaba el CHECK en modo "variable"
+    # (auditoría 34, H-4: toda escritura de snapshot fallaba con IntegrityError en el
+    # modo que se supone es el de producción).
+    _MODO_BACKEND_A_LIQUIDACION = {"sombra": "sombra", "variable": "oficial"}
+
+    @staticmethod
+    def _es_periodo_actual(anio: int, mes: int) -> bool:
+        hoy = datetime.date.today()
+        return anio == hoy.year and mes == hoy.month
+
     # ── Motor variable (Comisiones Variables) ──────────────────────────────────────
     def _calcular_variable(
         self, vendedor_origen: str, anio: int, mes: int, venta_real: float, monto_meta: float,
     ) -> ComisionVariableCalculada:
         assert self.commission_config_repo is not None
+        modo_liquidacion = self._MODO_BACKEND_A_LIQUIDACION[settings.COMISION_MODO]
+
+        # Inmutabilidad real de liquidaciones "oficiales" (docs/auditoria/
+        # 35_actualizacion_modulo_metas.md, H2): si el período ya cerró y ya existe un
+        # snapshot oficial (dinero real, COMISION_MODO=variable), se devuelve TAL CUAL
+        # -- nunca se recalcula ni se reescribe. Antes cada vista de un período cerrado
+        # recalculaba con la configuración vigente HOY (posiblemente ya cambiada) y
+        # sobrescribía el snapshot en `comision_liquidaciones`, pese a que el modelo
+        # documenta esa tabla como "snapshot congelado" (salvaguarda 6). El modo
+        # "sombra" (piloto, no paga) sigue refrescándose en cada consulta a propósito.
+        if modo_liquidacion == "oficial" and not self._es_periodo_actual(anio, mes):
+            congelada = self.commission_config_repo.get_liquidacion(
+                anio=anio, mes=mes, vendedor_origen=vendedor_origen, esquema="variable", modo="oficial",
+            )
+            if congelada is not None:
+                return self._reconstruir_desde_snapshot(congelada)
+
         lineas_repo = self.goal_repo.get_commission_lines(vendedor_origen, anio, mes)
         lineas = [
             LineaComisionable(
@@ -152,8 +183,14 @@ class CommissionService:
             )
             for l in lineas_repo
         ]
-        matriz = self.commission_config_repo.get_matriz_as_reglas()
-        rangos_credito = self.commission_config_repo.get_factores_credito_as_rangos()
+        # Configuración vigente AL CIERRE DEL PERÍODO consultado, no "hoy" (docs/auditoria/
+        # 35_actualizacion_modulo_metas.md, H1): antes esta llamada no pasaba fecha y
+        # siempre resolvía la matriz/crédito vigentes en el momento de la consulta, sin
+        # importar qué anio/mes se pedía -- mismo fix que ya tenía la simulación
+        # (auditoría 34, H-8) pero que nunca se aplicó al cálculo real.
+        fecha_periodo = fecha_referencia_periodo(anio, mes)
+        matriz = self.commission_config_repo.get_matriz_as_reglas(fecha_periodo)
+        rangos_credito = self.commission_config_repo.get_factores_credito_as_rangos(fecha_periodo)
         config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor_origen)
         factor_tipo = (
             float(config_vendedor.factor_tipo) if config_vendedor else settings.COMISION_FACTOR_EXTERNO_DEFAULT
@@ -176,54 +213,27 @@ class CommissionService:
             venta_real=venta_real, monto_meta=monto_meta, devoluciones_mes=devoluciones,
             bonos_total=0.0, config=config,
         )
-        bonos_total = self._calcular_bonos(vendedor_origen, anio, mes, pre_bonos.comision_post_cumplimiento)
-        if bonos_total == 0.0:
-            return pre_bonos
-
-        return calcular_comision_variable(
+        bonos_total = calcular_bonos_periodo(self.goal_repo, vendedor_origen, anio, mes, pre_bonos.comision_post_cumplimiento)
+        cv = pre_bonos if bonos_total == 0.0 else calcular_comision_variable(
             lineas=lineas, matriz=matriz, rangos_credito=rangos_credito, factor_tipo_vendedor=factor_tipo,
             venta_real=venta_real, monto_meta=monto_meta, devoluciones_mes=devoluciones,
             bonos_total=bonos_total, config=config,
         )
-
-    def _calcular_bonos(self, vendedor_origen: str, anio: int, mes: int, comision_pre_bonos: float) -> float:
-        """Bonos complementarios (§3.4 del plan): venta cruzada aceptada, cliente
-        nuevo/reactivado, cobranza sana. El bono 4 (visitas) queda diferido -- brecha B3
-        (sin geolocalización en el EDW, auditoría 30)."""
-        bono_cross_sell = (
-            self.goal_repo.get_cross_sell_accepted_amount(vendedor_origen, anio, mes)
-            * (settings.COMISION_BONO_CROSS_SELL_PCT / 100.0)
-        )
-        clientes_nuevos = self.goal_repo.get_new_or_reactivated_clients(
-            vendedor_origen, anio, mes, settings.COMISION_MESES_CLIENTE_REACTIVADO,
-        )
-        bono_cliente_nuevo = clientes_nuevos * settings.COMISION_BONO_CLIENTE_NUEVO
-
-        perfil_credito = self.goal_repo.get_vendor_credit_profile(vendedor_origen, anio, mes)
-        dias_cobro = perfil_credito.get("dias_cobro_promedio")
-        bono_cobranza = 0.0
-        if dias_cobro is not None and dias_cobro < settings.COMISION_BONO_COBRANZA_DIAS:
-            bono_cobranza = max(0.0, comision_pre_bonos) * (settings.COMISION_BONO_COBRANZA_PCT / 100.0)
-
-        return round(bono_cross_sell + bono_cliente_nuevo + bono_cobranza, 4)
-
-    # `settings.COMISION_MODO` ("plana"/"sombra"/"variable") es el mecanismo de rollback
-    # del backend; `comision_liquidaciones.modo` es un CHECK constraint de solo
-    # ('sombra','oficial') -- son dos vocabularios distintos a propósito (el de la BD
-    # describe si la liquidación es un piloto o el cierre oficial, no el modo del
-    # backend). Pasar `COMISION_MODO` tal cual violaba el CHECK en modo "variable"
-    # (auditoría 34, H-4: toda escritura de snapshot fallaba con IntegrityError en el
-    # modo que se supone es el de producción).
-    _MODO_BACKEND_A_LIQUIDACION = {"sombra": "sombra", "variable": "oficial"}
+        # Persiste aquí (no en el llamador): esta es la única rama de cálculo fresco --
+        # la rama "congelada" de arriba ya retornó antes de llegar aquí, así que nunca
+        # se re-persiste un snapshot ya existente (H2).
+        self._persistir_snapshot(anio, mes, vendedor_origen, cv, settings.COMISION_MODO)
+        return cv
 
     def _persistir_snapshot(
         self, anio: int, mes: int, vendedor_origen: str, cv: ComisionVariableCalculada, modo: str,
     ) -> None:
         """Congela el cálculo variable (salvaguarda 6: transparencia total) -- solo
-        para períodos ya cerrados (no el mes en curso, que cambia con cada consulta)."""
+        para períodos ya cerrados (no el mes en curso, que cambia con cada consulta).
+        Para modo "oficial" solo se llega aquí cuando `_calcular_variable` NO encontró
+        un snapshot previo (primera congelación) -- de lo contrario ya retornó antes."""
         assert self.commission_config_repo is not None
-        hoy = datetime.date.today()
-        if anio == hoy.year and mes == hoy.month:
+        if self._es_periodo_actual(anio, mes):
             return
         modo_liquidacion = self._MODO_BACKEND_A_LIQUIDACION[modo]
         self.commission_config_repo.save_liquidacion(
@@ -235,6 +245,17 @@ class CommissionService:
     def _serializar_desglose(cv: ComisionVariableCalculada) -> dict:
         d = asdict(cv)
         d["nivel"] = cv.nivel.value
+        return d
+
+    @staticmethod
+    def _reconstruir_desde_snapshot(row) -> ComisionVariableCalculada:
+        """Reconstruye `ComisionVariableCalculada` desde `comision_liquidaciones.detalle_json`
+        (mismo shape que produce `_serializar_desglose`) -- sin volver a tocar el motor
+        ni la configuración actual, para no romper la inmutabilidad del snapshot."""
+        d = dict(row.detalle_json)
+        nivel = NivelCumplimiento(d.pop("nivel"))
+        desglose = tuple(DesgloseLinea(**dl) for dl in d.pop("desglose_lineas", []))
+        return ComisionVariableCalculada(nivel=nivel, desglose_lineas=desglose, **d)
         return d
 
     # ── Facturas emitidas después de alcanzar la meta ──────────────────────────────

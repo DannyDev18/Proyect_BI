@@ -90,8 +90,12 @@ class UserService:
         return user
 
     def create(self, user_in: UserCreate) -> User:
-        if self.user_repo.get_by_email(user_in.email):
+        if self.user_repo.get_by_email(user_in.email.lower()):
             raise ConflictError(f"Ya existe un usuario registrado con el correo '{user_in.email}'.")
+        if user_in.id_vendedor_origen and self.user_repo.get_by_vendedor(user_in.id_vendedor_origen):
+            raise ConflictError(
+                f"El código de vendedor '{user_in.id_vendedor_origen}' ya está enlazado a otra cuenta."
+            )
         role = self._validate_role_exists(user_in.rol_id)
         id_vendedor_origen, codalm = self._resolve_role_link(
             role, user_in.id_vendedor_origen, user_in.codalm, bool(user_in.todos_los_almacenes)
@@ -112,6 +116,22 @@ class UserService:
     def update(self, db_user: User, user_in: UserUpdate) -> User:
         update_data = user_in.model_dump(exclude_unset=True)
         todos_los_almacenes = update_data.pop("todos_los_almacenes", False)
+
+        if "email" in update_data and update_data["email"].lower() != db_user.email.lower():
+            update_data["email"] = update_data["email"].lower()
+            existente = self.user_repo.get_by_email(update_data["email"])
+            if existente and existente.id != db_user.id:
+                raise ConflictError(
+                    f"Ya existe otro usuario registrado con el correo '{update_data['email']}'."
+                )
+
+        if "id_vendedor_origen" in update_data and update_data["id_vendedor_origen"]:
+            existente = self.user_repo.get_by_vendedor(update_data["id_vendedor_origen"])
+            if existente and existente.id != db_user.id:
+                raise ConflictError(
+                    f"El código de vendedor '{update_data['id_vendedor_origen']}' ya está "
+                    f"enlazado a otra cuenta ('{existente.email}')."
+                )
 
         role = db_user.role
         if "rol_id" in update_data:

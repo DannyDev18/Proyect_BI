@@ -37,8 +37,13 @@ def test_demand_forecasting_bodega(client, auth_headers):
     assert r.json()["producto_cod"] == "030"
 
 
-def test_churn_risk_ventas(client, auth_headers):
-    r = client.get("/api/v1/analytics/ventas/churn-risk", params={"cliente_id": "C001"}, headers=auth_headers("ventas"))
+def test_churn_risk_gerencia_sin_restriccion_de_cartera(client, auth_headers):
+    """RN-V4 (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V2): el rol `ventas`
+    ya NO puede consultar un cliente arbitrario fuera de su cartera (403, cubierto en
+    test_ventas_actualizacion.py) -- este test ahora usa gerencia, que conserva el
+    acceso sin restricción. Antes afirmaba el comportamiento con fuga (ventas + cliente
+    arbitrario -> 200)."""
+    r = client.get("/api/v1/analytics/ventas/churn-risk", params={"cliente_id": "C001"}, headers=auth_headers("gerencia"))
     assert r.status_code == 200
     assert "probabilidad_abandono" in r.json()
 

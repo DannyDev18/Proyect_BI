@@ -32,11 +32,6 @@ export const DashboardGerencia = () => {
   const { data: vendedoresLista } = useVendedores();
   const { data: almacenesLista } = useAlmacenes();
 
-  // Calcular ingresos totales sumando todas las sucursales si existen
-  const ingresosTotales = kpi.data?.ventas_por_sucursal
-    ? Object.values(kpi.data.ventas_por_sucursal).reduce((a, b) => a + b, 0)
-    : 0;
-
   // Switch between Branch logic or Seller logic for the Donut Chart based on active branch filter
   // Updated: even when "Todas las Sucursales" is selected, show "Distribución por Vendedor" to align with goals and commissions
   const donutData = kpi.data?.ventas_por_vendedor
@@ -140,7 +135,7 @@ export const DashboardGerencia = () => {
           <>
             <KpiCard
               title="Ingresos Totales (ventas-devoluciones)"
-              value={kpi.data ? fmtMoney(ingresosTotales) : '—'}
+              value={kpi.data ? fmtMoney(kpi.data.ingresos_totales) : '—'}
               icon={DollarSign}
               trend="neutral"
               animDelay={0}
@@ -194,6 +189,17 @@ export const DashboardGerencia = () => {
                 </div>
               }
             >
+              {/* G-1 (docs/auditoria/33_actualizacion_modulo_gerencia.md, H1): el modelo
+                  sales_rf no fue entrenado con la columna categoría y usa una ventana
+                  continua de historial (no un rango arbitrario), así que "Fecha" y
+                  "Categoría" de la barra de filtros no afectan esta predicción -- solo
+                  a los KPIs e ingresos por categoría de abajo. Aclarado en vez de fingir
+                  que el forecast los respeta. */}
+              <p className="text-xs text-slate-500 mb-3 -mt-2">
+                Este forecast respeta los filtros de <span className="text-slate-400 font-medium">vendedor</span> y{' '}
+                <span className="text-slate-400 font-medium">almacén</span>; el modelo no soporta filtrar por fecha ni categoría
+                (usa siempre el historial continuo completo).
+              </p>
               <ResponsiveContainer width="100%" height={380}>
                 <AreaChart
                   data={pred.data.historial_y_prediccion}

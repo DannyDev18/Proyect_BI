@@ -11,6 +11,7 @@ sección detallada "PROPUESTA IA" (Fase 4, la versión elaborada del mismo docum
 por ser la especificación completa del mismo `.md`, no una regla nueva inventada."""
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass
 from enum import Enum
 
@@ -33,6 +34,25 @@ BONUS_TASA_EXCELENTE_PP = 2.0
 #     tasa base configurada.
 FACTOR_TASA_CERCA = 5.0 / 7.0
 #   - Lejos (<80%): 0% -- sin comisión, tal como especifica el enunciado sin ambigüedad.
+
+
+def ultimo_dia_mes(anio: int, mes: int) -> datetime.date:
+    siguiente = datetime.date(anio + (mes == 12), (mes % 12) + 1, 1)
+    return siguiente - datetime.timedelta(days=1)
+
+
+def fecha_referencia_periodo(anio: int, mes: int) -> datetime.date:
+    """Fecha a la que debe resolverse la configuración VIGENTE (matriz de categorías,
+    factores de crédito) al calcular la comisión de un período dado -- docs/auditoria/
+    35_actualizacion_modulo_metas.md, H1: el cierre de un mes usa la configuración
+    vigente hasta el último día de ESE mes, no la vigente "hoy"; de lo contrario un
+    cambio de configuración posterior reescribiría retroactivamente lo que un período
+    ya cerrado habría pagado. Para el mes en curso (`ultimo_dia_mes` en el futuro), se
+    usa "hoy" -- el período abierto sí debe reflejar la configuración vigente ahora
+    mismo. Antes esta lógica solo existía en `CommissionSimulationService` (auditoría
+    34, H-8) y no en el cálculo real de `CommissionService`, que siempre usaba "hoy"
+    sin importar el período consultado."""
+    return min(ultimo_dia_mes(anio, mes), datetime.date.today())
 
 
 class NivelCumplimiento(str, Enum):

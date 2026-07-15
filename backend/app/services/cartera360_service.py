@@ -56,13 +56,19 @@ class Cartera360Service:
 
         return sorted(shortlist, key=lambda c: c["prioridad"], reverse=True)[: settings.VENTAS360_MAX_CARTERA]
 
-    def get_detalle_cliente(self, cliente_id: str) -> dict:
+    def get_detalle_cliente(self, cliente_id: str, codven: str) -> dict:
         """Enriquecimiento bajo demanda (1 cliente, no un loop de cartera): churn real
         del modelo, segmento RFM y recomendaciones de venta cruzada — mismos 3 casos de
-        uso que ya sirve `PredictionService` para el resto del dashboard de Ventas."""
-        churn = self.prediction_service.get_churn_risk(cliente_id)
-        segmento = self.prediction_service.get_customer_segment(cliente_id)
-        recomendaciones = self.prediction_service.get_product_recommendations(cliente_id)
+        uso que ya sirve `PredictionService` para el resto del dashboard de Ventas.
+
+        `codven` siempre se pasa como restricción (docs/auditoria/
+        34_actualizacion_modulo_ventas.md, H-V2): este módulo es self-scope por diseño
+        (RN-V3, sin override para gerencia/administrador) -- antes el docstring del
+        router afirmaba esa restricción pero `get_detalle_cliente` no la aplicaba,
+        permitiendo consultar el detalle de un cliente fuera de la cartera propia."""
+        churn = self.prediction_service.get_churn_risk(cliente_id, codven)
+        segmento = self.prediction_service.get_customer_segment(cliente_id, codven)
+        recomendaciones = self.prediction_service.get_product_recommendations(cliente_id, codven)
         return {
             "cliente_id": cliente_id,
             "probabilidad_abandono": churn["probabilidad_abandono"],

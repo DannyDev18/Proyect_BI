@@ -14,6 +14,8 @@ interface DrawerProps {
  * con Esc y clic fuera, pantalla completa bajo `md`. */
 export const Drawer = ({ open, onClose, title, children }: DrawerProps) => {
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
@@ -22,7 +24,7 @@ export const Drawer = ({ open, onClose, title, children }: DrawerProps) => {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== 'Tab') return;
@@ -46,7 +48,9 @@ export const Drawer = ({ open, onClose, title, children }: DrawerProps) => {
       document.removeEventListener('keydown', onKeyDown);
       previouslyFocused?.focus();
     };
-  }, [open, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onClose se lee vía ref para
+    // que este efecto (foco inicial + focus trap) no se reejecute con cada render del padre.
+  }, [open]);
 
   if (!open) return null;
 

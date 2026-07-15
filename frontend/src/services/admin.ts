@@ -1,5 +1,6 @@
 import { api } from './http';
-import type { AnomaliaResponse, AuditLogEntry, ModelStatus } from '../types/admin';
+import type { AnomaliaResponse, AuditLogEntry, AuditLogFilters, ModelStatus } from '../types/admin';
+import type { Page, PaginationQuery } from '../types/pagination';
 
 export const detectAnomaly = (transaccion_id: string) =>
   api.get<AnomaliaResponse>('/api/v1/analytics/admin/anomalies', {
@@ -12,5 +13,7 @@ export const getMLOpsStatus = () =>
 export const getModelsStatus = () =>
   api.get<ModelStatus[]>('/api/v1/admin/modelos/models');
 
-export const getAuditLogs = (limit = 50) =>
-  api.get<AuditLogEntry[]>('/api/v1/analytics/admin/audit-logs', { params: { limit } });
+export const getAuditLogs = (pagination: PaginationQuery, filters: AuditLogFilters = {}) =>
+  api.get<Page<AuditLogEntry>>('/api/v1/analytics/admin/audit-logs', {
+    params: { ...pagination, ...filters },
+  });

@@ -1,33 +1,21 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  AlertTriangle, Boxes, CalendarClock, ShoppingCart,
-} from 'lucide-react';
+import { AlertTriangle, Boxes, CalendarClock } from 'lucide-react';
 import {
   Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart,
   ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis,
 } from 'recharts';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
-import { AlertBadge } from '../components/ui/AlertBadge';
-import { Pagination } from '../components/ui/Pagination';
 import { Select } from '../components/ui/Select';
-import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { BodegaFilterBar } from '../components/bodega/BodegaFilterBar';
 import { PrediccionComprasChart } from '../components/bodega/PrediccionComprasChart';
 import {
-  useKpisBodega, useNecesidadCompra, useRotacionMatriz, useSalidasCategoria,
-  useSalidasForecast, useStockReorden, useTopProductos,
+  useKpisBodega, useRotacionMatriz, useSalidasCategoria, useSalidasForecast, useTopProductos,
 } from '../hooks/bodega';
-import { usePagination } from '../hooks/usePagination';
 import { useBodegaFiltersStore, toQueryFilters } from '../store/bodegaFiltersStore';
 import { fmt, pct } from '../utils/format';
 import { chartTheme, colorByCategory } from '../utils/chartTheme';
-import type { EstadoStock, ProductoCompra, ProductoStockReorden } from '../types/bodega';
-
-const estadoBadge: Record<EstadoStock, 'critical' | 'warning' | 'neutral' | 'info'> = {
-  'Crítico': 'critical', 'Cerca': 'warning', 'Seguro': 'neutral', 'Exceso': 'info',
-};
 
 const tooltipStyle = {
   backgroundColor: chartTheme.cardBg, borderColor: chartTheme.grid, borderRadius: '8px', fontSize: '12px',
@@ -46,11 +34,6 @@ export const DashboardBodega = () => {
   const rotacion = useRotacionMatriz(filters);
   const top = useTopProductos(filters, 20);
   const categorias = useSalidasCategoria(filters);
-  const [soloCriticos, setSoloCriticos] = useState(false);
-  const stockPagination = usePagination([filters, soloCriticos]);
-  const stockReorden = useStockReorden(filters, soloCriticos, stockPagination.query);
-  const compraPagination = usePagination(filters);
-  const compra = useNecesidadCompra(filters, undefined, compraPagination.query);
 
   // G1: fusiona histórico + predicción en una sola serie para el ComposedChart.
   const serieForecast = useMemo(() => {
@@ -70,75 +53,6 @@ export const DashboardBodega = () => {
     () => (categorias.data ?? []).map((c) => c.categoria),
     [categorias.data],
   );
-
-  const stockReordenColumns: DataTableColumn<ProductoStockReorden>[] = [
-    {
-      key: 'producto', header: 'Producto',
-      render: (p) => (
-        <>
-          <p className="font-semibold text-slate-200">{p.nombre}</p>
-          <p className="text-xs text-slate-500">{p.codart} · {p.categoria}</p>
-        </>
-      ),
-    },
-    {
-      key: 'stock', header: 'Stock / Reorden', width: '200px',
-      render: (p) => {
-        const ratio = p.punto_reorden > 0 ? Math.min(p.stock_actual / (p.punto_reorden * 1.5), 1) : 1;
-        const barColor = p.estado === 'Crítico' ? 'bg-red-500' : p.estado === 'Cerca' ? 'bg-amber-500' : 'bg-emerald-500';
-        return (
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-slate-300 text-xs w-20">{p.stock_actual} / {p.punto_reorden}</span>
-            <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-              <div className={`h-full ${barColor}`} style={{ width: `${ratio * 100}%` }} />
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      key: 'dias', header: 'Días hasta agotarse',
-      render: (p) => <span className="font-mono text-slate-400">{p.dias_hasta_reorden != null ? `${p.dias_hasta_reorden} días` : 'sin consumo'}</span>,
-    },
-    { key: 'estado', header: 'Estado', render: (p) => <AlertBadge variant={estadoBadge[p.estado]}>{p.estado}</AlertBadge> },
-    {
-      key: 'accion', header: 'Acción',
-      render: (p) => p.estado === 'Crítico' ? (
-        <Link to="/bodega/reportes" className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold transition-colors focus-ring">
-          Solicitar Compra
-        </Link>
-      ) : p.estado === 'Exceso' ? (
-        <Link to="/bodega/almacenes" className="px-3 py-1.5 border border-slate-600 hover:border-cyan-500 text-slate-300 rounded text-xs font-semibold transition-colors focus-ring">
-          Sugerir Transferencia
-        </Link>
-      ) : <span className="text-xs text-slate-600">—</span>,
-    },
-  ];
-
-  const compraColumns: DataTableColumn<ProductoCompra>[] = [
-    {
-      key: 'producto', header: 'Producto',
-      render: (p) => (
-        <>
-          <p className="font-semibold text-slate-200">{p.nombre}</p>
-          <p className="text-xs text-slate-500">{p.codart} · {p.justificacion}</p>
-        </>
-      ),
-    },
-    { key: 'stock', header: 'Stock', numeric: true, render: (p) => <span className="text-slate-300">{p.stock_actual}</span> },
-    { key: 'salida', header: 'Salida diaria', numeric: true, render: (p) => <span className="text-slate-400">{p.salida_diaria}/día</span> },
-    { key: 'llega', header: 'Llega a reorden', numeric: true, render: (p) => <span className="text-slate-400">{p.fecha_estimada_reorden ?? '—'}</span> },
-    { key: 'cantidad', header: 'Cant. sugerida', numeric: true, render: (p) => <span className="text-cyan-400 font-semibold">{p.cantidad_sugerida}</span> },
-    { key: 'costo', header: 'Costo total', numeric: true, render: (p) => <span className="text-slate-300">{fmt(p.costo_total)}</span> },
-    {
-      key: 'prioridad', header: 'Prioridad',
-      render: (p) => (
-        <AlertBadge variant={p.prioridad === 'Alta' ? 'critical' : p.prioridad === 'Media' ? 'warning' : 'neutral'}>
-          {p.prioridad}
-        </AlertBadge>
-      ),
-    },
-  ];
 
   return (
     <div className="space-y-6">
@@ -287,12 +201,13 @@ export const DashboardBodega = () => {
                 </Pie>
                 <Tooltip contentStyle={tooltipStyle}
                   content={({ payload }) => {
-                    const p = payload?.[0]?.payload as { categoria?: string; unidades?: number; pct_participacion?: number } | undefined;
+                    const p = payload?.[0]?.payload as { categoria?: string; unidades?: number; pct_participacion?: number; monto_ventas?: number | null } | undefined;
                     if (!p) return null;
                     return (
                       <div style={tooltipStyle} className="p-3 border">
                         <p className="font-semibold text-slate-200">{p.categoria}</p>
                         <p className="text-slate-400">{(p.unidades ?? 0).toLocaleString('es-EC')} uds ({p.pct_participacion ?? 0}%)</p>
+                        {p.monto_ventas != null && <p className="text-emerald-400">Monto: {fmt(p.monto_ventas)}</p>}
                       </div>
                     );
                   }} />
@@ -307,6 +222,7 @@ export const DashboardBodega = () => {
                   </span>
                   <span className="text-slate-500 font-mono">
                     {c.pct_participacion}% · {c.tendencia_pct != null ? `${c.tendencia_pct > 0 ? '+' : ''}${c.tendencia_pct}%` : '—'} · stock {c.stock_disponible.toLocaleString('es-EC')}
+                    {c.monto_ventas != null ? ` · ${fmt(c.monto_ventas)}` : ''}
                   </span>
                 </div>
               ))}
@@ -334,6 +250,7 @@ export const DashboardBodega = () => {
                   <div style={tooltipStyle} className="p-3 border">
                     <p className="font-semibold text-slate-200">{p.nombre} <span className="text-slate-500">({p.codart})</span></p>
                     <p className="text-slate-400">Salidas: {p.unidades.toLocaleString('es-EC')} uds {p.tendencia_pct != null && (p.tendencia_pct >= 0 ? `↑ +${p.tendencia_pct}%` : `↓ ${p.tendencia_pct}%`)}</p>
+                    {p.monto_ventas != null && <p className="text-emerald-400">Monto: {fmt(p.monto_ventas)}</p>}
                     <p className="text-slate-400">Stock: {p.stock_actual} uds · {p.dias_inventario != null ? `${p.dias_inventario} días` : 'sin consumo'}</p>
                   </div>
                 );
@@ -347,70 +264,8 @@ export const DashboardBodega = () => {
         </ResponsiveContainer>
       </ChartCard>
 
-      {/* G5: Estado de stock vs punto de reorden */}
-      <div className="animate-fade-in-up">
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-          <h3 className="font-sans font-semibold text-slate-200">Estado de Stock vs Punto de Reorden</h3>
-          <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
-            <input type="checkbox" checked={soloCriticos} onChange={(e) => setSoloCriticos(e.target.checked)} className="accent-red-500 focus-ring" />
-            Solo críticos
-          </label>
-        </div>
-        <DataTable
-          columns={stockReordenColumns}
-          data={stockReorden.data?.items ?? []}
-          rowKey={(p) => p.codart}
-          loading={stockReorden.loading}
-          error={stockReorden.error ?? undefined}
-          onRetry={stockReorden.refetch}
-          emptyTitle="Sin productos que reportar"
-          emptyDescription="No hay artículos en riesgo de reorden con los filtros actuales."
-          pagination={stockReorden.data && (
-            <Pagination
-              page={stockReorden.data.page} pageSize={stockReorden.data.page_size}
-              total={stockReorden.data.total} totalPages={stockReorden.data.total_pages}
-              onPageChange={stockPagination.setPage} onPageSizeChange={stockPagination.setPageSize}
-            />
-          )}
-        />
-      </div>
-
       {/* Predicción de compras del próximo mes (enlazada al filtro de categoría) */}
       <PrediccionComprasChart filters={filters} />
-
-      {/* G6: Predicción de necesidad de compra */}
-      <div className="animate-fade-in-up">
-        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-          <div className="flex items-center gap-3">
-            <ShoppingCart size={18} className="text-cyan-400" />
-            <h3 className="font-sans font-semibold text-slate-200">Predicción de Necesidad de Compra</h3>
-          </div>
-          {compra.data && (
-            <div className="flex items-center gap-4 text-xs text-slate-400">
-              <span>{compra.data.total_productos_a_comprar} productos · {fmt(compra.data.valor_total_compra)}</span>
-              <span className="text-emerald-400">Ahorro por no comprar: {fmt(compra.data.ahorro_por_no_comprar)}</span>
-            </div>
-          )}
-        </div>
-        <DataTable
-          columns={compraColumns}
-          data={compra.data?.recomendados.items ?? []}
-          rowKey={(p) => p.codart}
-          loading={compra.loading}
-          error={compra.error ?? undefined}
-          onRetry={compra.refetch}
-          rowClassName={(p) => p.prioridad === 'Alta' ? 'bg-red-500/5' : ''}
-          emptyTitle="Sin necesidades de compra"
-          emptyDescription="No hay artículos que requieran reposición con los filtros actuales."
-          pagination={compra.data && (
-            <Pagination
-              page={compra.data.recomendados.page} pageSize={compra.data.recomendados.page_size}
-              total={compra.data.recomendados.total} totalPages={compra.data.recomendados.total_pages}
-              onPageChange={compraPagination.setPage} onPageSizeChange={compraPagination.setPageSize}
-            />
-          )}
-        />
-      </div>
     </div>
   );
 };

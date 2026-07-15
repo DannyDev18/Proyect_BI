@@ -44,6 +44,21 @@ export const fmtMoney = (n?: number | null): string => {
   }).format(n);
 };
 
+// "hace Xm/h/d" a partir de un ISO datetime -- usado por la barra de procedencia de
+// datos (ProvenanceRail, docs/auditoria/33_actualizacion_modulo_gerencia.md, H4).
+export const timeAgo = (isoDate: string | null | undefined): string => {
+  if (!isoDate) return '—';
+  const diffMs = Date.now() - new Date(isoDate).getTime();
+  if (diffMs < 0 || isNaN(diffMs)) return '—';
+  const minutos = Math.floor(diffMs / 60_000);
+  if (minutos < 1) return 'hace instantes';
+  if (minutos < 60) return `hace ${minutos}m`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `hace ${horas}h`;
+  const dias = Math.floor(horas / 24);
+  return `hace ${dias}d`;
+};
+
 // Etiqueta del eje X del gráfico de predicción de ventas: 'semana' muestra el inicio de
 // semana (MM-DD, igual al formato diario previo), 'mes' muestra "Mes AAAA" abreviado.
 export const formatEjeFecha = (fecha?: string, granularidad: 'semana' | 'mes' = 'semana'): string => {

@@ -123,6 +123,9 @@ class ProductoTopSalidas(BaseModel):
     stock_actual: float
     dias_inventario: Optional[float] = None
     tendencia_pct: Optional[float] = None
+    # RN-B8 (docs/auditoria/32_actualizacion_modulo_bodega.md): solo poblado cuando
+    # tipo_movimiento=FAC (venta) o CPA (compra); None en cualquier otro caso.
+    monto_ventas: Optional[float] = None
 
 
 class CategoriaSalidas(BaseModel):
@@ -132,6 +135,7 @@ class CategoriaSalidas(BaseModel):
     stock_disponible: float
     pct_participacion: float
     tendencia_pct: Optional[float] = None
+    monto_ventas: Optional[float] = None
 
 
 # ── §1.3 Gráfico 5: estado vs punto de reorden ────────────────────────────────
@@ -192,6 +196,21 @@ class InventarioMatrizResponse(BaseModel):
 
 
 # ── §3.2 Transferencias inteligentes ──────────────────────────────────────────
+class JustificacionTransferencia(BaseModel):
+    """RN-B9 (docs/auditoria/32_actualizacion_modulo_bodega.md): evidencia estadística
+    de que el destino realmente venderá el artículo, no solo que tiene déficit."""
+    demanda_media_destino: Optional[float] = None
+    demanda_mediana_destino: Optional[float] = None
+    coeficiente_variacion_destino: Optional[float] = None
+    tendencia_destino_pct: Optional[float] = None
+    venta_monetaria_destino_90d: Optional[float] = None
+    meses_con_venta_destino: int
+    dias_cobertura_origen_post: Optional[float] = None
+    dias_cobertura_destino_post: Optional[float] = None
+    costo_logistico_estimado: float
+    beneficio_neto_estimado: float
+
+
 class TransferenciaSugerida(BaseModel):
     codart: str
     nombre: str
@@ -207,6 +226,11 @@ class TransferenciaSugerida(BaseModel):
     prioridad: str
     ahorro_estimado: float
     motivo: str
+    # RN-B9 -- aditivos, `motivo` se conserva por compatibilidad (generado desde
+    # `justificacion` en el servicio).
+    justificacion: Optional[JustificacionTransferencia] = None
+    confianza: Optional[str] = None  # alta | media | baja
+    beneficio_neto_estimado: Optional[float] = None
 
 
 class TransferenciasResponse(BaseModel):
@@ -216,19 +240,43 @@ class TransferenciasResponse(BaseModel):
 
 
 # ── §4 Notificaciones ─────────────────────────────────────────────────────────
-class NotificacionBodega(BaseModel):
-    tipo: str
-    prioridad: str  # alta | media | baja
-    mensaje: str
-    codart: Optional[str] = None
+# ── §2 Reportes (Fase 5, docs/features/plan_actualizacion_modulo_bodega.md) ──
+# Contrato tipado por reporte: cada uno responde UNA pregunta de negocio con un
+# resumen ejecutivo interpretado + secciones de tabla con columnas de negocio
+# definidas (nunca claves crudas de dict). Reemplaza el `contenido: dict` libre
+# anterior -- cambio de contrato coordinado con el frontend en el mismo commit
+# (docs/auditoria/32_actualizacion_modulo_bodega.md, Fase 5).
+class KpiResumenEjecutivo(BaseModel):
+    etiqueta: str
+    valor: str  # ya formateado como texto de negocio ("$12.400", "42 artículos")
+    tono: str = "neutral"  # positivo | negativo | neutral -- para el color del KPI
 
 
-# ── §2 Reportes (JSON libre: estructuras anidadas grandes y variables) ───────
+class ColumnaReporte(BaseModel):
+    key: str
+    etiqueta: str
+    tipo: str = "texto"  # texto | numero | moneda | porcentaje | fecha | badge
+
+
+class SeccionReporte(BaseModel):
+    titulo: str
+    descripcion: Optional[str] = None
+    columnas: List[ColumnaReporte]
+    filas: List[Dict[str, Any]]
+    # Columna cuyo valor marca una fila para atención inmediata (badge "Alta" o "Crítico"
+    # -- el frontend resalta la fila cuando el valor de esta columna es uno de esos 2).
+    resaltar_key: Optional[str] = None
+    total_filas: Optional[int] = None  # si `filas` viene truncado (ver `warehouse_export.py` para el total)
+
+
 class ReporteBodegaResponse(BaseModel):
+    tipo: str
+    titulo: str
     generado_en: str
-    # El contenido depende del tipo de reporte; se expone como dict validado por
-    # los servicios (las secciones internas reutilizan los modelos de arriba).
-    contenido: Dict[str, Any]
+    filtros_aplicados: Dict[str, Any]
+    resumen_ejecutivo: List[KpiResumenEjecutivo]
+    interpretacion: str  # frase de una línea: "Se recomienda comprar 42 artículos por $12.400; 8 son críticos"
+    secciones: List[SeccionReporte]
 
 
 # ── Predicción de compras del próximo mes por categoría (docs/auditoria/24) ──

@@ -19,6 +19,10 @@ class AnalyticsService:
         """Caso de Uso 2 (Gerencia): Índice de Salud Comercial."""
         data = self.repo.get_management_kpis(sucursal, start_date, end_date, categoria, vendedor, almacen)
         return {
+            # docs/auditoria/33_actualizacion_modulo_gerencia.md, H2: el repositorio ya
+            # calculaba `total_sales` en SQL (venta neta - devoluciones), pero antes se
+            # descartaba aquí y el frontend lo recalculaba sumando `ventas_por_sucursal`.
+            "ingresos_totales": round(data["total_sales"], 2),
             "margen_utilidad_neta": round(data["margen"], 2),
             "ticket_promedio": round(data["ticket"], 2),
             "roi_estimado": round(data["margen"] * 1.15, 2),  # Simulación adaptada de ROI de campaña
@@ -50,9 +54,15 @@ class AnalyticsService:
         hardcodeados)."""
         return self.repo.get_inventory_alerts(sucursal)
 
-    def get_sales_kpis(self, sucursal: str | None = None) -> dict[str, Any]:
+    def get_sales_kpis(
+        self, sucursal: str | None = None, anio: int | None = None, mes: int | None = None,
+    ) -> dict[str, Any]:
         """Caso de Uso 4 (Ventas): Cumplimiento de metas de vendedor -- implementación
-        real combinando `edw.fact_ventas_detalle` y `public.metas_comerciales_operativas`
-        del período vigente (antes esta función devolvía datos hardcodeados)."""
-        anio, mes = self.repo.get_latest_period()
+        real combinando `edw.fact_ventas_detalle` y `public.metas_comerciales_operativas`.
+        Por defecto el período vigente (antes esta función devolvía datos hardcodeados);
+        `anio`/`mes` explícitos permiten consultar un período anterior (docs/auditoria/
+        34_actualizacion_modulo_ventas.md, H-V3 -- antes el vendedor no podía ver meses
+        cerrados, solo el período vigente)."""
+        if anio is None or mes is None:
+            anio, mes = self.repo.get_latest_period()
         return self.repo.get_sales_performance(anio, mes, sucursal)

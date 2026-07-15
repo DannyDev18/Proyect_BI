@@ -1,98 +1,108 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, FileDown, FileSpreadsheet, Printer } from 'lucide-react';
+import { AlertBadge } from '../components/ui/AlertBadge';
 import { Button } from '../components/ui/Button';
 import { BodegaFilterBar } from '../components/bodega/BodegaFilterBar';
 import { useReporteBodega } from '../hooks/bodega';
 import { descargarReporteExcel } from '../services/bodega';
 import { useBodegaFiltersStore, toQueryFilters } from '../store/bodegaFiltersStore';
 import { useToast } from '../store/toastStore';
-import type { TipoReporteBodega } from '../types/bodega';
+import type { ColumnaReporte, SeccionReporte, TipoReporteBodega, TonoKpi } from '../types/bodega';
 
-const REPORTES: { tipo: TipoReporteBodega; titulo: string; descripcion: string }[] = [
+const REPORTES: { tipo: TipoReporteBodega; titulo: string; pregunta: string; descripcion: string }[] = [
   {
     tipo: 'justificacion',
     titulo: 'Justificación de Abastecimiento',
+    pregunta: '¿Qué comprar este mes y por qué?',
     descripcion: 'Compras propuestas con justificación, rotación, proyección y transferencias (§2.1)',
   },
   {
     tipo: 'transferencias',
     titulo: 'Candidatos a Transferencia',
-    descripcion: 'Excedentes vs déficits entre bodegas y ahorro por no comprar (§2.2)',
+    pregunta: '¿Qué mover entre bodegas?',
+    descripcion: 'Excedentes vs déficits entre bodegas, con justificación estadística y confianza (§2.2)',
   },
   {
     tipo: 'analisis-mensual',
     titulo: 'Análisis de Stock y Abastecimiento',
+    pregunta: '¿Cómo cerró el mes el inventario?',
     descripcion: 'Consolidado mensual: críticos, excesos, comparativa y plan de compras (§2.3)',
   },
 ];
 
-const esTabla = (v: unknown): v is Record<string, unknown>[] =>
-  Array.isArray(v) && v.length > 0 && typeof v[0] === 'object' && v[0] !== null;
-
-const fmtCelda = (v: unknown): string => {
-  if (v === null || v === undefined) return '—';
-  if (typeof v === 'number') return v.toLocaleString('es-EC');
-  if (typeof v === 'object') return Object.entries(v as Record<string, unknown>).map(([k, x]) => `${k}: ${x}`).join(', ');
-  return String(v);
+const tonoCls: Record<TonoKpi, string> = {
+  positivo: 'text-emerald-400',
+  negativo: 'text-red-400',
+  neutral: 'text-slate-200',
 };
 
-const titulo = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const RESALTAR_VALORES = new Set(['Alta', 'Crítico']);
+const BADGE_VARIANT: Record<string, 'critical' | 'warning' | 'info' | 'success' | 'neutral'> = {
+  alta: 'critical', crítico: 'critical',
+  media: 'warning', cerca: 'warning', baja: 'neutral',
+  seguro: 'success', exceso: 'info',
+};
 
-/** Render recursivo del JSON del reporte: listas de objetos → tablas; objetos → secciones;
- * escalares → pares clave/valor. Imprimible (window.print) = PDF del navegador. */
-const SeccionReporte = ({ nombre, valor, nivel = 0 }: { nombre: string; valor: unknown; nivel?: number }) => {
-  if (esTabla(valor)) {
-    const columnas = [...new Set(valor.flatMap((f) => Object.keys(f)))];
-    return (
-      <div className="mb-6 break-inside-avoid">
-        <h4 className={`font-semibold text-slate-200 print:text-black mb-2 ${nivel === 0 ? 'text-base' : 'text-sm'}`}>{titulo(nombre)}</h4>
+const fmtCelda = (valor: unknown, columna: ColumnaReporte): React.ReactNode => {
+  if (valor === null || valor === undefined || valor === '') return '—';
+  if (columna.tipo === 'badge') {
+    const variant = BADGE_VARIANT[String(valor).toLowerCase()] ?? 'neutral';
+    return <AlertBadge variant={variant}>{String(valor)}</AlertBadge>;
+  }
+  if (columna.tipo === 'moneda' && typeof valor === 'number') {
+    return valor.toLocaleString('es-EC', { style: 'currency', currency: 'USD' });
+  }
+  if (columna.tipo === 'porcentaje' && typeof valor === 'number') {
+    return `${valor > 0 ? '+' : ''}${valor.toFixed(1)}%`;
+  }
+  if (columna.tipo === 'numero' && typeof valor === 'number') {
+    return valor.toLocaleString('es-EC', { maximumFractionDigits: 2 });
+  }
+  return String(valor);
+};
+
+/** Fase 5 (docs/features/plan_actualizacion_modulo_bodega.md): tabla con columnas de
+ * negocio ya definidas por el backend -- ya no se deriva de las claves crudas del JSON. */
+const TablaSeccion = ({ seccion }: { seccion: SeccionReporte }) => {
+  const MAX_FILAS = 60;
+  const filas = seccion.filas.slice(0, MAX_FILAS);
+  return (
+    <div className="mb-8 break-inside-avoid">
+      <h3 className="font-semibold text-slate-100 print:text-black text-base mb-1">{seccion.titulo}</h3>
+      {seccion.descripcion && (
+        <p className="text-xs text-slate-500 print:text-gray-600 mb-2">{seccion.descripcion}</p>
+      )}
+      {filas.length === 0 ? (
+        <p className="text-xs text-slate-500 italic">Sin datos con los filtros actuales.</p>
+      ) : (
         <div className="overflow-x-auto border border-slate-800 print:border-gray-300 rounded-lg">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950/60 print:bg-gray-100 text-slate-500 print:text-gray-700 uppercase tracking-wider">
-              <tr>{columnas.map((c) => <th key={c} className="px-3 py-2 whitespace-nowrap">{titulo(c)}</th>)}</tr>
+              <tr>{seccion.columnas.map((c) => <th key={c.key} className="px-3 py-2 whitespace-nowrap">{c.etiqueta}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-800/80 print:divide-gray-200">
-              {valor.slice(0, 60).map((fila, i) => (
-                <tr key={i} className={String(fila.prioridad) === 'Alta' ? 'bg-red-500/5 print:bg-red-50' : ''}>
-                  {columnas.map((c) => (
-                    <td key={c} className="px-3 py-1.5 text-slate-300 print:text-black whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis">
-                      {fmtCelda(fila[c])}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+              {filas.map((fila, i) => {
+                const resaltar = seccion.resaltar_key != null && RESALTAR_VALORES.has(String(fila[seccion.resaltar_key]));
+                return (
+                  <tr key={i} className={resaltar ? 'bg-red-500/5 print:bg-red-50' : ''}>
+                    {seccion.columnas.map((c) => (
+                      <td key={c.key} className="px-3 py-1.5 text-slate-300 print:text-black whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis">
+                        {fmtCelda(fila[c.key], c)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
-        {valor.length > 60 && (
-          <p className="text-[11px] text-slate-500 mt-1">Mostrando 60 de {valor.length} filas — el Excel incluye todas.</p>
-        )}
-      </div>
-    );
-  }
-  if (valor !== null && typeof valor === 'object') {
-    const entradas = Object.entries(valor as Record<string, unknown>);
-    const escalares = entradas.filter(([, v]) => v === null || typeof v !== 'object' || (Array.isArray(v) && !esTabla(v)));
-    const complejas = entradas.filter(([k]) => !escalares.some(([ke]) => ke === k));
-    return (
-      <div className={`mb-6 ${nivel > 0 ? 'pl-1' : ''}`}>
-        {nivel >= 0 && nombre && <h3 className={`font-semibold text-slate-100 print:text-black mb-3 ${nivel === 0 ? 'text-lg' : 'text-sm'}`}>{titulo(nombre)}</h3>}
-        {escalares.length > 0 && (
-          <dl className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 mb-4">
-            {escalares.map(([k, v]) => (
-              <div key={k}>
-                <dt className="text-[11px] uppercase tracking-widest text-slate-500 print:text-gray-500">{titulo(k)}</dt>
-                <dd className="text-sm font-mono text-slate-200 print:text-black">{fmtCelda(v)}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        {complejas.map(([k, v]) => <SeccionReporte key={k} nombre={k} valor={v} nivel={nivel + 1} />)}
-      </div>
-    );
-  }
-  return null;
+      )}
+      {seccion.filas.length > MAX_FILAS && (
+        <p className="text-[11px] text-slate-500 mt-1">Mostrando {MAX_FILAS} de {seccion.filas.length} filas — el Excel incluye todas.</p>
+      )}
+    </div>
+  );
 };
 
 /** §2: Reportes de bodega para presentación a gerencia, con export Excel y PDF (print). */
@@ -116,6 +126,8 @@ export const BodegaReportes = () => {
       setDescargando(false);
     }
   };
+
+  const filtrosAplicados = reporte.data ? Object.entries(reporte.data.filtros_aplicados) : [];
 
   return (
     <div className="space-y-6">
@@ -145,7 +157,7 @@ export const BodegaReportes = () => {
         <BodegaFilterBar />
       </div>
 
-      {/* Selector de reporte */}
+      {/* Selector de reporte: cada tarjeta explica qué decisión soporta */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 print:hidden">
         {REPORTES.map((r) => (
           <button key={r.tipo} type="button" onClick={() => setTipo(r.tipo)} aria-pressed={tipo === r.tipo}
@@ -153,8 +165,9 @@ export const BodegaReportes = () => {
               ${tipo === r.tipo ? 'border-cyan-500 bg-cyan-500/5' : 'border-transparent hover:border-slate-600'}`}>
             <div className="flex items-center gap-2 mb-1">
               <FileDown size={15} aria-hidden="true" className={tipo === r.tipo ? 'text-cyan-400' : 'text-slate-500'} />
-              <p className="font-semibold text-sm text-slate-200">{r.titulo}</p>
+              <p className="font-semibold text-sm text-slate-200">{r.pregunta}</p>
             </div>
+            <p className="text-xs text-slate-400 mb-1">{r.titulo}</p>
             <p className="text-xs text-slate-500">{r.descripcion}</p>
           </button>
         ))}
@@ -166,15 +179,39 @@ export const BodegaReportes = () => {
           <h2 className="text-xl font-display font-semibold text-slate-100 print:text-black">{meta.titulo}</h2>
           <p className="text-xs text-slate-500 print:text-gray-600 mt-1">
             Generado: {reporte.data?.generado_en ?? '…'} · Plataforma Inteligente de Analítica Empresarial
-            {store.almacen ? ` · Almacén: ${store.almacen}` : ' · Todas las bodegas'}
-            {store.categoria ? ` · Categoría: ${store.categoria}` : ''}
           </p>
+          {filtrosAplicados.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {filtrosAplicados.map(([k, v]) => (
+                <span key={k} className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 print:bg-gray-100 text-slate-400 print:text-gray-700 border border-slate-700 print:border-gray-300">
+                  {k.replace(/_/g, ' ')}: {String(v)}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {reporte.loading && <p className="text-sm text-slate-500 animate-pulse-slow">Generando reporte con datos del EDW…</p>}
         {reporte.error && <p className="text-sm text-red-400">{reporte.error}</p>}
         {reporte.data && (
-          <SeccionReporte nombre="" valor={reporte.data.contenido} nivel={0} />
+          <>
+            {/* Banda de KPIs del resumen ejecutivo */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
+              {reporte.data.resumen_ejecutivo.map((kpi) => (
+                <div key={kpi.etiqueta} className="border border-slate-800 print:border-gray-300 rounded-lg p-3">
+                  <p className="text-[10px] uppercase tracking-widest text-slate-500 print:text-gray-500">{kpi.etiqueta}</p>
+                  <p className={`text-lg font-mono font-semibold ${tonoCls[kpi.tono]} print:text-black`}>{kpi.valor}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Interpretación en lenguaje natural */}
+            <p className="text-sm text-slate-300 print:text-black bg-slate-900/60 print:bg-gray-50 border border-slate-800 print:border-gray-300 rounded-lg p-4 mb-6">
+              {reporte.data.interpretacion}
+            </p>
+
+            {reporte.data.secciones.map((s) => <TablaSeccion key={s.titulo} seccion={s} />)}
+          </>
         )}
       </div>
     </div>

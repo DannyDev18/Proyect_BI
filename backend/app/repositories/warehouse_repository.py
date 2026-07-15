@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ValidationError
 from app.utils.validators import sanitize_date_str
 
 EXCLUIR_CODART = {"Z-9001"}
@@ -34,6 +35,14 @@ TIPOS_MOVIMIENTO = [
     {"codigo": "BOD", "etiqueta": "Ajustes de bodega"},
     {"codigo": "DEC", "etiqueta": "Ajustes / decrementos"},
 ]
+_CODIGOS_TIPO_MOVIMIENTO = {t["codigo"] for t in TIPOS_MOVIMIENTO}
+
+# RN-B8 (docs/auditoria/32_actualizacion_modulo_bodega.md H32-1): únicos 2 tipos de
+# movimiento cuyo `valor_venta`/`costo_total` en `fact_movimientos_inventario`
+# representa una venta o una compra real (el resto de tipos también trae esas
+# columnas pobladas -- heredadas de kardex.totven/costot para cualquier movimiento --
+# pero mostrarlas ahí induciría a error: no es dinero de venta ni de compra).
+TIPOS_MOVIMIENTO_CON_MONTO = {"FAC": "venta", "CPA": "compra"}
 
 
 class WarehouseRepository:
@@ -77,6 +86,11 @@ class WarehouseRepository:
             )
             params["proveedor"] = proveedor
         if tipo_movimiento:
+            if tipo_movimiento not in _CODIGOS_TIPO_MOVIMIENTO:
+                raise ValidationError(
+                    f"tipo_movimiento inválido: '{tipo_movimiento}'. Valores permitidos: "
+                    f"{', '.join(sorted(_CODIGOS_TIPO_MOVIMIENTO))}."
+                )
             # Filtro por tipo de movimiento de Kardex (kardex.tiporg, regla de negocio §3):
             # solo incluye artículos con AL MENOS UN movimiento de ese tipo (FAC=venta,
             # TRA=transferencia entre bodegas, EGR=egreso, CPA=compra, DEV=devolución,
@@ -487,7 +501,12 @@ class WarehouseRepository:
             actual AS (
                 SELECT p.codart, MAX(p.nombre_articulo) AS nombre,
                        MAX(COALESCE(p.clase, 'SIN-CLASE')) AS categoria,
-                       SUM(m.cantidad_movimiento) AS unidades
+                       SUM(m.cantidad_movimiento) AS unidades,
+                       -- RN-B8 (docs/auditoria/32_...md H32-1): valor_venta/costo_total ya
+                       -- vienen a nivel de movimiento (kardex.totven/costot) -- el servicio
+                       -- decide cuál exponer según TIPOS_MOVIMIENTO_CON_MONTO y el filtro activo.
+                       SUM(m.valor_venta) AS monto_venta,
+                       SUM(m.costo_total) AS monto_compra
                 FROM edw.fact_movimientos_inventario m
                 JOIN edw.dim_fecha d ON m.fecha_sk = d.fecha_sk
                 JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
@@ -518,7 +537,8 @@ class WarehouseRepository:
             )
             SELECT a.codart, a.nombre, a.categoria, a.unidades,
                    COALESCE(pr.unidades, 0) AS unidades_previo,
-                   COALESCE(sn.stock_actual, 0) AS stock_actual
+                   COALESCE(sn.stock_actual, 0) AS stock_actual,
+                   a.monto_venta, a.monto_compra
             FROM actual a
             LEFT JOIN previo pr ON pr.codart = a.codart
             LEFT JOIN snap   sn ON sn.codart = a.codart
@@ -534,6 +554,8 @@ class WarehouseRepository:
                 "unidades": float(r[3] or 0),
                 "unidades_previo": float(r[4] or 0),
                 "stock_actual": float(r[5] or 0),
+                "monto_venta": float(r[6]) if r[6] is not None else None,
+                "monto_compra": float(r[7]) if r[7] is not None else None,
             }
             for r in res
         ]
@@ -554,7 +576,8 @@ class WarehouseRepository:
         query = f"""
             WITH ultimo AS (SELECT MAX(fecha_sk) AS fecha_sk FROM edw.fact_inventario_snapshot),
             actual AS (
-                SELECT COALESCE(p.clase, 'SIN-CLASE') AS categoria, SUM(m.cantidad_movimiento) AS unidades
+                SELECT COALESCE(p.clase, 'SIN-CLASE') AS categoria, SUM(m.cantidad_movimiento) AS unidades,
+                       SUM(m.valor_venta) AS monto_venta, SUM(m.costo_total) AS monto_compra
                 FROM edw.fact_movimientos_inventario m
                 JOIN edw.dim_fecha d ON m.fecha_sk = d.fecha_sk
                 JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
@@ -583,7 +606,8 @@ class WarehouseRepository:
                 WHERE p.producto_sk <> -1 {where_extra}
                 GROUP BY COALESCE(p.clase, 'SIN-CLASE')
             )
-            SELECT a.categoria, a.unidades, COALESCE(pr.unidades, 0), COALESCE(st.stock, 0)
+            SELECT a.categoria, a.unidades, COALESCE(pr.unidades, 0), COALESCE(st.stock, 0),
+                   a.monto_venta, a.monto_compra
             FROM actual a
             LEFT JOIN previo pr ON pr.categoria = a.categoria
             LEFT JOIN stock  st ON st.categoria = a.categoria
@@ -596,6 +620,8 @@ class WarehouseRepository:
                 "unidades": float(r[1] or 0),
                 "unidades_previo": float(r[2] or 0),
                 "stock_disponible": float(r[3] or 0),
+                "monto_venta": float(r[4]) if r[4] is not None else None,
+                "monto_compra": float(r[5]) if r[5] is not None else None,
             }
             for r in res
         ]
@@ -672,6 +698,41 @@ class WarehouseRepository:
                 "costo_unitario": float(r[5] or 0),
                 "punto_reorden_config": float(r[6] or 0),
                 "salidas_periodo": float(r[7] or 0),
+            }
+            for r in res
+        ]
+
+    # ── RN-B9: justificación estadística de transferencias ─────────────────
+    def get_series_salidas_producto_almacen(self, codarts: list[str], dias: int = 180) -> list[dict[str, Any]]:
+        """Serie diaria de salidas (unidades + venta FAC) por (codart, almacén) para los
+        últimos `dias` días, restringida a los `codarts` candidatos (los que ya tienen
+        stock en 2+ bodegas, ver `_transferencias_completo`) -- una sola query batch en
+        vez de N+1 por par origen/destino. El servicio rellena los días sin movimiento
+        con 0 (pandas) para que el coeficiente de variación de RN-B9 sea representativo
+        de la demanda real, no solo de los días con actividad."""
+        if not codarts:
+            return []
+        query = """
+            SELECT p.codart, al.nombre_almacen AS almacen, d.fecha_completa AS fecha,
+                   SUM(m.cantidad_movimiento) AS unidades,
+                   SUM(m.valor_venta) FILTER (WHERE m.tipo_movimiento = 'FAC') AS venta
+            FROM edw.fact_movimientos_inventario m
+            JOIN edw.dim_fecha d ON m.fecha_sk = d.fecha_sk
+            JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
+            JOIN edw.dim_almacen  al ON m.almacen_sk = al.almacen_sk
+            WHERE m.es_salida
+              AND p.codart = ANY(:codarts)
+              AND d.fecha_completa >= CURRENT_DATE - (:dias * INTERVAL '1 day')
+            GROUP BY p.codart, al.nombre_almacen, d.fecha_completa
+        """
+        res = self.db.execute(text(query), {"codarts": codarts, "dias": dias}).fetchall()
+        return [
+            {
+                "codart": str(r[0]),
+                "almacen": str(r[1]),
+                "fecha": str(r[2]),
+                "unidades": float(r[3] or 0),
+                "venta": float(r[4] or 0),
             }
             for r in res
         ]

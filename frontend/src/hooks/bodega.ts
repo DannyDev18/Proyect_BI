@@ -12,7 +12,6 @@ import {
   getNecesidadCompra,
   getInventarioMatriz,
   getTransferenciasSugeridas,
-  getNotificacionesBodega,
   getReporteBodega,
   getPrediccionComprasMes,
   type BodegaQueryFilters,
@@ -119,14 +118,6 @@ export const usePrediccionComprasMes = (filters: BodegaQueryFilters, productoCod
     queryKey: qk.bodega.prediccionComprasMes(filters, productoCod),
     queryFn: () => getPrediccionComprasMes(filters, productoCod).then((r) => r.data),
     staleTime: 30 * 60 * 1000, // 30 min: 20 walk-forward por request, no repetir al alternar drill-downs
-  }));
-
-export const useNotificacionesBodega = (almacen: string | null, enabled = true) =>
-  wrap(useQuery({
-    queryKey: qk.bodega.notificaciones(almacen),
-    queryFn: () => getNotificacionesBodega(almacen).then((r) => r.data),
-    refetchInterval: 5 * 60 * 1000, // la campana se refresca sola cada 5 minutos
-    enabled,
   }));
 
 export const useReporteBodega = (tipo: TipoReporteBodega, filters: BodegaQueryFilters, enabled = true) =>

@@ -356,12 +356,36 @@ class AnalyticsRepository:
         return now.year, now.month
 
     def get_sales_performance(self, anio: int, mes: int, sucursal: str | None = None) -> dict[str, Any]:
+        """`sucursal` (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V8): antes
+        `query_meta` filtraba por `m.sucursal`, una columna que NO existe en
+        `public.metas_comerciales_operativas` -- el grano de esa tabla es
+        `(anio, mes, id_vendedor_origen)`, nunca sucursal (regla de negocio 10,
+        `edw.dim_vendedor` no tiene sucursal propia). Esto hacía que este endpoint
+        (el KPI principal del dashboard de Ventas) devolviera SIEMPRE un 500 para
+        cualquier usuario `ventas` real, porque `resolve_sucursal_filter(allow_override=False)`
+        fuerza su propia sucursal en cada request. Se resuelve restringiendo las metas a
+        los vendedores que efectivamente vendieron en esa sucursal en el período (mismo
+        criterio ya usado por `query_ranking`), no por una columna inexistente.
+        `query_ranking` tampoco filtraba por sucursal en absoluto (mostraba el ranking
+        global de la empresa incluso con un filtro de sucursal activo) -- se corrige con
+        el mismo join que ya usaba `query_actual`."""
         params: dict[str, Any] = {"anio": anio, "mes": mes}
-        filtro_suc_m = ""
+        filtro_vendedores_sucursal = ""
         filtro_suc_v = ""
+        filtro_suc_r = ""
         if sucursal:
-            filtro_suc_m = "AND m.sucursal = :sucursal"
+            filtro_vendedores_sucursal = """
+                AND m.id_vendedor_origen IN (
+                    SELECT DISTINCT v2.codven
+                    FROM edw.fact_ventas_detalle f2
+                    JOIN edw.dim_vendedor v2 ON f2.vendedor_sk = v2.vendedor_sk
+                    JOIN edw.dim_sucursal s2 ON f2.sucursal_sk = s2.sucursal_sk
+                    JOIN edw.dim_fecha d2 ON f2.fecha_sk = d2.fecha_sk
+                    WHERE d2.anio = :anio AND d2.mes = :mes AND s2.nombre_sucursal = :sucursal
+                )
+            """
             filtro_suc_v = "AND s.nombre_sucursal = :sucursal"
+            filtro_suc_r = "AND s.nombre_sucursal = :sucursal"
             params["sucursal"] = sucursal
 
         # No se filtra por estado ('APROBADA' vs 'PROPUESTA'): un sistema recién puesto en
@@ -371,7 +395,7 @@ class AnalyticsRepository:
         query_meta = f"""
             SELECT COALESCE(SUM(m.monto_meta), 0)
             FROM public.metas_comerciales_operativas m
-            WHERE m.anio = :anio AND m.mes = :mes {filtro_suc_m}
+            WHERE m.anio = :anio AND m.mes = :mes {filtro_vendedores_sucursal}
         """
         query_actual = f"""
             SELECT COALESCE(SUM(f.subtotal_neto), 0)
@@ -388,10 +412,12 @@ class AnalyticsRepository:
             FROM edw.dim_vendedor v
             LEFT JOIN edw.fact_ventas_detalle f ON f.vendedor_sk = v.vendedor_sk
                 AND f.fecha_sk IN (SELECT fecha_sk FROM edw.dim_fecha WHERE anio = :anio AND mes = :mes)
+            LEFT JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
             LEFT JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
                 AND ed.estado_documento_sk <> -1
             LEFT JOIN public.metas_comerciales_operativas m ON m.id_vendedor_origen = v.codven
                 AND m.anio = :anio AND m.mes = :mes
+            WHERE 1=1 {filtro_suc_r}
             GROUP BY v.nombre_vendedor
             HAVING COALESCE(SUM(f.subtotal_neto), 0) > 0
             ORDER BY ventas DESC

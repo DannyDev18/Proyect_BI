@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Activity, Cpu, FileText } from 'lucide-react';
 import { useAnomalyDetector, useAuditLogs, useModelsStatus } from '../hooks/admin';
+import { usePagination } from '../hooks/usePagination';
 import { AlertBadge } from '../components/ui/AlertBadge';
 import { SearchInput } from '../components/ui/SearchInput';
 import { ChartCard } from '../components/ui/ChartCard';
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
+import { Pagination } from '../components/ui/Pagination';
 
 const levelColor = {
   INFO:  'text-cyan-400',
@@ -32,8 +34,16 @@ const auditColumns: DataTableColumn<AuditEntry>[] = [
 export const DashboardAdmin = () => {
   const anomaly = useAnomalyDetector();
   const models = useModelsStatus();
-  const auditLogs = useAuditLogs(50);
   const [txId, setTxId] = useState('');
+
+  const [auditFilters, setAuditFilters] = useState({ fecha_desde: '', fecha_hasta: '', usuario: '', modulo: '' });
+  const auditPagination = usePagination(auditFilters);
+  const auditLogs = useAuditLogs(auditPagination.query, {
+    fecha_desde: auditFilters.fecha_desde || undefined,
+    fecha_hasta: auditFilters.fecha_hasta || undefined,
+    usuario: auditFilters.usuario || undefined,
+    modulo: auditFilters.modulo || undefined,
+  });
 
   const handleSearch = (val: string) => {
     setTxId(val);
@@ -137,15 +147,64 @@ export const DashboardAdmin = () => {
         <div className="flex items-center gap-3 mb-3">
           <FileText size={18} className="text-slate-400" aria-hidden="true" />
           <h3 className="font-sans font-semibold text-slate-200">Log de Auditoría del Sistema</h3>
-          <AlertBadge variant="neutral" className="ml-auto">Últimos {auditLogs.data.length} eventos</AlertBadge>
+          <AlertBadge variant="neutral" className="ml-auto">{auditLogs.total} eventos</AlertBadge>
         </div>
+
+        <div className="card p-3 mb-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="space-y-1">
+            <label htmlFor="audit-desde" className="text-[11px] font-semibold uppercase text-slate-500">Desde</label>
+            <input
+              id="audit-desde" type="date"
+              value={auditFilters.fecha_desde}
+              onChange={(e) => setAuditFilters({ ...auditFilters, fecha_desde: e.target.value })}
+              className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-2 py-1.5 text-xs text-slate-200 outline-none focus-ring"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="audit-hasta" className="text-[11px] font-semibold uppercase text-slate-500">Hasta</label>
+            <input
+              id="audit-hasta" type="date"
+              value={auditFilters.fecha_hasta}
+              onChange={(e) => setAuditFilters({ ...auditFilters, fecha_hasta: e.target.value })}
+              className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-2 py-1.5 text-xs text-slate-200 outline-none focus-ring"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="audit-usuario" className="text-[11px] font-semibold uppercase text-slate-500">Usuario</label>
+            <input
+              id="audit-usuario" type="text" placeholder="codusu"
+              value={auditFilters.usuario}
+              onChange={(e) => setAuditFilters({ ...auditFilters, usuario: e.target.value })}
+              className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-2 py-1.5 text-xs text-slate-200 outline-none placeholder-slate-700 focus-ring"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="audit-modulo" className="text-[11px] font-semibold uppercase text-slate-500">Módulo</label>
+            <input
+              id="audit-modulo" type="text" placeholder="ej: analytics"
+              value={auditFilters.modulo}
+              onChange={(e) => setAuditFilters({ ...auditFilters, modulo: e.target.value })}
+              className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-2 py-1.5 text-xs text-slate-200 outline-none placeholder-slate-700 focus-ring"
+            />
+          </div>
+        </div>
+
         <DataTable
           className="font-mono text-xs"
           columns={auditColumns}
           data={auditLogs.data}
+          loading={auditLogs.loading}
           rowKey={(e) => `${e.ts}-${e.source}`}
           emptyTitle="Sin eventos registrados"
-          emptyDescription="No hay actividad de auditoría reciente."
+          emptyDescription="No hay actividad de auditoría en el período/filtros seleccionados."
+        />
+        <Pagination
+          page={auditPagination.page}
+          pageSize={auditPagination.pageSize}
+          total={auditLogs.total}
+          totalPages={auditLogs.totalPages}
+          onPageChange={auditPagination.setPage}
+          onPageSizeChange={auditPagination.setPageSize}
         />
         {auditLogs.error && (
           <div className="flex items-center gap-2 text-xs text-red-400 mt-3">

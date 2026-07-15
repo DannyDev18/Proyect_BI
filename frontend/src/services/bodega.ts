@@ -7,7 +7,6 @@ import type {
   InventarioMatriz,
   KpisBodega,
   NecesidadCompra,
-  NotificacionBodega,
   PrediccionComprasMes,
   ProductoStockReorden,
   ProductoTopSalidas,
@@ -95,22 +94,13 @@ export const getPrediccionComprasMes = (filters: BodegaQueryFilters, productoCod
     }),
   });
 
-export const getNotificacionesBodega = (almacen?: string | null) =>
-  api.get<NotificacionBodega[]>(`${BASE}/notificaciones`, { params: clean({ almacen }) });
-
 export const getReporteBodega = (tipo: TipoReporteBodega, filters: BodegaQueryFilters) =>
-  api.get<ReporteBodega>(`${BASE}/reportes/${tipo}`, {
-    params: clean({
-      almacen: filters.almacen, categoria: filters.categoria, proveedor: filters.proveedor,
-    }),
-  });
+  api.get<ReporteBodega>(`${BASE}/reportes/${tipo}`, { params: clean(filters) });
 
 /** Descarga el XLSX del reporte (§2.1 "exportar a Excel para edición"). */
 export const descargarReporteExcel = async (tipo: TipoReporteBodega, filters: BodegaQueryFilters) => {
   const res = await api.get<Blob>(`${BASE}/reportes/${tipo}/excel`, {
-    params: clean({
-      almacen: filters.almacen, categoria: filters.categoria, proveedor: filters.proveedor,
-    }),
+    params: clean(filters),
     responseType: 'blob',
   });
   const url = URL.createObjectURL(res.data);

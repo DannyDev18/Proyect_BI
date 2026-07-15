@@ -44,6 +44,18 @@ _MODEL_FILES: dict[str, str] = {
     'anomaly': 'anomalies.pkl',
 }
 
+# Nombre de negocio por modelo, compartido entre el panel MLOps de Administrador
+# (`admin_ml.py`, M-02) y la barra de procedencia de datos (`system.py`, docs/auditoria/
+# 33_actualizacion_modulo_gerencia.md H4) -- antes duplicado solo en `admin_ml.py`.
+MODEL_DISPLAY_NAMES: dict[str, str] = {
+    "sales_rf": "Random Forest (Ventas)",
+    "demand_rf": "Random Forest (Demanda)",
+    "churn_rf": "Clasificador de Churn",
+    "segmentation": "K-Means RFM (Segmentación)",
+    "association": "Apriori (Venta Cruzada)",
+    "anomaly": "Isolation Forest (Anomalías)",
+}
+
 
 class ModelLoader:
     """Cachea en memoria los modelos `.pkl` disponibles en `models_dir` junto con el

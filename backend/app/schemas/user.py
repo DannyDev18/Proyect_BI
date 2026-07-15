@@ -1,8 +1,26 @@
 # backend/app/schemas/user.py
+import re
+
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional
 from datetime import datetime
+from app.core.config import settings
 from app.schemas.role import RoleOut
+
+
+def _validar_politica_password(v: str) -> str:
+    """Política única de contraseña (docs/auditoria/36_actualizacion_modulo_admin.md,
+    H4): antes solo se validaba en el frontend vía `pattern` HTML, evadible con un
+    request directo a la API. `PASSWORD_MIN_LENGTH`/`PASSWORD_REGEX` en
+    `core/config.py` son la fuente de verdad; el pattern del frontend queda como UX."""
+    if len(v) < settings.PASSWORD_MIN_LENGTH:
+        raise ValueError(f"La contraseña debe tener al menos {settings.PASSWORD_MIN_LENGTH} caracteres.")
+    if not re.match(settings.PASSWORD_REGEX, v):
+        raise ValueError(
+            "La contraseña debe incluir al menos una mayúscula, una minúscula, "
+            "un número y un carácter especial (@$!%*?&)."
+        )
+    return v
 
 
 # ── Schemas de salida (response) ──────────────────────────────────────────────
@@ -66,9 +84,7 @@ class UserCreate(BaseModel):
     @field_validator("password")
     @classmethod
     def password_min_length(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("La contraseña debe tener al menos 8 caracteres.")
-        return v
+        return _validar_politica_password(v)
 
 
 class UserUpdate(BaseModel):
@@ -86,9 +102,7 @@ class UserUpdate(BaseModel):
     @field_validator("password")
     @classmethod
     def password_min_length(cls, v: str | None) -> str | None:
-        if v is not None and len(v) < 8:
-            raise ValueError("La contraseña debe tener al menos 8 caracteres.")
-        return v
+        return _validar_politica_password(v) if v is not None else v
 
 
 class UserChangePassword(BaseModel):
@@ -99,9 +113,7 @@ class UserChangePassword(BaseModel):
     @field_validator("new_password")
     @classmethod
     def password_min_length(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("La nueva contraseña debe tener al menos 8 caracteres.")
-        return v
+        return _validar_politica_password(v)
 
 
 # ── Schema heredado (compatibilidad con auth.py) ──────────────────────────────

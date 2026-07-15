@@ -113,6 +113,23 @@ class CatalogRepository:
         ), {"cliente_id": cliente_id}).fetchone()
         return int(row[0]) if row else None
 
+    def cliente_pertenece_a_vendedor(self, cliente_id: str, codven: str) -> bool:
+        """Verifica que el vendedor `codven` le haya vendido alguna vez a `cliente_id`
+        -- RLS de cartera (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V2): antes
+        `churn-risk`/`recommendations`/`clientes/{id}/segmento` aceptaban cualquier
+        `cliente_id` sin verificar que perteneciera a la cartera del vendedor
+        autenticado, permitiendo consultar clientes ajenos."""
+        row = self.db.execute(text("""
+            SELECT 1
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_vendedor ve ON f.vendedor_sk = ve.vendedor_sk
+            JOIN edw.dim_cliente c ON f.cliente_sk = c.cliente_sk
+            JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
+            WHERE ve.codven = :codven AND l.id_cliente_transaccional = :cliente_id
+            LIMIT 1
+        """), {"codven": codven, "cliente_id": cliente_id}).fetchone()
+        return row is not None
+
     def search_clientes(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         """Autocompletar cliente por cédula/RUC (`id_cliente_transaccional`) o nombre
         para el asistente de Venta Cruzada. El EDW (`edw.dim_cliente`) es la fuente

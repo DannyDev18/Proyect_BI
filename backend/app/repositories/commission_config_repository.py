@@ -140,6 +140,22 @@ class CommissionConfigRepository:
         return nuevo
 
     # ── Snapshots de liquidación (piloto en sombra / cierre oficial) ───────────
+    def get_liquidacion(
+        self, anio: int, mes: int, vendedor_origen: str, esquema: str, modo: str,
+    ) -> ComisionLiquidacion | None:
+        """Snapshot ya congelado para este período/vendedor/esquema/modo, si existe
+        (docs/auditoria/35_actualizacion_modulo_metas.md, H2: inmutabilidad real de
+        liquidaciones oficiales -- el llamador debe devolverlo tal cual, sin recalcular)."""
+        return (
+            self.db.query(ComisionLiquidacion)
+            .filter(
+                ComisionLiquidacion.anio == anio, ComisionLiquidacion.mes == mes,
+                ComisionLiquidacion.id_vendedor_origen == vendedor_origen,
+                ComisionLiquidacion.esquema == esquema, ComisionLiquidacion.modo == modo,
+            )
+            .first()
+        )
+
     def save_liquidacion(
         self, anio: int, mes: int, vendedor_origen: str, esquema: str, modo: str,
         comision_total: float, detalle_json: dict,

@@ -24,13 +24,12 @@ export const qk = {
       ['bodega', 'inventario-matriz', filters, estado, pagination] as const,
     transferencias: (filters: unknown, pagination: unknown) =>
       ['bodega', 'transferencias', filters, pagination] as const,
-    notificaciones: (almacen: string | null) => ['bodega', 'notificaciones', almacen] as const,
     reporte: (tipo: string, filters: unknown) => ['bodega', 'reporte', tipo, filters] as const,
     prediccionComprasMes: (filters: unknown, productoCod: string | null | undefined) =>
       ['bodega', 'prediccion-compras-mes', filters, productoCod] as const,
   },
   ventas: {
-    goals: () => ['ventas', 'goals'] as const,
+    goals: (anio?: number, mes?: number) => ['ventas', 'goals', anio, mes] as const,
     myGoalTracking: () => ['ventas', 'my-goal-tracking'] as const,
     forecastCierre: () => ['ventas', 'goal-forecast-cierre'] as const,
     metaSugerida: () => ['ventas', 'goal-meta-sugerida'] as const,
@@ -56,6 +55,10 @@ export const qk = {
     listaTrabajo: () => ['cartera360', 'lista-trabajo'] as const,
     detalleCliente: (clienteId: string) => ['cartera360', 'detalle-cliente', clienteId] as const,
     tasaRecuperacion: () => ['cartera360', 'tasa-recuperacion'] as const,
+  },
+  notificaciones: {
+    lista: () => ['notificaciones', 'lista'] as const,
+    historial: (pagination: unknown) => ['notificaciones', 'historial', pagination] as const,
   },
   crossSelling: {
     sugerencias: (items: string[], clienteId: string | null | undefined) =>

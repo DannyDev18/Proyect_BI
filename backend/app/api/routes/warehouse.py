@@ -24,7 +24,6 @@ from app.schemas.warehouse import (
     InventarioMatrizResponse,
     KpisBodegaResponse,
     NecesidadCompraResponse,
-    NotificacionBodega,
     PrediccionComprasMesResponse,
     ProductoCompra,
     ProductoMatrizAlmacen,
@@ -312,39 +311,37 @@ def get_transferencias_sugeridas(
         ahorro_total_estimado=data["ahorro_total_estimado"],
     )
 
-
-# ── §4 Notificaciones ─────────────────────────────────────────────────────────
-@router.get("/notificaciones", response_model=list[NotificacionBodega], dependencies=[Depends(bodeguero_checker)])
-def get_notificaciones(
-    warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
-    almacen: str | None = None,
-) -> list[NotificacionBodega]:
-    """Alertas para la campana: stock crítico, agotamiento proyectado, transferencias,
-    informe semanal (§4.2). Calculadas al vuelo, sin persistencia."""
-    data = warehouse_service.get_notificaciones(sucursal=sucursal_filtro, almacen=almacen)
-    return [NotificacionBodega(**d) for d in data]
+# NOTA: el endpoint `GET /notificaciones` de este router fue reemplazado por el router
+# unificado `GET /notificaciones` (prefijo raíz, docs/auditoria/31_modulo_notificaciones.md,
+# Fase 4): `NotificationService._generar_bodega` sigue reutilizando
+# `WarehouseService.get_notificaciones` tal cual, solo que ahora expuesto por rol/usuario
+# del JWT en vez de un endpoint propio de Bodega. Se removió tras validar paridad de
+# contenido (misma fuente, mismo generador) y confirmar que el frontend no tenía otro
+# consumidor del endpoint viejo.
 
 
-# ── §2 Reportes ───────────────────────────────────────────────────────────────
-_REPORTES = {
-    "justificacion": ("Reporte de Justificación de Abastecimiento", "get_reporte_justificacion"),
-    "transferencias": ("Reporte de Productos Candidatos a Transferencia", "get_reporte_transferencias"),
-    "analisis-mensual": ("Reporte de Análisis de Stock y Abastecimiento", "get_reporte_analisis_mensual"),
-}
+# ── §2 (Fase 5) Reportes tipados ────────────────────────────────────────────
+_TIPOS_REPORTE = {"justificacion", "transferencias", "analisis-mensual"}
 
 
-def _generar_reporte(warehouse_service, tipo: str, sucursal: str | None, almacen: str | None,
-                     categoria: str | None, proveedor: str | None) -> tuple[str, dict]:
+def _generar_reporte(
+    warehouse_service, tipo: str, sucursal: str | None, almacen: str | None,
+    categoria: str | None, proveedor: str | None, tipo_movimiento: str | None,
+    fecha_desde: str | None, fecha_hasta: str | None,
+) -> dict:
     if tipo == "justificacion":
-        contenido = warehouse_service.get_reporte_justificacion(
+        return warehouse_service.get_reporte_justificacion(
             sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor,
+            tipo_movimiento=tipo_movimiento, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
         )
-    elif tipo == "transferencias":
-        contenido = warehouse_service.get_reporte_transferencias(sucursal=sucursal, categoria=categoria)
-    else:
-        contenido = warehouse_service.get_reporte_analisis_mensual(sucursal=sucursal, almacen=almacen)
-    return _REPORTES[tipo][0], contenido
+    if tipo == "transferencias":
+        return warehouse_service.get_reporte_transferencias(
+            sucursal=sucursal, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
+        )
+    return warehouse_service.get_reporte_analisis_mensual(
+        sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor,
+        tipo_movimiento=tipo_movimiento, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
+    )
 
 
 @router.get("/reportes/{tipo}", response_model=ReporteBodegaResponse, dependencies=[Depends(bodeguero_checker)])
@@ -355,13 +352,21 @@ def get_reporte(
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
+    tipo_movimiento: str | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
 ) -> ReporteBodegaResponse:
-    """§2: reporte para gerencia en JSON (tipo: justificacion | transferencias |
-    analisis-mensual). El frontend lo renderiza con vista imprimible (PDF)."""
-    if tipo not in _REPORTES:
+    """§2: reporte tipado para gerencia (tipo: justificacion | transferencias |
+    analisis-mensual) -- resumen ejecutivo interpretado + secciones de tabla con
+    columnas de negocio (Fase 5, docs/auditoria/32_actualizacion_modulo_bodega.md).
+    El frontend lo renderiza con vista imprimible (PDF)."""
+    if tipo not in _TIPOS_REPORTE:
         raise NotFoundError(f"Tipo de reporte desconocido: {tipo}")
-    _, contenido = _generar_reporte(warehouse_service, tipo, sucursal_filtro, almacen, categoria, proveedor)
-    return ReporteBodegaResponse(generado_en=contenido["generado_en"], contenido=contenido)
+    contenido = _generar_reporte(
+        warehouse_service, tipo, sucursal_filtro, almacen, categoria, proveedor,
+        tipo_movimiento, fecha_desde, fecha_hasta,
+    )
+    return ReporteBodegaResponse(**contenido)
 
 
 @router.get("/reportes/{tipo}/excel", dependencies=[Depends(bodeguero_checker)])
@@ -372,12 +377,19 @@ def get_reporte_excel(
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
+    tipo_movimiento: str | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
 ) -> Response:
-    """§2.1: export XLSX del reporte para edición en Excel."""
-    if tipo not in _REPORTES:
+    """§2.1: export XLSX del reporte para edición en Excel -- hoja Resumen (KPIs +
+    filtros aplicados) + una hoja por sección con encabezados/formato de negocio."""
+    if tipo not in _TIPOS_REPORTE:
         raise NotFoundError(f"Tipo de reporte desconocido: {tipo}")
-    titulo, contenido = _generar_reporte(warehouse_service, tipo, sucursal_filtro, almacen, categoria, proveedor)
-    archivo = reporte_a_excel(titulo, contenido)
+    contenido = _generar_reporte(
+        warehouse_service, tipo, sucursal_filtro, almacen, categoria, proveedor,
+        tipo_movimiento, fecha_desde, fecha_hasta,
+    )
+    archivo = reporte_a_excel(contenido)
     return Response(
         content=archivo,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

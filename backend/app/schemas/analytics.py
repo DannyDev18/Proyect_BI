@@ -3,6 +3,11 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
 class GPKPIGerencia(BaseModel):
+    # Calculado en SQL (AnalyticsRepository.get_management_kpis, `total_sales`) --
+    # docs/auditoria/33_actualizacion_modulo_gerencia.md, H2: antes el servicio lo
+    # descartaba y el frontend lo reconstruía sumando `ventas_por_sucursal`, una fuente
+    # que excluye sucursales con neto exactamente 0 y podía divergir del total real.
+    ingresos_totales: float
     margen_utilidad_neta: float
     ticket_promedio: float
     roi_estimado: float

@@ -11,8 +11,9 @@ from dataclasses import dataclass
 from app.core.config import settings
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.goal_repository import GoalRepository
+from app.services.commission_bonus import calcular_bonos_periodo
 from app.services.commission_engine import (
-    ConfigComisionVariable, LineaComisionable, calcular_comision, calcular_comision_variable,
+    ConfigComisionVariable, LineaComisionable, calcular_comision, calcular_comision_variable, fecha_referencia_periodo,
 )
 
 
@@ -52,16 +53,6 @@ def _meses_anteriores(anio: int, mes: int, cantidad: int) -> list[tuple[int, int
     return periodos
 
 
-def _ultimo_dia_mes(anio: int, mes: int) -> datetime.date:
-    """Fecha de referencia para resolver la configuración vigente de un período
-    simulado (auditoría 34, H-8): el cierre de un mes usa la matriz/factores de
-    crédito vigentes hasta el último día de ESE mes, no los vigentes hoy -- de lo
-    contrario un cambio de configuración posterior reescribiría retroactivamente
-    lo que "el esquema nuevo habría pagado" en meses ya simulados."""
-    siguiente = datetime.date(anio + (mes == 12), (mes % 12) + 1, 1)
-    return siguiente - datetime.timedelta(days=1)
-
-
 class CommissionSimulationService:
     def __init__(self, goal_repo: GoalRepository, commission_config_repo: CommissionConfigRepository):
         self.goal_repo = goal_repo
@@ -90,7 +81,7 @@ class CommissionSimulationService:
         vendedores_vistos: set[str] = set()
 
         for anio, mes in periodos:
-            fecha_periodo = _ultimo_dia_mes(anio, mes)
+            fecha_periodo = fecha_referencia_periodo(anio, mes)
             matriz = self.commission_config_repo.get_matriz_as_reglas(fecha_periodo)
             rangos_credito = self.commission_config_repo.get_factores_credito_as_rangos(fecha_periodo)
 
@@ -119,10 +110,25 @@ class CommissionSimulationService:
                     float(config_vendedor.factor_tipo) if config_vendedor else settings.COMISION_FACTOR_EXTERNO_DEFAULT
                 )
                 devoluciones = self.goal_repo.get_vendor_devoluciones_period(vendedor, anio, mes)
-                c_variable = calcular_comision_variable(
+                # Dos pasadas, igual que el cálculo real (CommissionService._calcular_variable,
+                # docs/auditoria/35_actualizacion_modulo_metas.md H3): el bono de cobranza es un
+                # % ADICIONAL sobre la comisión post-cumplimiento, así que hace falta conocerla
+                # antes de poder sumar los bonos. Antes la simulación siempre pasaba
+                # `bonos_total=0.0` y subestimaba el costo real del esquema variable.
+                pre_bonos = calcular_comision_variable(
                     lineas=lineas, matriz=matriz, rangos_credito=rangos_credito, factor_tipo_vendedor=factor_tipo,
                     venta_real=venta_neta, monto_meta=monto_meta, devoluciones_mes=devoluciones,
                     bonos_total=0.0, config=config,
+                )
+                bonos_total = calcular_bonos_periodo(
+                    self.goal_repo, vendedor, anio, mes, pre_bonos.comision_post_cumplimiento,
+                )
+                c_variable = (
+                    pre_bonos if bonos_total == 0.0 else calcular_comision_variable(
+                        lineas=lineas, matriz=matriz, rangos_credito=rangos_credito, factor_tipo_vendedor=factor_tipo,
+                        venta_real=venta_neta, monto_meta=monto_meta, devoluciones_mes=devoluciones,
+                        bonos_total=bonos_total, config=config,
+                    )
                 )
 
                 margen_periodo = sum(l.margen_bruto or 0.0 for l in lineas_repo)

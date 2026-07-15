@@ -22,12 +22,19 @@ const emptyForm = {
   nombre: '',
   email: '',
   password: '',
-  rol_id: 2,
+  rol_id: 0,
   sucursal: '',
   id_vendedor_origen: '',
   codalm: '',
   todos_los_almacenes: false,
 };
+
+// Rol de menor privilegio para preseleccionar "Nuevo usuario" (docs/auditoria/
+// 36_actualizacion_modulo_admin.md, H5): antes se hardcodeaba rol_id=2
+// ("administrador" en el seed actual), otorgando privilegios de admin por defecto
+// a cualquier creación apresurada. Se resuelve por nombre del catálogo real
+// (GET /roles), nunca por un id fijo.
+const ROL_DEFAULT_NOMBRE = 'ventas';
 
 export const UsersManagement = () => {
   const [users, setUsers] = useState<UserData[]>([]);
@@ -83,7 +90,8 @@ export const UsersManagement = () => {
         todos_los_almacenes: user.role.nombre === 'bodega' && !user.codalm,
       });
     } else {
-      setFormData(emptyForm);
+      const rolDefault = roles.find((r) => r.nombre === ROL_DEFAULT_NOMBRE) ?? roles[0];
+      setFormData({ ...emptyForm, rol_id: rolDefault?.id ?? 0 });
     }
     setIsDrawerOpen(true);
   };
@@ -107,7 +115,6 @@ export const UsersManagement = () => {
 
       if (selectedRoleNombre === 'ventas') {
         payload.id_vendedor_origen = formData.id_vendedor_origen || null;
-        payload.sucursal = formData.sucursal || null;
       } else if (selectedRoleNombre === 'bodega') {
         payload.todos_los_almacenes = formData.todos_los_almacenes;
         payload.codalm = formData.todos_los_almacenes ? null : (formData.codalm || null);
@@ -332,26 +339,15 @@ export const UsersManagement = () => {
 
           <div className="pt-2 border-t border-slate-800 space-y-4">
             {selectedRoleNombre === 'ventas' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label htmlFor="user-vendedor" className="text-xs font-semibold uppercase text-slate-400">Código de vendedor (codven)</label>
-                  <input
-                    id="user-vendedor" type="text" required placeholder="Ej: V001"
-                    value={formData.id_vendedor_origen}
-                    onChange={(e) => setFormData({ ...formData, id_vendedor_origen: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none placeholder-slate-700 focus-ring"
-                  />
-                  <p className="text-[11px] text-slate-500">Se valida contra el EDW: el vendedor debe existir y estar activo. La cuenta queda enlazada automáticamente a ese vendedor.</p>
-                </div>
-                <div className="space-y-1">
-                  <label htmlFor="user-sucursal" className="text-xs font-semibold uppercase text-slate-400">Sucursal (RLS)</label>
-                  <input
-                    id="user-sucursal" type="text" placeholder="Ej: GYE-01"
-                    value={formData.sucursal}
-                    onChange={(e) => setFormData({ ...formData, sucursal: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none placeholder-slate-700 focus-ring"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label htmlFor="user-vendedor" className="text-xs font-semibold uppercase text-slate-400">Código de vendedor (codven)</label>
+                <input
+                  id="user-vendedor" type="text" required placeholder="Ej: V001"
+                  value={formData.id_vendedor_origen}
+                  onChange={(e) => setFormData({ ...formData, id_vendedor_origen: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none placeholder-slate-700 focus-ring"
+                />
+                <p className="text-[11px] text-slate-500">Se valida contra el EDW: el vendedor debe existir y estar activo. La cuenta queda enlazada automáticamente a ese vendedor.</p>
               </div>
             )}
 

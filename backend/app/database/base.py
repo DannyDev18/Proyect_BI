@@ -10,3 +10,4 @@ from app.models.gestion_cartera_evento import GestionCarteraEvento  # noqa: F401
 from app.models.commission_config import (  # noqa: F401
     ComisionMatrizCategoria, ComisionFactorCredito, ComisionConfigVendedor, ComisionLiquidacion,
 )
+from app.models.notification import Notification  # noqa: F401

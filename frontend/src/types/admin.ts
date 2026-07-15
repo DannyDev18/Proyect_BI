@@ -51,3 +51,10 @@ export interface AuditLogEntry {
   source: string;
   msg: string;
 }
+
+export interface AuditLogFilters {
+  fecha_desde?: string;
+  fecha_hasta?: string;
+  usuario?: string;
+  modulo?: string;
+}

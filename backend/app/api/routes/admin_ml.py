@@ -1,26 +1,18 @@
 # backend/app/api/routes/admin_ml.py
 """Rename de `admin_mlops.py`. Dispara y consulta el estado del reentrenamiento de
 modelos (orquestado por `TrainingService`, subprocess externo de `ml/src/training/`)."""
+import os
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.api.dependencies import ModelLoaderDep, TrainingServiceDep
 from app.core.deps import PermissionChecker
+from app.ml.model_loader import MODEL_DISPLAY_NAMES
 from app.schemas.mlops import MLOpsStatusResponse, ModelStatusResponse
 
 router = APIRouter()
 
 admin_checker = PermissionChecker(allowed_roles=["administrador"])
-
-# Nombre de negocio por modelo (M-02: panel MLOps del DashboardAdmin, reemplaza el mock
-# MODEL_STATUS). Claves = _MODEL_FILES de app/ml/model_loader.py.
-_NOMBRE_MODELO = {
-    "sales_rf": "Random Forest (Ventas)",
-    "demand_rf": "Random Forest (Demanda)",
-    "churn_rf": "Clasificador de Churn",
-    "segmentation": "K-Means RFM (Segmentación)",
-    "association": "Apriori (Venta Cruzada)",
-    "anomaly": "Isolation Forest (Anomalías)",
-}
 
 
 @router.post("/retrain", dependencies=[Depends(admin_checker)])
@@ -32,6 +24,21 @@ def trigger_model_retraining(background_tasks: BackgroundTasks, training_service
     status = training_service.get_status()
     if status["is_training"]:
         raise HTTPException(status_code=409, detail="Un proceso de entrenamiento ya está en curso.")
+
+    # Validación síncrona antes de encolar (docs/auditoria/36_actualizacion_modulo_admin.md,
+    # H9): antes esta verificación solo ocurría dentro del propio background task, así que
+    # el cliente ya recibía un 200 "iniciado" falso en entornos sin `ml/` montado (prod-like)
+    # y el fallo real quedaba enterrado en `GET /admin/modelos/status`, que nadie consulta
+    # proactivamente.
+    if not os.path.isdir(training_service.ml_source_dir):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Reentrenamiento no disponible: el código fuente de ml/ no está montado en "
+                f"este entorno ({training_service.ml_source_dir}). El reentrenamiento en "
+                f"producción debe ejecutarse vía el servicio 'ml' del docker-compose (perfil ml)."
+            ),
+        )
 
     background_tasks.add_task(training_service.trigger_retraining_pipeline)
     return {"message": "Pipeline de reentrenamiento iniciado en background."}
@@ -53,7 +60,7 @@ def get_models_status(model_loader: ModelLoaderDep) -> list[ModelStatusResponse]
         cargado = model_loader.is_loaded(key)
         metricas = model_loader.get_meta(key).get("metrics", {}) if cargado else {}
         resultado.append(ModelStatusResponse(
-            name=_NOMBRE_MODELO.get(key, key),
+            name=MODEL_DISPLAY_NAMES.get(key, key),
             r2=metricas.get("R2"),
             status="OK" if cargado else "NO_CARGADO",
         ))

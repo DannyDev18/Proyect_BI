@@ -1,9 +1,8 @@
-import { LogOut, User as UserIcon, Bell, Menu } from 'lucide-react';
+import { LogOut, User as UserIcon, Menu } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
 import { useNavigate } from 'react-router-dom';
-import { canAccess } from '../../constants/permissions';
-import { NotificationBell } from '../bodega/NotificationBell';
+import { NotificationBell } from './NotificationBell';
 
 export const Header = () => {
   const { user, logout } = useAuthStore();
@@ -34,18 +33,7 @@ export const Header = () => {
       </div>
 
       <div className="flex items-center space-x-4 md:space-x-6">
-        {user && canAccess(user.role, 'bodega') ? (
-          <NotificationBell />
-        ) : (
-          <button
-            disabled
-            aria-label="Notificaciones (próximamente)"
-            title="Notificaciones — próximamente"
-            className="text-slate-600 cursor-not-allowed"
-          >
-            <Bell size={20} />
-          </button>
-        )}
+        {user && <NotificationBell />}
 
         <div className="h-8 w-px bg-slate-800"></div>
 

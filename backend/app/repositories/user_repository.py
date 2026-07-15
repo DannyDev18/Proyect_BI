@@ -15,6 +15,9 @@ class UserRepository(BaseRepository):
     def get_by_email(self, email: str) -> User | None:
         return self._query_with_role().filter(User.email == email).first()
 
+    def get_by_vendedor(self, id_vendedor_origen: str) -> User | None:
+        return self._query_with_role().filter(User.id_vendedor_origen == id_vendedor_origen).first()
+
     def get_by_id(self, user_id: int) -> User | None:
         return self._query_with_role().filter(User.id == user_id).first()
 

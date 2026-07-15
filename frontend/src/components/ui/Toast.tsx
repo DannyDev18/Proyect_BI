@@ -1,9 +1,10 @@
-import { CheckCircle2, X, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, X, XCircle } from 'lucide-react';
 import { useToastStore } from '../../store/toastStore';
 
 const variantStyles = {
   success: { border: 'border-emerald-500/30', icon: <CheckCircle2 size={16} className="text-emerald-400" /> },
   error: { border: 'border-red-500/30', icon: <XCircle size={16} className="text-red-400" /> },
+  warning: { border: 'border-amber-500/30', icon: <AlertTriangle size={16} className="text-amber-400" /> },
 };
 
 /** Contenedor de toasts (P2) — esquina inferior derecha, monta una sola vez en Layout.

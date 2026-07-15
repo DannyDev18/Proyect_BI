@@ -4,8 +4,8 @@ import type {
   ForecastCierre, MetaSugerida, RecomendacionesComerciales, MiComision, PostGoalInvoicesResponse,
 } from '../types/ventas';
 
-export const getSalesGoals = () =>
-  api.get<VentasKPIs>('/api/v1/analytics/ventas/goals');
+export const getSalesGoals = (anio?: number, mes?: number) =>
+  api.get<VentasKPIs>('/api/v1/analytics/ventas/goals', { params: { anio, mes } });
 
 /** Mismo endpoint que `getSalesGoals`, tipado según el contrato real del backend
  * (`VentasGoalsTracking`) -- usado por el dashboard vendedor. */

@@ -69,6 +69,24 @@ class Settings(BaseSettings):
     BODEGA_ROTACION_BUENA: float = float(os.getenv("BODEGA_ROTACION_BUENA", "4.0"))
     BODEGA_ROTACION_REGULAR: float = float(os.getenv("BODEGA_ROTACION_REGULAR", "2.0"))
     BODEGA_ROTACION_MIN_COMPRA: float = float(os.getenv("BODEGA_ROTACION_MIN_COMPRA", "3.0"))
+    # RN-B9 (docs/auditoria/32_actualizacion_modulo_bodega.md): justificación estadística
+    # de transferencias. Costo logístico estimado como % del valor transferido (a costo
+    # unitario del destino) -- sin dato real de flete en el EDW, se declara como estimación
+    # configurable, no como cifra exacta. Umbral mínimo de meses con venta real del destino
+    # en los últimos 6 meses para emitir la sugerencia (evita mover stock a una bodega sin
+    # historial real de venta del artículo).
+    BODEGA_COSTO_LOGISTICO_PCT: float = float(os.getenv("BODEGA_COSTO_LOGISTICO_PCT", "5.0"))
+    BODEGA_MIN_MESES_VENTA: int = int(os.getenv("BODEGA_MIN_MESES_VENTA", "2"))
+    # Umbrales de confianza (alta/media/baja) del coeficiente de variación de la demanda
+    # diaria del destino, recalibrados contra la distribución real del EDW (docs/auditoria/
+    # 32_actualizacion_modulo_bodega.md, verificación 2026-07-15): la demanda de repuestos
+    # de este negocio es intermitente por naturaleza (mediana real de CV ≈ 2.6 sobre 200
+    # sugerencias reales) -- los umbrales "de libro" (CV<0.5/<1.0) dejaban 199/200 en "baja",
+    # una señal inútil porque nunca discriminaba. BODEGA_CV_ALTA/BODEGA_CV_MEDIA se calibran
+    # contra los percentiles reales de esa distribución, no contra un estándar genérico.
+    BODEGA_CV_ALTA: float = float(os.getenv("BODEGA_CV_ALTA", "1.2"))
+    BODEGA_CV_MEDIA: float = float(os.getenv("BODEGA_CV_MEDIA", "2.5"))
+    BODEGA_MESES_CONFIANZA_ALTA: int = int(os.getenv("BODEGA_MESES_CONFIANZA_ALTA", "5"))
 
     # ── Predicción de compras del próximo mes por categoría (docs/auditoria/24) ──
     # Top-N artículos por ventas de la categoría sobre los que corre `demand_rf`
@@ -136,6 +154,45 @@ class Settings(BaseSettings):
     # de inferencia sin recorrer carteras de hasta 31,000 clientes (auditoría 32 H1,
     # mejora de verificación 2026-07-14: la priorización original no usaba el modelo real).
     VENTAS360_CANDIDATOS_ENRIQUECER: int = int(os.getenv("VENTAS360_CANDIDATOS_ENRIQUECER", "300"))
+
+    # ── Módulo de Notificaciones (RN-N1..RN-N4, docs/auditoria/31_modulo_notificaciones.md) ──
+    NOTIF_POLL_SEGUNDOS: int = int(os.getenv("NOTIF_POLL_SEGUNDOS", "60"))
+    # Umbral de desvío real vs. forecast (`sales_rf`) que dispara la alerta de gerencia (Fase 4).
+    NOTIF_DESVIO_FORECAST_PCT: float = float(os.getenv("NOTIF_DESVIO_FORECAST_PCT", "20.0"))
+    # Probabilidad de abandono desde la cual se notifica churn nuevo a un vendedor (Fase 4).
+    NOTIF_CHURN_UMBRAL: float = float(os.getenv("NOTIF_CHURN_UMBRAL", "0.7"))
+    # Límite por tipo de notificación calculada, mismo patrón ya usado en Bodega
+    # (warehouse_service.py, top 10/top 5) para no inundar la campana (riesgo §7 del plan).
+    NOTIF_MAX_POR_TIPO: int = int(os.getenv("NOTIF_MAX_POR_TIPO", "10"))
+    # Ventana de deduplicación de notificaciones persistidas (RN-N2): mismo
+    # (tipo_evento, rol_destino, contexto) no se reinserta dentro de esta ventana.
+    NOTIF_DEDUPE_HORAS: int = int(os.getenv("NOTIF_DEDUPE_HORAS", "24"))
+
+    # ── Módulo Administrador (docs/auditoria/36_actualizacion_modulo_admin.md) ──
+    # Política de contraseña única (antes solo existía como `pattern` HTML en el
+    # frontend, evadible con un request directo a la API -- H4). El backend es ahora
+    # la fuente de verdad; el pattern del frontend queda como UX, no como seguridad.
+    PASSWORD_MIN_LENGTH: int = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
+    PASSWORD_REGEX: str = os.getenv(
+        "PASSWORD_REGEX", r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).+$",
+    )
+    # Ventana por defecto de `/analytics/admin/audit-logs` cuando no se especifica
+    # `fecha_desde` (H2, auditoría 36): antes no había ningún filtro de fecha.
+    ADMIN_AUDIT_LOGS_VENTANA_DIAS: int = int(os.getenv("ADMIN_AUDIT_LOGS_VENTANA_DIAS", "30"))
+
+    # ── Módulo Ventas (docs/auditoria/34_actualizacion_modulo_ventas.md) ──────────
+    # Umbral de "riesgo alto" mostrado en el badge de churn del dashboard de Ventas
+    # (antes hardcodeado a 0.5 en prediction_service.py, H-V4). Distinto a
+    # NOTIF_CHURN_UMBRAL (0.7): ese decide cuándo notificar proactivamente al vendedor,
+    # este decide cuándo el badge de UI se pinta en rojo -- umbrales con propósitos
+    # distintos, no deben unificarse en una sola constante.
+    CHURN_UMBRAL_RIESGO_ALTO: float = float(os.getenv("CHURN_UMBRAL_RIESGO_ALTO", "0.5"))
+    # Ventana de deduplicación de doble-click en "Registrar gestión" de Cartera 360
+    # (H-V5): un segundo submit idéntico (mismo usuario/cliente/evento) dentro de esta
+    # ventana no crea una fila nueva -- devuelve la ya creada. No es una regla de
+    # negocio de "una gestión por día" (un vendedor sí puede loggear el mismo tipo de
+    # evento en días distintos), solo protección contra el doble-click accidental.
+    CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS: int = int(os.getenv("CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS", "10"))
 
     class Config:
         case_sensitive = True

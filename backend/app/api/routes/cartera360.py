@@ -41,10 +41,15 @@ def get_lista_trabajo(cartera360_service: Cartera360ServiceDep, current_user: Cu
 @router.get(
     "/clientes/{cliente_id}/detalle", response_model=DetalleClienteResponse, dependencies=[Depends(vendedor_checker)],
 )
-def get_detalle_cliente(cliente_id: str, cartera360_service: Cartera360ServiceDep) -> DetalleClienteResponse:
+def get_detalle_cliente(
+    cliente_id: str, cartera360_service: Cartera360ServiceDep, current_user: CurrentUserDep,
+) -> DetalleClienteResponse:
     """Enriquecimiento ML bajo demanda de un cliente: churn real, segmento RFM y
-    recomendaciones de venta cruzada (reutiliza `PredictionService`, sin modelos nuevos)."""
-    return DetalleClienteResponse(**cartera360_service.get_detalle_cliente(cliente_id))
+    recomendaciones de venta cruzada (reutiliza `PredictionService`, sin modelos nuevos).
+    Self-scope a la cartera propia (RN-V3, sin override) -- ver H-V2 en docs/auditoria/
+    34_actualizacion_modulo_ventas.md."""
+    vendedor = _requerir_vendedor(current_user)
+    return DetalleClienteResponse(**cartera360_service.get_detalle_cliente(cliente_id, vendedor))
 
 
 @router.post("/gestion", response_model=RegistrarGestionResponse, dependencies=[Depends(vendedor_checker)])

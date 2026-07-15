@@ -1,14 +1,20 @@
 import { useState } from 'react';
 import { Target, Users, TrendingDown, BarChart2 } from 'lucide-react';
 import { useSalesGoals, useChurnRisk, useRecommendations, useCustomerSegment } from '../hooks/ventas';
+import { usePeriods } from '../hooks/goals';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
 import { ErrorState } from '../components/ui/ErrorState';
 import { SearchInput } from '../components/ui/SearchInput';
-import { GlobalBranchSelector } from '../components/ui/GlobalBranchSelector';
+import { Select } from '../components/ui/Select';
 import { useAuthStore } from '../store/authStore';
 import { pct } from '../utils/format';
+
+const NOMBRE_MES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+];
 
 // ─── Gauge: churn probability bar ────────────────────────────────────────────
 const ChurnGauge = ({ prob }: { prob: number }) => {
@@ -44,13 +50,19 @@ const segmentVariant = (nombre: string): 'success' | 'info' | 'warning' | 'criti
 
 export const DashboardVentas = () => {
   const { user } = useAuthStore();
-  const goals = useSalesGoals();
+  const periodos = usePeriods();
+  // Sin selección explícita, el backend usa el período vigente (docs/auditoria/
+  // 34_actualizacion_modulo_ventas.md, H-V3) -- el selector solo permite ver meses
+  // anteriores, nunca fuerza uno hasta que el usuario elige.
+  const [periodoSeleccionado, setPeriodoSeleccionado] = useState<string>('');
+  const [anioSel, mesSel] = periodoSeleccionado ? periodoSeleccionado.split('-').map(Number) : [undefined, undefined];
+
+  const goals = useSalesGoals(anioSel, mesSel);
   const churn = useChurnRisk();
   const recs  = useRecommendations();
   const seg   = useCustomerSegment();
 
   const [clienteId, setClienteId] = useState('');
-  const [sucursal, setSucursal] = useState<string | null>(null);
 
   const handleSearch = (val: string) => {
     setClienteId(val);
@@ -59,6 +71,17 @@ export const DashboardVentas = () => {
     seg.execute(val);
   };
 
+  // H-V1 (docs/auditoria/34_actualizacion_modulo_ventas.md): antes había un selector de
+  // sucursal (`GlobalBranchSelector`) que actualizaba estado local pero nunca se
+  // propagaba a ningún hook -- el backend, además, fuerza sucursal=None para
+  // gerencia/administrador en este router (`resolve_sucursal_filter(allow_override=False)`,
+  // mismo criterio que Bodega) y la sucursal propia para "ventas" sin posibilidad de
+  // override. No hay ningún filtro real que ofrecer aquí -- se retira el selector y el
+  // subtítulo muestra la sucursal real que el backend ya está aplicando.
+  const sucursalMostrada = user?.role === 'gerencia' || user?.role === 'administrador'
+    ? 'Consolidado Global'
+    : (user?.sucursalId ?? 'Central');
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -66,11 +89,22 @@ export const DashboardVentas = () => {
         <div>
           <h1 className="text-3xl font-display font-semibold text-slate-100">Gestión Comercial</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Sucursal: <span className="text-slate-300">{user?.role === 'gerencia' || user?.role === 'administrador' ? (sucursal || 'Consolidado Global') : (user?.sucursalId ?? 'Central')}</span> · Metas, segmentación RFM y predicciones
+            Sucursal: <span className="text-slate-300">{sucursalMostrada}</span> · Metas, segmentación RFM y predicciones
           </p>
         </div>
         <div className="flex items-center gap-4">
-          <GlobalBranchSelector onSelectSucursal={setSucursal} />
+          <Select
+            aria-label="Período de metas"
+            value={periodoSeleccionado}
+            onChange={(e) => setPeriodoSeleccionado(e.target.value)}
+          >
+            <option value="">Período vigente</option>
+            {periodos.data.map((p) => (
+              <option key={`${p.anio}-${p.mes}`} value={`${p.anio}-${p.mes}`}>
+                {NOMBRE_MES[p.mes - 1]} {p.anio}
+              </option>
+            ))}
+          </Select>
           <AlertBadge variant="info" dot>ML Activo — K-Means + Random Forest</AlertBadge>
         </div>
       </div>

@@ -8,11 +8,13 @@ de trabajo se calcula con UNA sola consulta agregada (estadística pura, sin mod
 toda la cartera; el enriquecimiento con los 3 modelos (churn/RFM/cross-sell) se hace bajo demanda,
 por cliente, cuando el vendedor abre el detalle de una tarjeta (ver `CarteraVendedorService` /
 `PredictionService`), nunca recorriendo la cartera completa."""
+import datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.gestion_cartera_evento import GestionCarteraEvento
 
 
@@ -79,6 +81,30 @@ class Cartera360Repository:
     def log_gestion(
         self, usuario_id: int, cliente_sk: int | None, evento: str, motivo: str | None = None,
     ) -> GestionCarteraEvento:
+        """Docs/auditoria/34_actualizacion_modulo_ventas.md, H-V5: antes era un INSERT
+        plano sin ninguna protección -- un doble-click en "Registrar gestión" creaba 2
+        filas, inflando `total_gestiones`/`tasa_recuperacion`. Un duplicado EXACTO
+        (mismo usuario/cliente/evento) dentro de `CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS`
+        devuelve el registro ya creado en vez de insertar uno nuevo -- no es una regla de
+        negocio de "una gestión por día" (el mismo evento sí puede repetirse en días
+        distintos), solo protección contra el doble-click accidental."""
+        limite = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            seconds=settings.CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS,
+        )
+        reciente = (
+            self.db.query(GestionCarteraEvento)
+            .filter(
+                GestionCarteraEvento.usuario_id == usuario_id,
+                GestionCarteraEvento.cliente_sk == cliente_sk,
+                GestionCarteraEvento.evento == evento,
+                GestionCarteraEvento.fecha >= limite,
+            )
+            .order_by(GestionCarteraEvento.fecha.desc())
+            .first()
+        )
+        if reciente is not None:
+            return reciente
+
         registro = GestionCarteraEvento(usuario_id=usuario_id, cliente_sk=cliente_sk, evento=evento, motivo=motivo)
         self.db.add(registro)
         self.db.commit()

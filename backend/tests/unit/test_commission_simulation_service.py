@@ -10,7 +10,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.services.commission_simulation_service import CommissionSimulationService, _ultimo_dia_mes
+from app.services.commission_engine import ultimo_dia_mes as _ultimo_dia_mes
+from app.services.commission_simulation_service import CommissionSimulationService
 
 
 @pytest.fixture
@@ -21,6 +22,12 @@ def goal_repo():
     repo.get_vendor_net_sales_period.return_value = 9000.0
     repo.get_commission_lines.return_value = []
     repo.get_vendor_devoluciones_period.return_value = 0.0
+    # Bonos (docs/auditoria/35_actualizacion_modulo_metas.md, H3): la simulación ahora
+    # los calcula igual que la liquidación real -- sin datos de venta cruzada/clientes
+    # nuevos/cobranza por defecto en estos tests (bonos_total=0.0).
+    repo.get_cross_sell_accepted_amount.return_value = 0.0
+    repo.get_new_or_reactivated_clients.return_value = 0
+    repo.get_vendor_credit_profile.return_value = {"dias_cobro_promedio": None}
     return repo
 
 
@@ -63,3 +70,25 @@ def test_simulacion_no_recalcula_config_por_vendedor_solo_por_periodo(service, c
 
     assert commission_config_repo.get_matriz_as_reglas.call_count == 1
     assert commission_config_repo.get_factores_credito_as_rangos.call_count == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# H3 (docs/auditoria/35_actualizacion_modulo_metas.md): la simulación debe incluir los
+# bonos igual que la liquidación real -- antes siempre pasaba bonos_total=0.0 y
+# subestimaba el costo del esquema variable frente a lo que realmente se paga.
+# ══════════════════════════════════════════════════════════════════════════════
+def test_simulacion_incluye_bono_de_cliente_nuevo_en_la_comision_variable(service, commission_config_repo, goal_repo):
+    goal_repo.get_new_or_reactivated_clients.return_value = 2  # 2 clientes nuevos
+
+    resumen = service.simular(meses=1, anio_desde=2026, mes_desde=6)
+
+    from app.core.config import settings
+    bono_esperado = 2 * settings.COMISION_BONO_CLIENTE_NUEVO
+    assert resumen.detalle[0].comision_variable == pytest.approx(bono_esperado)  # sin líneas, la comisión es solo el bono
+
+
+def test_simulacion_sin_bonos_coincide_con_bonos_total_cero(service, commission_config_repo, goal_repo):
+    """Caso base (sin venta cruzada/clientes nuevos/cobranza sana): el resultado debe
+    ser idéntico al de antes del fix (bonos_total=0.0), sin regresión."""
+    resumen = service.simular(meses=1, anio_desde=2026, mes_desde=6)
+    assert resumen.detalle[0].comision_variable == 0.0  # sin líneas ni bonos -> comisión variable nula

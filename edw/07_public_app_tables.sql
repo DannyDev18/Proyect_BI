@@ -179,3 +179,35 @@ COMMENT ON TABLE public.comision_liquidaciones IS
 
 CREATE INDEX IF NOT EXISTS idx_comision_liquidaciones_periodo
     ON public.comision_liquidaciones(anio, mes, id_vendedor_origen);
+
+-- ── Notificaciones Inteligentes Segmentadas por Rol ─────────────────────────
+-- docs/features/plan_modulo_notificaciones.md, docs/auditoria/31_modulo_notificaciones.md,
+-- reglas RN-N1..RN-N4. Solo notificaciones PERSISTIDAS (eventos puntuales con estado de
+-- lectura: anomalía detectada, meta generada, liquidación disponible); las calculadas al
+-- vuelo (stock, forecast, churn) no tocan esta tabla.
+CREATE TABLE IF NOT EXISTS public.notificaciones (
+    id              BIGSERIAL PRIMARY KEY,
+    tipo_evento     VARCHAR(50) NOT NULL,
+    rol_destino     VARCHAR(20) NOT NULL REFERENCES public.roles(nombre) ON DELETE CASCADE,
+    usuario_id      INTEGER REFERENCES public.usuarios(id) ON DELETE CASCADE,
+    titulo          VARCHAR(200) NOT NULL,
+    mensaje         TEXT NOT NULL,
+    accion_url      VARCHAR(300),
+    prioridad       VARCHAR(10) NOT NULL DEFAULT 'media' CHECK (prioridad IN ('alta','media','baja')),
+    contexto        JSONB,
+    leida_por       JSONB NOT NULL DEFAULT '[]',
+    fecha_creacion  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    fecha_expira    TIMESTAMP WITH TIME ZONE
+);
+COMMENT ON TABLE public.notificaciones IS
+    'Notificaciones persistidas segmentadas por rol/usuario (RN-N1). usuario_id NULL =
+     visible a todo el rol_destino; leida_por acumula los ids de usuario que la marcaron
+     leída en ese caso (RN-N3). contexto guarda claves de negocio (codart, id_vendedor_origen,
+     etc.) usadas para RLS y para el dedupe de 24h (RN-N2). No confundir con las
+     notificaciones calculadas de Bodega (warehouse_service.get_notificaciones), que nunca
+     se escriben aquí.';
+
+CREATE INDEX IF NOT EXISTS idx_notif_rol_fecha
+    ON public.notificaciones(rol_destino, fecha_creacion DESC);
+CREATE INDEX IF NOT EXISTS idx_notif_dedupe
+    ON public.notificaciones(tipo_evento, rol_destino, fecha_creacion DESC);

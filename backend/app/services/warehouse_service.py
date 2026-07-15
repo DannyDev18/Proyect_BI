@@ -24,10 +24,79 @@ from app.ml import inference
 from app.ml.forecasting import walk_forward_forecast
 from app.ml.model_loader import ModelLoader
 from app.repositories.dataset_repository import DatasetRepository
-from app.repositories.warehouse_repository import TIPOS_MOVIMIENTO, WarehouseRepository
+from app.repositories.warehouse_repository import (
+    TIPOS_MOVIMIENTO,
+    TIPOS_MOVIMIENTO_CON_MONTO,
+    WarehouseRepository,
+)
 from app.schemas.pagination import Page, PaginationParams, paginar
 
 logger = logging.getLogger("Backend.WarehouseService")
+
+# ── Fase 5 (docs/features/plan_actualizacion_modulo_bodega.md): helpers para el
+# contrato tipado de reportes (`schemas.warehouse.ReporteBodegaResponse`) -- funciones
+# de módulo (no de instancia) para poder declararse como constantes de columnas.
+def _moneda(v: float | None) -> str:
+    return f"${v:,.2f}" if v is not None else "—"
+
+
+def _kpi(etiqueta: str, valor: str, tono: str = "neutral") -> dict[str, Any]:
+    return {"etiqueta": etiqueta, "valor": valor, "tono": tono}
+
+
+def _columna(key: str, etiqueta: str, tipo: str = "texto") -> dict[str, str]:
+    return {"key": key, "etiqueta": etiqueta, "tipo": tipo}
+
+
+def _seccion(
+    titulo: str, columnas: list[dict[str, str]], filas: list[dict[str, Any]],
+    *, descripcion: str | None = None, resaltar_key: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "titulo": titulo, "descripcion": descripcion, "columnas": columnas,
+        "filas": filas, "resaltar_key": resaltar_key, "total_filas": len(filas),
+    }
+
+
+_COLS_COMPRA = [
+    _columna("codart", "Código"), _columna("nombre", "Producto"), _columna("categoria", "Categoría"),
+    _columna("stock_actual", "Stock actual", "numero"), _columna("salida_diaria", "Salida diaria/día", "numero"),
+    _columna("dias_inventario", "Días de inventario", "numero"),
+    _columna("dias_hasta_reorden", "Días hasta reorden", "numero"),
+    _columna("fecha_estimada_reorden", "Llega a reorden", "fecha"),
+    _columna("cantidad_sugerida", "Cantidad sugerida", "numero"),
+    _columna("costo_unitario", "Costo unitario", "moneda"), _columna("costo_total", "Costo total", "moneda"),
+    _columna("prioridad", "Prioridad", "badge"), _columna("justificacion", "Justificación"),
+]
+_COLS_ROTACION = [
+    _columna("codart", "Código"), _columna("nombre", "Producto"), _columna("categoria", "Categoría"),
+    _columna("rotacion_mensual", "Rotación mensual", "numero"),
+    _columna("margen_unitario", "Margen por unidad", "moneda"),
+    _columna("stock_actual", "Stock actual", "numero"), _columna("valor_inventario", "Valor inventario", "moneda"),
+    _columna("dias_inventario", "Días de inventario", "numero"),
+]
+_COLS_TRANSFERENCIA = [
+    _columna("codart", "Código"), _columna("nombre", "Producto"), _columna("categoria", "Categoría"),
+    _columna("almacen_origen", "Origen"), _columna("stock_origen", "Stock origen", "numero"),
+    _columna("dias_inv_origen", "Días inv. origen", "numero"),
+    _columna("almacen_destino", "Destino"), _columna("stock_destino", "Stock destino", "numero"),
+    _columna("dias_inv_destino", "Días inv. destino", "numero"),
+    _columna("cantidad_transferir", "Cantidad a transferir", "numero"),
+    _columna("dias_inv_destino_post", "Días destino post", "numero"),
+    _columna("prioridad", "Prioridad", "badge"), _columna("confianza", "Confianza", "badge"),
+    _columna("ahorro_estimado", "Ahorro estimado", "moneda"), _columna("motivo", "Motivo"),
+]
+_COLS_STOCK = [
+    _columna("codart", "Código"), _columna("nombre", "Producto"), _columna("categoria", "Categoría"),
+    _columna("stock_actual", "Stock actual", "numero"), _columna("punto_reorden", "Punto de reorden", "numero"),
+    _columna("salida_diaria", "Salida diaria/día", "numero"),
+    _columna("dias_inventario", "Días de inventario", "numero"),
+    _columna("dias_hasta_reorden", "Días hasta reorden", "numero"), _columna("estado", "Estado", "badge"),
+]
+_COLS_RESUMEN_CATEGORIA = [
+    _columna("categoria", "Categoría"), _columna("productos", "Artículos", "numero"),
+    _columna("valor", "Valor a comprar", "moneda"),
+]
 
 ESTADO_CRITICO = "Crítico"
 ESTADO_CERCA = "Cerca"
@@ -77,6 +146,20 @@ class WarehouseService:
         if stock <= reorden * 1.5:
             return ESTADO_CERCA
         return ESTADO_SEGURO
+
+    @staticmethod
+    def _monto_movimiento(fila: dict[str, Any], tipo_movimiento: str | None) -> float | None:
+        """RN-B8: solo expone un monto cuando el filtro activo es un tipo de movimiento
+        que representa dinero real (FAC=venta, CPA=compra, docs/auditoria/32 H32-1);
+        cualquier otro filtro (u ninguno) devuelve None aunque la columna SQL tenga
+        datos -- valor_venta/costo_total del kardex no son venta/compra real fuera de
+        esos 2 tipos."""
+        clase = TIPOS_MOVIMIENTO_CON_MONTO.get(tipo_movimiento or "")
+        if clase == "venta":
+            return fila.get("monto_venta")
+        if clase == "compra":
+            return fila.get("monto_compra")
+        return None
 
     @staticmethod
     def _tendencia_pct(actual: float, previo: float) -> float | None:
@@ -610,6 +693,7 @@ class WarehouseService:
                 "stock_actual": f["stock_actual"],
                 "dias_inventario": self._dias_inventario(f["stock_actual"], salida_diaria),
                 "tendencia_pct": self._tendencia_pct(f["unidades"], f["unidades_previo"]),
+                "monto_ventas": self._monto_movimiento(f, tipo_movimiento),
             })
         return out
 
@@ -629,6 +713,7 @@ class WarehouseService:
                 **f,
                 "pct_participacion": round(f["unidades"] / total * 100, 1),
                 "tendencia_pct": self._tendencia_pct(f["unidades"], f["unidades_previo"]),
+                "monto_ventas": self._monto_movimiento(f, tipo_movimiento),
             }
             for f in filas
         ]
@@ -837,7 +922,81 @@ class WarehouseService:
             "productos": paginar(completo["productos"], pagination),
         }
 
-    # ── Panel §3.2 (RN-B3): transferencias inteligentes ──────────────────────
+    # ── RN-B9: justificación estadística de transferencias ──────────────────
+    _VENTANA_JUSTIFICACION_DIAS = 180  # 90d para CV/tendencia/venta + 6 meses para persistencia
+
+    @classmethod
+    def _series_calendario(
+        cls, rows: list[dict[str, Any]],
+    ) -> dict[tuple[str, str], dict[str, pd.Series]]:
+        """Agrupa filas (codart, almacen, fecha, unidades, venta) en series diarias con
+        calendario completo (ceros en días sin movimiento, no solo días con actividad) --
+        imprescindible para que el coeficiente de variación de RN-B9 refleje la demanda
+        real y no solo la de los días con venta."""
+        if not rows:
+            return {}
+        calendario = pd.date_range(
+            end=pd.Timestamp.today().normalize(), periods=cls._VENTANA_JUSTIFICACION_DIAS, freq="D",
+        )
+        df = pd.DataFrame(rows)
+        df["fecha"] = pd.to_datetime(df["fecha"])
+        agrupado: dict[tuple[str, str], dict[str, pd.Series]] = {}
+        for (codart, almacen), grupo in df.groupby(["codart", "almacen"]):
+            indexado = grupo.set_index("fecha")
+            agrupado[(codart, almacen)] = {
+                "unidades": indexado["unidades"].reindex(calendario, fill_value=0.0),
+                "venta": indexado["venta"].reindex(calendario, fill_value=0.0),
+            }
+        return agrupado
+
+    def _justificacion_transferencia(
+        self, series: dict[str, pd.Series] | None, cantidad: float, costo_unitario: float,
+        stock_origen: float, salida_diaria_origen: float, dias_inv_destino_post: float | None,
+    ) -> tuple[dict[str, Any], str]:
+        """Métricas de RN-B9 para el destino + confianza + beneficio neto. `series=None`
+        (sin historial batch para el par codart/almacén) degrada a confianza baja con
+        métricas en None -- nunca lanza excepción (mismo patrón de degradación con
+        gracia del resto del módulo, p.ej. `_forecast_ml_producto`)."""
+        demanda_media = demanda_mediana = cv = tendencia = venta_90d = None
+        meses_con_venta = 0
+        if series is not None:
+            u90 = series["unidades"].tail(90)
+            demanda_media = round(float(u90.mean()), 2)
+            demanda_mediana = round(float(u90.median()), 2)
+            cv = round(float(u90.std() or 0.0) / demanda_media, 2) if demanda_media > 0 else None
+            media_30 = float(u90.tail(30).mean())
+            media_prev = float(u90.iloc[:-30].mean()) if len(u90) > 30 else 0.0
+            tendencia = round((media_30 - media_prev) / media_prev * 100, 1) if media_prev > 0 else None
+            venta_90d = round(float(series["venta"].tail(90).sum()), 2)
+            meses_con_venta = int(series["unidades"].resample("MS").sum().gt(0).sum())
+
+        costo_logistico = round(cantidad * costo_unitario * settings.BODEGA_COSTO_LOGISTICO_PCT / 100, 2)
+        beneficio_neto = round(cantidad * costo_unitario - costo_logistico, 2)
+
+        if cv is not None and cv < settings.BODEGA_CV_ALTA and meses_con_venta >= settings.BODEGA_MESES_CONFIANZA_ALTA:
+            confianza = "alta"
+        elif cv is not None and cv < settings.BODEGA_CV_MEDIA and meses_con_venta >= settings.BODEGA_MIN_MESES_VENTA:
+            confianza = "media"
+        else:
+            confianza = "baja"
+
+        justificacion = {
+            "demanda_media_destino": demanda_media,
+            "demanda_mediana_destino": demanda_mediana,
+            "coeficiente_variacion_destino": cv,
+            "tendencia_destino_pct": tendencia,
+            "venta_monetaria_destino_90d": venta_90d,
+            "meses_con_venta_destino": meses_con_venta,
+            "dias_cobertura_origen_post": (
+                round((stock_origen - cantidad) / salida_diaria_origen, 1) if salida_diaria_origen > 0 else None
+            ),
+            "dias_cobertura_destino_post": dias_inv_destino_post,
+            "costo_logistico_estimado": costo_logistico,
+            "beneficio_neto_estimado": beneficio_neto,
+        }
+        return justificacion, confianza
+
+    # ── Panel §3.2 (RN-B3/RN-B9): transferencias inteligentes ────────────────
     def _transferencias_completo(
         self, sucursal: str | None = None, categoria: str | None = None,
         proveedor: str | None = None, tipo_movimiento: str | None = None,
@@ -848,6 +1007,12 @@ class WarehouseService:
         por_producto: dict[str, list[dict[str, Any]]] = {}
         for f in filas:
             por_producto.setdefault(f["codart"], []).append(f)
+
+        candidatos = [codart for codart, bodegas in por_producto.items() if len(bodegas) >= 2]
+        series_rows = self.repo.get_series_salidas_producto_almacen(
+            candidatos, dias=self._VENTANA_JUSTIFICACION_DIAS,
+        )
+        series_por_par = self._series_calendario(series_rows)
 
         sugerencias = []
         for codart, bodegas in por_producto.items():
@@ -893,6 +1058,20 @@ class WarehouseService:
                     dias_dest_post = self._dias_inventario(
                         destino["stock_actual"] + cantidad, destino["salida_diaria"],
                     )
+                    justificacion, confianza = self._justificacion_transferencia(
+                        series_por_par.get((codart, destino["almacen"])), cantidad, destino["costo_unitario"],
+                        origen["stock_actual"], origen["salida_diaria"], dias_dest_post,
+                    )
+                    # RN-B9: umbral de emisión -- nunca sugerir mover inventario a una
+                    # bodega sin historial real de venta ni con beneficio neto negativo
+                    # (el ahorro por no comprar no alcanza a cubrir el costo logístico
+                    # estimado). La confianza (incluida "baja") sí se muestra siempre
+                    # para las que superan este umbral -- nunca se oculta en silencio.
+                    if (
+                        justificacion["beneficio_neto_estimado"] <= 0
+                        or justificacion["meses_con_venta_destino"] < settings.BODEGA_MIN_MESES_VENTA
+                    ):
+                        continue
                     dias_origen_txt = (
                         f"{origen['dias_inv']:.0f} días de stock" if origen["dias_inv"] is not None
                         else "stock sin salidas registradas"
@@ -917,6 +1096,9 @@ class WarehouseService:
                             f"tiene {(destino['dias_inv'] or 0):.0f} días de stock "
                             f"(salidas {destino['salida_diaria']:.1f} uds/día)."
                         ),
+                        "justificacion": justificacion,
+                        "confianza": confianza,
+                        "beneficio_neto_estimado": justificacion["beneficio_neto_estimado"],
                     })
                     break  # un origen por destino: la mejor fuente disponible
 
@@ -962,12 +1144,14 @@ class WarehouseService:
                     f"Nivel actual: {p['stock_actual']:.0f}, Punto reorden: {p['punto_reorden']:.0f}"
                 ),
                 "codart": p["codart"],
+                "accion_url": "/bodega",
             })
         if len(criticos) > 10:
             notificaciones.append({
                 "tipo": "stock_critico_resumen", "prioridad": "alta",
                 "mensaje": f"🔴 Hay {len(criticos)} productos con stock crítico en total.",
                 "codart": None,
+                "accion_url": "/bodega",
             })
 
         # Predicción de agotamiento <7 días (§4.2 fila 2) — derivada estadística.
@@ -984,6 +1168,7 @@ class WarehouseService:
                     f"{p['dias_hasta_reorden']:.0f} días según proyección. Considerar compra."
                 ),
                 "codart": p["codart"],
+                "accion_url": "/bodega",
             })
 
         # Transferencias sugeridas (§4.2 fila 3).
@@ -996,6 +1181,7 @@ class WarehouseService:
                     f"déficit en {t['almacen_destino']}. Transferir {t['cantidad_transferir']:.0f} unidades."
                 ),
                 "codart": t["codart"],
+                "accion_url": "/bodega",
             })
 
         # Informe semanal listo: 5 días antes del fin de mes (§4.2 fila 4).
@@ -1005,108 +1191,206 @@ class WarehouseService:
                 "tipo": "reporte_semanal", "prioridad": "alta",
                 "mensaje": "📋 Reporte de compras sugeridas para el próximo mes disponible.",
                 "codart": None,
+                "accion_url": "/bodega/reportes",
             })
 
         return notificaciones
 
-    # ── §2: reportes para gerencia ───────────────────────────────────────────
+    # ── §2 (Fase 5): reportes tipados para gerencia ──────────────────────────
     def get_reporte_justificacion(
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
+        tipo_movimiento: str | None = None, fecha_desde: str | None = None,
+        fecha_hasta: str | None = None,
     ) -> dict[str, Any]:
-        """§2.1 — Reporte de Justificación de Abastecimiento."""
-        filtros = dict(sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor)
-        compra = self._necesidad_compra_completo(**filtros, horizonte_dias=settings.BODEGA_HORIZONTE_PLAN_DIAS)
-        rotacion = self.get_rotacion_matriz(**filtros)
+        """§2.1 — Reporte de Justificación de Abastecimiento: responde "¿qué comprar
+        este mes y por qué?". `fecha_desde/hasta` no aplican a `compra` (foto de stock
+        actual, mismo criterio N/A documentado en docs/auditoria/32 D2) -- solo a
+        rotación y KPIs, que sí operan sobre un rango de movimientos."""
+        filtros_stock = dict(sucursal=sucursal, almacen=almacen, categoria=categoria,
+                             proveedor=proveedor, tipo_movimiento=tipo_movimiento)
+        filtros_rango = dict(**filtros_stock, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
+        compra = self._necesidad_compra_completo(**filtros_stock, horizonte_dias=settings.BODEGA_HORIZONTE_PLAN_DIAS)
+        rotacion = self.get_rotacion_matriz(**filtros_rango)
         transferencias = self._transferencias_completo(
-            sucursal=sucursal, categoria=categoria, proveedor=proveedor,
+            sucursal=sucursal, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         )
-        kpis = self.get_kpis(**filtros)
+        kpis = self.get_kpis(**filtros_rango)
 
         productos_rot = [p for p in rotacion["productos"] if p["rotacion_mensual"] is not None]
         top_rotacion = sorted(productos_rot, key=lambda p: -p["rotacion_mensual"])[:20]
         bottom_rotacion = sorted(productos_rot, key=lambda p: p["rotacion_mensual"])[:10]
+        posibles_desabastecimientos = [r for r in compra["recomendados"] if r["prioridad"] == "Alta"]
 
         resumen_categoria: dict[str, dict[str, float]] = {}
         for r in compra["recomendados"]:
             acc = resumen_categoria.setdefault(r["categoria"], {"productos": 0, "valor": 0.0})
             acc["productos"] += 1
             acc["valor"] = round(acc["valor"] + r["costo_total"], 2)
+        top_categoria = max(resumen_categoria.items(), key=lambda kv: kv[1]["valor"], default=None)
+
+        tendencia = kpis["valor_inventario"]["tendencia_pct"]
+        resumen_ejecutivo = [
+            _kpi("Productos a comprar", f"{compra['total_productos_a_comprar']} artículos"),
+            _kpi("Valor total de compra", _moneda(compra["valor_total_compra"])),
+            _kpi("Ahorro por no comprar excedentes", _moneda(compra["ahorro_por_no_comprar"]), "positivo"),
+            _kpi(
+                "Tendencia de valor de inventario",
+                f"{tendencia:+.1f}%" if tendencia is not None else "—",
+                "positivo" if (tendencia or 0) >= 0 else "negativo",
+            ),
+        ]
+        if top_categoria:
+            resumen_ejecutivo.append(_kpi("Categoría con mayor inversión sugerida", top_categoria[0]))
+
+        interpretacion = (
+            f"Se recomienda comprar {compra['total_productos_a_comprar']} artículos por "
+            f"{_moneda(compra['valor_total_compra'])} en los próximos {compra['horizonte_dias']} días; "
+            f"{len(posibles_desabastecimientos)} son de prioridad alta (riesgo de desabastecimiento) "
+            f"y hay {len(transferencias['sugerencias'])} transferencias sugeridas antes de comprar."
+        )
 
         return {
+            "tipo": "justificacion",
+            "titulo": "Reporte de Justificación de Abastecimiento",
             "generado_en": datetime.datetime.now().isoformat(timespec="seconds"),
-            "filtros": {k: v for k, v in filtros.items() if v},
-            "resumen_ejecutivo": {
-                "total_productos_a_comprar": compra["total_productos_a_comprar"],
-                "valor_total_compra": compra["valor_total_compra"],
-                "resumen_por_categoria": [
-                    {"categoria": c, **v} for c, v in sorted(
-                        resumen_categoria.items(), key=lambda kv: -kv[1]["valor"],
-                    )
-                ],
-                "tendencia_valor_inventario_pct": kpis["valor_inventario"]["tendencia_pct"],
-            },
-            "productos_recomendados": compra["recomendados"],
-            "analisis_rotacion": {"top_rotacion": top_rotacion, "bottom_rotacion": bottom_rotacion},
-            "proyeccion": {
-                "horizonte_dias": compra["horizonte_dias"],
-                "posibles_desabastecimientos": [
-                    r for r in compra["recomendados"] if r["prioridad"] == "Alta"
-                ],
-            },
-            "transferencias": transferencias,
-            "ahorro_por_no_comprar": compra["ahorro_por_no_comprar"],
+            "filtros_aplicados": {k: v for k, v in filtros_rango.items() if v},
+            "resumen_ejecutivo": resumen_ejecutivo,
+            "interpretacion": interpretacion,
+            "secciones": [
+                _seccion(
+                    "Productos recomendados para compra", _COLS_COMPRA, compra["recomendados"],
+                    resaltar_key="prioridad",
+                    descripcion=f"Horizonte de {compra['horizonte_dias']} días.",
+                ),
+                _seccion(
+                    "Posibles desabastecimientos (prioridad alta)", _COLS_COMPRA, posibles_desabastecimientos,
+                    resaltar_key="prioridad",
+                ),
+                _seccion("Resumen por categoría", _COLS_RESUMEN_CATEGORIA, [
+                    {"categoria": c, **v} for c, v in sorted(resumen_categoria.items(), key=lambda kv: -kv[1]["valor"])
+                ]),
+                _seccion(
+                    "Análisis de rotación — Top 20", _COLS_ROTACION, top_rotacion,
+                    descripcion="Productos que más rotan (mayor prioridad de reposición continua).",
+                ),
+                _seccion(
+                    "Análisis de rotación — Menor rotación", _COLS_ROTACION, bottom_rotacion,
+                    descripcion="Candidatos a revisar antes de comprar más (rotación baja).",
+                ),
+                _seccion(
+                    "Transferencias sugeridas antes de comprar", _COLS_TRANSFERENCIA, transferencias["sugerencias"],
+                    resaltar_key="prioridad",
+                    descripcion="RN-B9: solo transferencias con beneficio neto positivo e historial real de venta en el destino.",
+                ),
+            ],
         }
 
     def get_reporte_transferencias(
         self, sucursal: str | None = None, categoria: str | None = None,
+        proveedor: str | None = None, tipo_movimiento: str | None = None,
     ) -> dict[str, Any]:
-        """§2.2 — Reporte de Productos Candidatos a Transferencia."""
-        data = self._transferencias_completo(sucursal=sucursal, categoria=categoria)
+        """§2.2 — Reporte de Productos Candidatos a Transferencia: responde "¿qué mover
+        entre bodegas?". Sin `fecha_desde/hasta`: las transferencias comparan stock
+        actual entre bodegas, no un rango histórico (mismo criterio N/A de D2)."""
+        data = self._transferencias_completo(
+            sucursal=sucursal, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
+        )
         sugerencias = data["sugerencias"]
+        filtros = {"sucursal": sucursal, "categoria": categoria, "proveedor": proveedor, "tipo_movimiento": tipo_movimiento}
+        n_baja_confianza = sum(1 for s in sugerencias if s.get("confianza") == "baja")
+
+        resumen_ejecutivo = [
+            _kpi("Productos con excedente", f"{len({s['codart'] for s in sugerencias})} artículos"),
+            _kpi("Pares producto-destino con déficit", f"{len({(s['codart'], s['almacen_destino']) for s in sugerencias})}"),
+            _kpi("Valor transferible (ahorro por no comprar)", _moneda(data["ahorro_total_estimado"]), "positivo"),
+            _kpi(
+                "Sugerencias que requieren revisión manual", f"{n_baja_confianza} de confianza baja",
+                "negativo" if n_baja_confianza > 0 else "positivo",
+            ),
+        ]
+        interpretacion = (
+            f"Hay {len(sugerencias)} transferencias sugeridas con un ahorro estimado de "
+            f"{_moneda(data['ahorro_total_estimado'])} frente a comprar de nuevo; "
+            f"{n_baja_confianza} tienen confianza estadística baja y deben revisarse manualmente antes de ejecutar."
+        )
+
         return {
+            "tipo": "transferencias",
+            "titulo": "Reporte de Productos Candidatos a Transferencia",
             "generado_en": datetime.datetime.now().isoformat(timespec="seconds"),
-            "resumen": {
-                "productos_con_excedente": len({s["codart"] for s in sugerencias}),
-                "productos_con_deficit": len({(s["codart"], s["almacen_destino"]) for s in sugerencias}),
-                "valor_transferible": data["ahorro_total_estimado"],
-            },
-            "transferencias_sugeridas": sugerencias,
-            "ahorro": {
-                "monto_ahorrado_por_no_comprar": data["ahorro_total_estimado"],
-            },
-            "por_prioridad": {
-                nivel: [s for s in sugerencias if s["prioridad"] == nivel]
-                for nivel in ("Alta", "Media", "Baja")
-            },
+            "filtros_aplicados": {k: v for k, v in filtros.items() if v},
+            "resumen_ejecutivo": resumen_ejecutivo,
+            "interpretacion": interpretacion,
+            "secciones": [
+                _seccion(
+                    "Transferencias sugeridas", _COLS_TRANSFERENCIA, sugerencias,
+                    resaltar_key="prioridad",
+                    descripcion="RN-B9: ordenadas por prioridad y ahorro estimado; incluye confianza estadística.",
+                ),
+            ],
         }
 
     def get_reporte_analisis_mensual(
         self, sucursal: str | None = None, almacen: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None,
+        tipo_movimiento: str | None = None, fecha_desde: str | None = None,
+        fecha_hasta: str | None = None,
     ) -> dict[str, Any]:
-        """§2.3 — Reporte mensual consolidado de Stock y Abastecimiento."""
-        filtros = dict(sucursal=sucursal, almacen=almacen)
-        kpis = self.get_kpis(**filtros)
-        stock = self._stock_reorden_filas(**filtros)[:50]
-        compra = self._necesidad_compra_completo(**filtros)
+        """§2.3 — Reporte mensual consolidado de Stock y Abastecimiento: responde "¿cómo
+        cerró el mes el inventario?". `fecha_desde/hasta` y `tipo_movimiento` solo se
+        propagan a `kpis` (rango de movimientos); `stock` y `compra` son fotos de stock
+        actual (mismo criterio N/A de D2)."""
+        filtros_stock = dict(sucursal=sucursal, almacen=almacen, categoria=categoria,
+                             proveedor=proveedor, tipo_movimiento=tipo_movimiento)
+        kpis = self.get_kpis(**filtros_stock, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
+        stock = self._stock_reorden_filas(**filtros_stock)[:50]
+        compra = self._necesidad_compra_completo(**filtros_stock)
+        criticos = [p for p in stock if p["estado"] == ESTADO_CRITICO]
+        exceso = [p for p in stock if p["estado"] == ESTADO_EXCESO]
+
+        variacion_valor = kpis["valor_inventario"]["tendencia_pct"]
+        resumen_ejecutivo = [
+            # H24-x: usar skus_activos (con stock real), no total_skus (catálogo completo,
+            # idéntico para cualquier almacén -- ver comentario en get_kpis).
+            _kpi("Artículos activos en inventario", f"{kpis['total_articulos']['skus_activos']} artículos"),
+            _kpi("Valor total de inventario", _moneda(kpis["valor_inventario"]["valor_total"])),
+            _kpi(
+                "Rotación anualizada", f"{kpis['rotacion']['rotacion_anualizada']:.2f}x"
+                if kpis["rotacion"]["rotacion_anualizada"] is not None else "—",
+                "positivo" if kpis["rotacion"]["semaforo"] == "verde" else "negativo" if kpis["rotacion"]["semaforo"] == "rojo" else "neutral",
+            ),
+            _kpi(
+                "Días de inventario disponibles", f"{kpis['dias_inventario']['dias']:.0f} días"
+                if kpis["dias_inventario"]["dias"] is not None else "—",
+                "negativo" if kpis["dias_inventario"]["alerta_desabastecimiento"] else "positivo",
+            ),
+            _kpi(
+                "Variación de valor vs mes anterior", f"{variacion_valor:+.1f}%" if variacion_valor is not None else "—",
+                "positivo" if (variacion_valor or 0) >= 0 else "negativo",
+            ),
+        ]
+        interpretacion = (
+            f"El inventario cerró con {kpis['total_articulos']['skus_activos']} artículos activos por "
+            f"{_moneda(kpis['valor_inventario']['valor_total'])}; {len(criticos)} productos están en estado "
+            f"crítico y {len(exceso)} tienen exceso de stock. El plan de compras sugiere invertir "
+            f"{_moneda(compra['valor_total_compra'])} en el próximo horizonte."
+        )
+
         return {
+            "tipo": "analisis-mensual",
+            "titulo": "Reporte de Análisis de Stock y Abastecimiento",
             "generado_en": datetime.datetime.now().isoformat(timespec="seconds"),
-            "resumen_general": {
-                # H24-x: usar skus_activos (con stock real), no total_skus (catálogo completo,
-                # idéntico para cualquier almacén -- ver comentario en get_kpis).
-                "total_articulos": kpis["total_articulos"]["skus_activos"],
-                "valor_inventario": kpis["valor_inventario"]["valor_total"],
-                "rotacion_anualizada": kpis["rotacion"]["rotacion_anualizada"],
-                "dias_inventario": kpis["dias_inventario"]["dias"],
-            },
-            "productos_criticos": [p for p in stock if p["estado"] == ESTADO_CRITICO],
-            "productos_exceso": [p for p in stock if p["estado"] == ESTADO_EXCESO],
-            "comparativa_mes_anterior": {
-                "variacion_valor_pct": kpis["valor_inventario"]["tendencia_pct"],
-                "variacion_articulos_pct": kpis["total_articulos"]["tendencia_pct"],
-            },
-            "plan_compras": {
-                "recomendados": compra["recomendados"],
-                "valor_total": compra["valor_total_compra"],
-            },
+            "filtros_aplicados": {k: v for k, v in {**filtros_stock, "fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta}.items() if v},
+            "resumen_ejecutivo": resumen_ejecutivo,
+            "interpretacion": interpretacion,
+            "secciones": [
+                _seccion("Productos críticos", _COLS_STOCK, criticos, resaltar_key="estado"),
+                _seccion("Productos en exceso de stock", _COLS_STOCK, exceso, resaltar_key="estado"),
+                _seccion(
+                    "Plan de compras (recomendados)", _COLS_COMPRA, compra["recomendados"],
+                    resaltar_key="prioridad",
+                    descripcion=f"Valor total: {_moneda(compra['valor_total_compra'])}.",
+                ),
+            ],
         }

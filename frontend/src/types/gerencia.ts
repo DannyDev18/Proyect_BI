@@ -1,4 +1,8 @@
 export interface GerenciaKPIs {
+  // Calculado en backend (docs/auditoria/33_actualizacion_modulo_gerencia.md, H2) --
+  // antes el frontend lo reconstruía sumando `ventas_por_sucursal`, una fuente que
+  // excluye sucursales con neto exactamente 0 y podía divergir del total real.
+  ingresos_totales: number;
   ventas_consolidadas?: number;
   ticket_promedio: number;
   margen_utilidad_neta: number;

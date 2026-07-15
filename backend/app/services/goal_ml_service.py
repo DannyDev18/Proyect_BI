@@ -131,12 +131,17 @@ class GoalMLService:
         model_loader: ModelLoader,
         calculation_engine: IQRGoalCalculationEngine | None = None,
         commission_config_repo: CommissionConfigRepository | None = None,
+        notification_service=None,
     ):
         self.goal_repo = goal_repo
         self.dataset_repo = dataset_repo
         self.model_loader = model_loader
         self.calculation_engine = calculation_engine or IQRGoalCalculationEngine()
         self.commission_config_repo = commission_config_repo
+        # `NotificationService` opcional (docs/auditoria/31_modulo_notificaciones.md, RN-N2):
+        # sin tipar el import directo evita un ciclo (NotificationService no depende de
+        # GoalMLService, pero se compone en `app.api.dependencies` en el mismo módulo).
+        self.notification_service = notification_service
 
     # ── Generación de metas (estadística pura: IQR sobre Venta Neta, sin ML) ───────────
     def generate_proposals(self, anio: int, mes: int, factor_presion: float = 1.0) -> int:
@@ -181,6 +186,16 @@ class GoalMLService:
                 registros_afectados += 1
 
         self.goal_repo.commit()
+        if registros_afectados > 0 and self.notification_service is not None:
+            self.notification_service.emitir(
+                tipo_evento="metas_generadas",
+                rol_destino="gerencia",
+                titulo="Metas propuestas listas para aprobar",
+                mensaje=f"📋 Se generaron/actualizaron {registros_afectados} propuestas de meta para {mes}/{anio}.",
+                prioridad="media",
+                accion_url="/gerencia/metas",
+                contexto={"anio": anio, "mes": mes},
+            )
         return registros_afectados
 
     def _ajustar_meta_por_tipo(

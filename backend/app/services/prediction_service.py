@@ -13,7 +13,7 @@ from typing import Any
 import pandas as pd
 
 from app.core.config import settings
-from app.core.exceptions import ExternalDataError
+from app.core.exceptions import ExternalDataError, PermissionDeniedError
 from app.ml import inference
 from app.ml.forecasting import walk_forward_forecast
 from app.ml.model_loader import ModelLoader
@@ -280,8 +280,24 @@ class PredictionService:
             logger.error(f"Fallo inferencia de demanda para producto_cod={producto_cod}: {e}")
             return 0.0
 
+    def _verificar_pertenencia_cartera(self, cliente_id: str, codven_restriccion: str | None) -> None:
+        """RLS de cartera (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V2): si el
+        llamador pasa `codven_restriccion` (rol `ventas`, sin override -- gerencia/admin
+        pasan `None`), el cliente consultado debe pertenecer a la cartera de ESE
+        vendedor. Antes `churn-risk`/`recommendations`/`clientes/{id}/segmento` no
+        verificaban esto -- cualquier vendedor autenticado podía consultar cualquier
+        cliente del sistema."""
+        if codven_restriccion is None:
+            return
+        assert self.catalog_repo is not None
+        if not self.catalog_repo.cliente_pertenece_a_vendedor(cliente_id, codven_restriccion):
+            raise PermissionDeniedError(
+                f"El cliente '{cliente_id}' no pertenece a la cartera del vendedor autenticado."
+            )
+
     # ── Caso de uso: Riesgo de abandono (Churn) ───────────────────────────────
-    def get_churn_risk(self, cliente_id: str) -> dict[str, Any]:
+    def get_churn_risk(self, cliente_id: str, codven_restriccion: str | None = None) -> dict[str, Any]:
+        self._verificar_pertenencia_cartera(cliente_id, codven_restriccion)
         features = self.prediction_repo.get_churn_features(cliente_id)
         if features is None:
             return {"probabilidad_abandono": 0.0, "riesgo_alto": False}
@@ -290,7 +306,7 @@ class PredictionService:
         try:
             preds = inference.predict_churn(self.model_loader, df_live)
             prob = float(preds["churn_probability"].iloc[0])
-            return {"probabilidad_abandono": round(prob * 100, 2), "riesgo_alto": prob > 0.5}
+            return {"probabilidad_abandono": round(prob * 100, 2), "riesgo_alto": prob > settings.CHURN_UMBRAL_RIESGO_ALTO}
         except Exception as e:
             # H-03 cerrado en Fase 4: get_churn_features ahora produce las mismas 3
             # columnas/semántica que el contrato de entrenamiento (ml/contracts/models/churn.json).
@@ -315,7 +331,7 @@ class PredictionService:
             resultado = {
                 str(row["cliente_id"]): {
                     "probabilidad_abandono": round(float(preds["churn_probability"].iloc[i]) * 100, 2),
-                    "riesgo_alto": bool(preds["churn_probability"].iloc[i] > 0.5),
+                    "riesgo_alto": bool(preds["churn_probability"].iloc[i] > settings.CHURN_UMBRAL_RIESGO_ALTO),
                 }
                 for i, row in df_features.reset_index(drop=True).iterrows()
             }
@@ -346,7 +362,8 @@ class PredictionService:
             return {"score": 0.0, "es_anomalia": False}
 
     # ── Caso de uso: Recomendación de productos (Cross-selling) ───────────────
-    def get_product_recommendations(self, cliente_id: str) -> dict[str, Any]:
+    def get_product_recommendations(self, cliente_id: str, codven_restriccion: str | None = None) -> dict[str, Any]:
+        self._verificar_pertenencia_cartera(cliente_id, codven_restriccion)
         historial = self.prediction_repo.get_client_purchase_history(cliente_id)
         try:
             # H-10 cerrado en Fase 4: item_B ya es codart (no nombre_articulo). Contrato
@@ -542,7 +559,8 @@ class PredictionService:
         return self.catalog_repo.search_clientes(query)
 
     # ── Caso de uso: Segmentación RFM interactiva ─────────────────────────────
-    def get_customer_segment(self, cliente_id: str) -> dict[str, Any]:
+    def get_customer_segment(self, cliente_id: str, codven_restriccion: str | None = None) -> dict[str, Any]:
+        self._verificar_pertenencia_cartera(cliente_id, codven_restriccion)
         features = self.prediction_repo.get_rfm_features(cliente_id)
         if features is None:
             return {"segmento": -1, "nombre_segmento": "Sin historial"}

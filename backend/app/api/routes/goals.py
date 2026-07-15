@@ -22,6 +22,7 @@ from app.schemas.goal import (
 router = APIRouter()
 
 only_management = PermissionChecker(allowed_roles=["gerencia", "administrador"])
+management_o_ventas = PermissionChecker(allowed_roles=["gerencia", "administrador", "ventas"])
 sucursal_gerencia = resolve_sucursal_filter(allow_override=True)
 
 
@@ -36,9 +37,13 @@ def get_goals_tracking(anio: int, mes: int, goals_service: GoalsServiceDep) -> G
 
 @router.get(
     "/periods", status_code=status.HTTP_200_OK, summary="Obtiene los periodos disponibles para metas",
-    dependencies=[Depends(only_management)],
+    dependencies=[Depends(management_o_ventas)],
 )
 def get_goals_periods(goals_service: GoalsServiceDep):
+    """Catálogo de `(anio, mes)` con datos -- global, no sensible por vendedor. Abierto
+    también a `ventas` (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V3) para
+    poblar el selector de período del propio dashboard del vendedor, antes limitado a
+    `only_management` pese a no exponer nada específico de otro vendedor."""
     return goals_service.get_periods()
 
 

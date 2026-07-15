@@ -110,6 +110,8 @@ export interface ProductoTopSalidas {
   stock_actual: number;
   dias_inventario: number | null;
   tendencia_pct: number | null;
+  /** RN-B8: solo viene poblado con tipo_movimiento=FAC (venta) o CPA (compra). */
+  monto_ventas: number | null;
 }
 
 export interface CategoriaSalidas {
@@ -119,6 +121,7 @@ export interface CategoriaSalidas {
   stock_disponible: number;
   pct_participacion: number;
   tendencia_pct: number | null;
+  monto_ventas: number | null;
 }
 
 export type EstadoStock = 'Crítico' | 'Cerca' | 'Seguro' | 'Exceso';
@@ -178,6 +181,23 @@ export interface InventarioMatriz {
   productos: Page<ProductoMatrizAlmacen>;
 }
 
+/** RN-B9 (docs/auditoria/32_actualizacion_modulo_bodega.md): evidencia estadística de
+ * que el destino realmente venderá el artículo, no solo que tiene déficit. */
+export interface JustificacionTransferencia {
+  demanda_media_destino: number | null;
+  demanda_mediana_destino: number | null;
+  coeficiente_variacion_destino: number | null;
+  tendencia_destino_pct: number | null;
+  venta_monetaria_destino_90d: number | null;
+  meses_con_venta_destino: number;
+  dias_cobertura_origen_post: number | null;
+  dias_cobertura_destino_post: number | null;
+  costo_logistico_estimado: number;
+  beneficio_neto_estimado: number;
+}
+
+export type ConfianzaTransferencia = 'alta' | 'media' | 'baja';
+
 export interface TransferenciaSugerida {
   codart: string;
   nombre: string;
@@ -193,6 +213,9 @@ export interface TransferenciaSugerida {
   prioridad: 'Alta' | 'Media' | 'Baja';
   ahorro_estimado: number;
   motivo: string;
+  justificacion: JustificacionTransferencia | null;
+  confianza: ConfianzaTransferencia | null;
+  beneficio_neto_estimado: number | null;
 }
 
 export interface Transferencias {
@@ -201,20 +224,42 @@ export interface Transferencias {
   ahorro_total_estimado: number;
 }
 
-// ── §4 Notificaciones ────────────────────────────────────────────────────────
-export interface NotificacionBodega {
-  tipo: string;
-  prioridad: 'alta' | 'media' | 'baja';
-  mensaje: string;
-  codart: string | null;
-}
-
-// ── §2 Reportes ──────────────────────────────────────────────────────────────
+// ── §2 Reportes (Fase 5, docs/features/plan_actualizacion_modulo_bodega.md) ─────
 export type TipoReporteBodega = 'justificacion' | 'transferencias' | 'analisis-mensual';
 
+export type TonoKpi = 'positivo' | 'negativo' | 'neutral';
+
+export interface KpiResumenEjecutivo {
+  etiqueta: string;
+  valor: string;
+  tono: TonoKpi;
+}
+
+export type TipoColumnaReporte = 'texto' | 'numero' | 'moneda' | 'porcentaje' | 'fecha' | 'badge';
+
+export interface ColumnaReporte {
+  key: string;
+  etiqueta: string;
+  tipo: TipoColumnaReporte;
+}
+
+export interface SeccionReporte {
+  titulo: string;
+  descripcion: string | null;
+  columnas: ColumnaReporte[];
+  filas: Record<string, unknown>[];
+  resaltar_key: string | null;
+  total_filas: number | null;
+}
+
 export interface ReporteBodega {
+  tipo: TipoReporteBodega;
+  titulo: string;
   generado_en: string;
-  contenido: Record<string, unknown>;
+  filtros_aplicados: Record<string, unknown>;
+  resumen_ejecutivo: KpiResumenEjecutivo[];
+  interpretacion: string;
+  secciones: SeccionReporte[];
 }
 
 // ── Predicción de compras del próximo mes por categoría (docs/auditoria/24) ──

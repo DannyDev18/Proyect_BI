@@ -15,9 +15,11 @@ from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository
+from app.repositories.notification_repository import NotificationRepository
 from app.repositories.prediction_repository import PredictionRepository
 from app.repositories.recommendation_event_repository import RecommendationEventRepository
 from app.repositories.role_repository import RoleRepository
+from app.repositories.system_repository import SystemRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.warehouse_repository import WarehouseRepository
 from app.services.analytics_service import AnalyticsService
@@ -28,8 +30,10 @@ from app.services.commission_service import CommissionService
 from app.services.commission_simulation_service import CommissionSimulationService
 from app.services.goal_ml_service import GoalMLService
 from app.services.goals_service import GoalsService
+from app.services.notification_service import NotificationService
 from app.services.prediction_service import PredictionService
 from app.services.role_service import RoleService
+from app.services.system_service import SystemService
 from app.services.training_service import TrainingService
 from app.services.user_service import UserService
 from app.services.warehouse_service import WarehouseService
@@ -82,6 +86,14 @@ def get_commission_config_repository(db: SessionDep) -> CommissionConfigReposito
 
 def get_cartera360_repository(db: SessionDep) -> Cartera360Repository:
     return Cartera360Repository(db)
+
+
+def get_notification_repository(db: SessionDep) -> NotificationRepository:
+    return NotificationRepository(db)
+
+
+def get_system_repository(db: SessionDep) -> SystemRepository:
+    return SystemRepository(db)
 
 
 # ── Modelos ML (Singleton vía app.state, cargado en el lifespan de main.py) ──
@@ -139,19 +151,6 @@ def get_prediction_service(
     return PredictionService(prediction_repo, dataset_repo, model_loader, catalog_repo, recommendation_event_repo)
 
 
-def get_goal_ml_service(
-    goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
-    dataset_repo: Annotated[DatasetRepository, Depends(get_dataset_repository)],
-    model_loader: ModelLoaderDep,
-    commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
-) -> GoalMLService:
-    """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_...md):
-    compone `GoalRepository` + `DatasetRepository` + `ModelLoader` (para `anomaly` y
-    `sales_rf`, no para metas -- `goals_rf` fue decomisionado) + `CommissionConfigRepository`
-    (ajuste de meta por tipo de vendedor, docs/features/plan_integracion_comisiones_variables.md)."""
-    return GoalMLService(goal_repo, dataset_repo, model_loader, commission_config_repo=commission_config_repo)
-
-
 def get_warehouse_service(
     warehouse_repo: Annotated[WarehouseRepository, Depends(get_warehouse_repository)],
     dataset_repo: Annotated[DatasetRepository, Depends(get_dataset_repository)],
@@ -163,10 +162,68 @@ def get_warehouse_service(
     return WarehouseService(warehouse_repo, dataset_repo, model_loader)
 
 
+def get_cartera360_service(
+    cartera360_repo: Annotated[Cartera360Repository, Depends(get_cartera360_repository)],
+    prediction_service: Annotated[PredictionService, Depends(get_prediction_service)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
+) -> Cartera360Service:
+    """Módulo Ventas — Cartera de Clientes 360 (docs/features/propuesta_nuevos_modulos_roi.md
+    §4, auditoría 32): compone `PredictionService` (churn/RFM/cross-sell ya servidos, sin
+    modelos nuevos) con el triage estadístico de `Cartera360Repository`. Definido antes de
+    `get_notification_service` porque ese servicio reutiliza `get_lista_trabajo` para el
+    generador calculado de churn de Ventas (Fase 4, docs/auditoria/31_modulo_notificaciones.md)."""
+    return Cartera360Service(cartera360_repo, prediction_service, catalog_repo)
+
+
+def get_notification_service(
+    notification_repo: Annotated[NotificationRepository, Depends(get_notification_repository)],
+    warehouse_service: Annotated[WarehouseService, Depends(get_warehouse_service)],
+    prediction_service: Annotated[PredictionService, Depends(get_prediction_service)],
+    cartera360_service: Annotated[Cartera360Service, Depends(get_cartera360_service)],
+) -> NotificationService:
+    """Módulo de Notificaciones (docs/auditoria/31_modulo_notificaciones.md): compone el
+    repositorio de notificaciones persistidas con `WarehouseService` (generador calculado de
+    Bodega + salud de modelos de Admin), `PredictionService` (desvío de forecast de
+    Gerencia, reutiliza `get_sales_forecast`) y `Cartera360Service` (churn alto de la
+    cartera propia de Ventas, reutiliza `get_lista_trabajo` -- RLS ya resuelto ahí, RN-V3).
+    Sin modelos ML nuevos. Definido antes de `get_goal_ml_service` porque ese servicio la
+    inyecta para emitir `metas_generadas` (RN-N2)."""
+    return NotificationService(notification_repo, warehouse_service, prediction_service, cartera360_service)
+
+
+def get_goal_ml_service(
+    goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+    dataset_repo: Annotated[DatasetRepository, Depends(get_dataset_repository)],
+    model_loader: ModelLoaderDep,
+    commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
+    notification_service: Annotated[NotificationService, Depends(get_notification_service)],
+) -> GoalMLService:
+    """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_...md):
+    compone `GoalRepository` + `DatasetRepository` + `ModelLoader` (para `anomaly` y
+    `sales_rf`, no para metas -- `goals_rf` fue decomisionado) + `CommissionConfigRepository`
+    (ajuste de meta por tipo de vendedor, docs/features/plan_integracion_comisiones_variables.md)
+    + `NotificationService` (emite `metas_generadas` a gerencia al final de
+    `generate_proposals`, docs/auditoria/31_modulo_notificaciones.md)."""
+    return GoalMLService(
+        goal_repo, dataset_repo, model_loader,
+        commission_config_repo=commission_config_repo, notification_service=notification_service,
+    )
+
+
 def get_audit_service(
     audit_repo: Annotated[AuditRepository, Depends(get_audit_repository)],
 ) -> AuditService:
     return AuditService(audit_repo)
+
+
+def get_system_service(
+    system_repo: Annotated[SystemRepository, Depends(get_system_repository)],
+    model_loader: ModelLoaderDep,
+) -> SystemService:
+    """Procedencia de datos (docs/auditoria/33_actualizacion_modulo_gerencia.md, H4):
+    compone `SystemRepository` (última carga del DW) + `ModelLoader` (estado real de
+    los 6 modelos, mismo patrón que `admin_ml.py`)."""
+    return SystemService(system_repo, model_loader)
 
 
 def get_commission_service(
@@ -207,20 +264,9 @@ CommissionConfigRepositoryDep = Annotated[CommissionConfigRepository, Depends(ge
 WarehouseServiceDep = Annotated[WarehouseService, Depends(get_warehouse_service)]
 AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
 CatalogRepositoryDep = Annotated[CatalogRepository, Depends(get_catalog_repository)]
-
-
-def get_cartera360_service(
-    cartera360_repo: Annotated[Cartera360Repository, Depends(get_cartera360_repository)],
-    prediction_service: PredictionServiceDep,
-    catalog_repo: CatalogRepositoryDep,
-) -> Cartera360Service:
-    """Módulo Ventas — Cartera de Clientes 360 (docs/features/propuesta_nuevos_modulos_roi.md
-    §4, auditoría 32): compone `PredictionService` (churn/RFM/cross-sell ya servidos, sin
-    modelos nuevos) con el triage estadístico de `Cartera360Repository`."""
-    return Cartera360Service(cartera360_repo, prediction_service, catalog_repo)
-
-
 Cartera360ServiceDep = Annotated[Cartera360Service, Depends(get_cartera360_service)]
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
+SystemServiceDep = Annotated[SystemService, Depends(get_system_service)]
 
 
 # ── Resolución de sucursal por rol ────────────────────────────────────────────

@@ -98,3 +98,20 @@ export const getSubNavItemsForRole = (role: Role, parentKey: RouteKey): NavItem[
     .filter((key) => key.startsWith(`${parentKey}.`))
     .filter((key) => ROUTES[key].nav && canAccess(role, key))
     .map((key) => ({ routeKey: key, path: ROUTES[key].path, label: ROUTES[key].nav!.label }));
+
+/** Breadcrumb derivado de la jerarquía real de rutas (F3, D-5): cero fuente de verdad
+ * nueva, los labels ya existen en ROUTES. Devuelve [padre?, ruta actual] cuando la ruta
+ * activa tiene un dot en su key (p. ej. 'ventas.cross-selling' -> Gestión Comercial › Venta Cruzada). */
+export const getBreadcrumbForPath = (pathname: string): { label: string; path: string }[] => {
+  const entries = Object.entries(ROUTES) as [RouteKey, RouteConfig][];
+  const match = entries.find(([, cfg]) => cfg.path === pathname) ?? entries.find(([, cfg]) => pathname.startsWith(`${cfg.path}/`));
+  if (!match || !match[1].nav) return [];
+  const [key, cfg] = match;
+  const trail: { label: string; path: string }[] = [{ label: cfg.nav!.label, path: cfg.path }];
+  if (key.includes('.')) {
+    const parentKey = key.split('.')[0] as RouteKey;
+    const parent = ROUTES[parentKey];
+    if (parent?.nav) trail.unshift({ label: parent.nav.label, path: parent.path });
+  }
+  return trail;
+};

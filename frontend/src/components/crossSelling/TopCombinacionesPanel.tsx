@@ -49,8 +49,8 @@ export const TopCombinacionesPanel = () => {
             <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
               Combo #{i + 1} más vendido junto
             </p>
-            <div className="p-2.5 rounded-xl border bg-cyan-500/10 border-cyan-500/20 transition-shadow duration-150 group-hover:glow-accent-sm">
-              <Link2 size={18} className="text-cyan-400" />
+            <div className="p-2.5 rounded-xl border bg-info/10 border-info/20 transition-shadow duration-150 group-hover:glow-accent-sm">
+              <Link2 size={18} className="text-info" />
             </div>
           </div>
           <div className="relative z-10 space-y-1">
@@ -58,7 +58,7 @@ export const TopCombinacionesPanel = () => {
             <p className="text-xs text-slate-500">+</p>
             <p className="text-sm font-medium text-slate-200 truncate">{c.nombre_b}</p>
           </div>
-          <p className="mt-3 text-xs font-medium text-cyan-400 relative z-10">
+          <p className="mt-3 text-xs font-medium text-info relative z-10">
             {c.facturas.toLocaleString('es-EC')} facturas los llevaron juntos
           </p>
         </div>

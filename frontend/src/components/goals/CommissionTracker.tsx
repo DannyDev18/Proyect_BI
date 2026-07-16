@@ -55,7 +55,7 @@ export function CommissionTracker() {
   const totalComisionVariable = tracking.data.reduce((sum, f) => sum + (f.comision_variable ?? 0), 0);
 
   const columns: DataTableColumn<VendorCommissionRow>[] = [
-    { key: 'vendedor', header: 'Vendedor', render: (f) => <span className="font-semibold text-teal-50">{f.vendedor}</span> },
+    { key: 'vendedor', header: 'Vendedor', render: (f) => <span className="font-semibold text-primary">{f.vendedor}</span> },
     { key: 'venta_real', header: 'Venta Neta', render: (f) => <span className="text-slate-300">{fmtMoney(f.venta_real)}</span> },
     { key: 'monto_meta', header: 'Meta', render: (f) => <span className="text-slate-400">{fmtMoney(f.monto_meta)}</span> },
     { key: 'pct_cumplimiento', header: 'Cumplimiento', render: (f) => <span className="text-slate-300">{pct(f.pct_cumplimiento)}</span> },
@@ -69,7 +69,7 @@ export function CommissionTracker() {
       key: 'comision',
       header: 'Comisión (plana)',
       numeric: true,
-      render: (f) => <span className="font-semibold text-teal-300">{fmtMoney(f.comision_devengada)}</span>,
+      render: (f) => <span className="font-semibold text-primary">{fmtMoney(f.comision_devengada)}</span>,
     },
     ...(modoSombraActivo ? [{
       key: 'comision_variable',
@@ -77,7 +77,7 @@ export function CommissionTracker() {
       numeric: true,
       render: (f: VendorCommissionRow) => (
         f.comision_variable != null
-          ? <span className="font-semibold text-amber-300">{fmtMoney(f.comision_variable)}</span>
+          ? <span className="font-semibold text-warning">{fmtMoney(f.comision_variable)}</span>
           : <span className="text-slate-600">—</span>
       ),
     } as DataTableColumn<VendorCommissionRow>] : []),
@@ -87,7 +87,7 @@ export function CommissionTracker() {
     <div className="p-6 bg-slate-900 text-white rounded-lg border border-slate-800 shadow-xl max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <Wallet className="w-8 h-8 text-teal-400" aria-hidden="true" />
+          <Wallet className="w-8 h-8 text-primary" aria-hidden="true" />
           <h2 className="text-2xl font-bold tracking-tight">Comisiones devengadas</h2>
         </div>
         <div className="flex flex-col gap-1">
@@ -113,13 +113,13 @@ export function CommissionTracker() {
           <h3 className="text-lg font-semibold text-slate-200">Cumplimiento real y comisión por vendedor</h3>
           <div className="flex items-center gap-4 text-sm text-slate-400">
             <div className="flex items-center gap-1.5">
-              <Gift size={14} className="text-teal-400" aria-hidden="true" />
-              Total plana: <span className="font-mono text-teal-300 font-semibold">{fmtMoney(totalComision)}</span>
+              <Gift size={14} className="text-primary" aria-hidden="true" />
+              Total plana: <span className="font-mono text-primary font-semibold">{fmtMoney(totalComision)}</span>
             </div>
             {modoSombraActivo && (
               <div className="flex items-center gap-1.5">
-                <Gift size={14} className="text-amber-400" aria-hidden="true" />
-                Total variable: <span className="font-mono text-amber-300 font-semibold">{fmtMoney(totalComisionVariable)}</span>
+                <Gift size={14} className="text-warning" aria-hidden="true" />
+                Total variable: <span className="font-mono text-warning font-semibold">{fmtMoney(totalComisionVariable)}</span>
               </div>
             )}
           </div>

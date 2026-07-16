@@ -13,8 +13,8 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { useToast } from '../store/toastStore';
 
 const roleBadge: Record<string, string> = {
-  administrador: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  gerencia: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  administrador: 'bg-accent/10 text-accent border-accent/20',
+  gerencia: 'bg-warning/10 text-warning border-warning/20',
 };
 
 const emptyForm = {
@@ -191,7 +191,7 @@ export const UsersManagement = () => {
       key: 'rol', header: 'Rol & Contexto',
       render: (u) => (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`px-2.5 py-1 text-xs font-semibold rounded-md border ${roleBadge[u.role.nombre] ?? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'}`}>
+          <span className={`px-2.5 py-1 text-xs font-semibold rounded-md border ${roleBadge[u.role.nombre] ?? 'bg-info/10 text-info border-info/20'}`}>
             {u.role.nombre}
           </span>
           {u.sucursal && (
@@ -220,7 +220,7 @@ export const UsersManagement = () => {
           onClick={() => setToToggle(u)}
           aria-label={u.es_activo ? `Desactivar a ${u.nombre}` : `Activar a ${u.nombre}`}
           className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors focus-ring
-            ${u.es_activo ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' : 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'}`}
+            ${u.es_activo ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-danger/10 text-danger hover:bg-danger/20'}`}
         >
           {u.es_activo ? <CheckCircle2 size={14} className="mr-1" /> : <XCircle size={14} className="mr-1" />}
           {u.es_activo ? 'Activo' : 'Inactivo'}
@@ -242,7 +242,7 @@ export const UsersManagement = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-3xl font-display font-semibold text-slate-100 flex items-center">
-            <Users className="mr-3 text-cyan-400" /> Gestión de Usuarios
+            <Users className="mr-3 text-info" /> Gestión de Usuarios
           </h1>
           <p className="text-slate-400 mt-1">Administra los accesos y roles del sistema analítico.</p>
         </div>
@@ -280,7 +280,7 @@ export const UsersManagement = () => {
 
       <Drawer open={isDrawerOpen} onClose={() => setIsDrawerOpen(false)} title={modalMode === 'create' ? 'Crear nuevo usuario' : 'Editar usuario'}>
         {formError && (
-          <div role="alert" className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center text-red-400 text-sm">
+          <div role="alert" className="mb-4 p-3 bg-danger/10 border border-danger/20 rounded-lg flex items-center text-danger text-sm">
             <ShieldAlert size={16} className="mr-2 flex-shrink-0" />
             {formError}
           </div>
@@ -358,7 +358,7 @@ export const UsersManagement = () => {
                     type="checkbox"
                     checked={formData.todos_los_almacenes}
                     onChange={(e) => setFormData({ ...formData, todos_los_almacenes: e.target.checked })}
-                    className="rounded border-slate-700 bg-slate-950 text-cyan-500 focus-ring"
+                    className="rounded border-slate-700 bg-slate-950 text-primary focus-ring"
                   />
                   Acceso a todos los almacenes
                 </label>

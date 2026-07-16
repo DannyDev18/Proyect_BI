@@ -52,7 +52,7 @@ export const Sidebar = () => {
       `}
     >
       <div className="h-16 flex items-center px-6 border-b border-slate-800 flex-shrink-0">
-        <Building2 className="text-blue-500 mr-3" />
+        <Building2 className="text-primary mr-3" />
         <span className="font-sans font-semibold tracking-tight text-slate-100 text-lg">BI Platform</span>
       </div>
       
@@ -68,7 +68,7 @@ export const Sidebar = () => {
                 className={({ isActive }) =>
                   `relative flex items-center px-3 py-2.5 rounded-lg transition-all duration-200 text-sm font-medium focus-ring ${
                     isActive
-                      ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                      ? 'bg-primary/10 text-primary border border-primary/20'
                       : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 border border-transparent'
                   }`
                 }
@@ -76,7 +76,7 @@ export const Sidebar = () => {
                 {({ isActive }) => (
                   <>
                     {isActive && (
-                      <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-cyan-400 animate-fade-in" />
+                      <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary glow-accent-sm animate-fade-in" />
                     )}
                     <span className="mr-3">{item.icon}</span>
                     {item.label}
@@ -93,7 +93,7 @@ export const Sidebar = () => {
                       className={({ isActive }) =>
                         `flex items-center px-3 py-2 rounded-lg transition-all duration-200 text-xs font-medium focus-ring ${
                           isActive
-                            ? 'text-teal-400 bg-teal-500/10 border border-teal-500/20'
+                            ? 'text-primary bg-primary/10 border border-primary/20'
                             : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
                         }`
                       }

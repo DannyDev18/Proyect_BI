@@ -36,7 +36,7 @@ export const Settings = () => {
               aria-current={section === key}
               className={`w-full text-left px-4 py-2 rounded-lg font-medium flex items-center transition-colors focus-ring cursor-pointer ${
                 section === key
-                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                  ? 'bg-info/10 text-info border border-info/20'
                   : 'border border-transparent hover:bg-slate-800/50 text-slate-400 hover:text-slate-200'
               }`}
             >

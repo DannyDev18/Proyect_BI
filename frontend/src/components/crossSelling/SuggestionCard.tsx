@@ -50,14 +50,14 @@ export const SuggestionCard = ({ sugerencia, productoOrigenCod, clienteId, onAgr
         <p className="text-xs text-slate-500 font-mono">
           {sugerencia.codart} · ${sugerencia.precio.toFixed(2)}
           {sugerencia.margen_unitario != null && (
-            <span className="text-emerald-400"> · +${sugerencia.margen_unitario.toFixed(2)} margen</span>
+            <span className="text-success"> · +${sugerencia.margen_unitario.toFixed(2)} margen</span>
           )}
         </p>
         <p className="text-xs text-slate-500 mt-1 italic truncate">{sugerencia.motivo}</p>
       </div>
       <button
         onClick={handleAgregar}
-        className="shrink-0 flex items-center gap-1 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold rounded-lg transition-colors"
+        className="shrink-0 flex items-center gap-1 px-3 py-1.5 bg-primary hover:bg-accent text-white text-xs font-semibold rounded-lg transition-colors"
       >
         <Plus size={13} /> Agregar
       </button>

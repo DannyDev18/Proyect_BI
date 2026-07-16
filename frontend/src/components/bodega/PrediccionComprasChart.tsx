@@ -52,7 +52,7 @@ export const PrediccionComprasChart = ({ filters }: PrediccionComprasChartProps)
           {productoCod && (
             <button
               onClick={() => setProductoCod(null)}
-              className="flex items-center gap-1 text-cyan-400 hover:underline cursor-pointer focus-ring rounded"
+              className="flex items-center gap-1 text-primary hover:underline cursor-pointer focus-ring rounded"
             >
               <ArrowLeft size={12} /> Volver a la categoría
             </button>
@@ -69,14 +69,14 @@ export const PrediccionComprasChart = ({ filters }: PrediccionComprasChartProps)
             {articuloActivo ? (
               <>
                 <span className="text-slate-200 font-semibold">{articuloActivo.nombre}</span>
-                <span>Predicción del mes: <span className="font-mono text-cyan-400">{articuloActivo.prediccion_mes.toLocaleString('es-EC')} uds</span></span>
-                <span>Compra sugerida: <span className="font-mono text-amber-400">{articuloActivo.compra_sugerida.toLocaleString('es-EC')} uds</span></span>
+                <span>Predicción del mes: <span className="font-mono text-info">{articuloActivo.prediccion_mes.toLocaleString('es-EC')} uds</span></span>
+                <span>Compra sugerida: <span className="font-mono text-warning">{articuloActivo.compra_sugerida.toLocaleString('es-EC')} uds</span></span>
                 <span>Stock actual: <span className="font-mono">{articuloActivo.stock_actual.toLocaleString('es-EC')}</span></span>
               </>
             ) : (
               <>
-                <span>Unidades previstas: <span className="font-mono text-cyan-400">{prediccion.data.resumen.unidades_previstas_mes.toLocaleString('es-EC')}</span></span>
-                <span>Costo estimado de compra: <span className="font-mono text-amber-400">{fmt(prediccion.data.resumen.costo_estimado_compra)}</span></span>
+                <span>Unidades previstas: <span className="font-mono text-info">{prediccion.data.resumen.unidades_previstas_mes.toLocaleString('es-EC')}</span></span>
+                <span>Costo estimado de compra: <span className="font-mono text-warning">{fmt(prediccion.data.resumen.costo_estimado_compra)}</span></span>
                 <span>{prediccion.data.resumen.productos_incluidos} artículos incluidos</span>
               </>
             )}
@@ -128,8 +128,8 @@ export const PrediccionComprasChart = ({ filters }: PrediccionComprasChartProps)
                         <span className="text-slate-500"> · {a.codart}</span>
                       </td>
                       <td className="py-1.5 pr-4 text-right font-mono text-slate-300">{a.unidades_vendidas_periodo.toLocaleString('es-EC')}</td>
-                      <td className="py-1.5 pr-4 text-right font-mono text-cyan-400">{a.prediccion_mes.toLocaleString('es-EC')}</td>
-                      <td className="py-1.5 pr-4 text-right font-mono text-amber-400">{a.compra_sugerida.toLocaleString('es-EC')}</td>
+                      <td className="py-1.5 pr-4 text-right font-mono text-info">{a.prediccion_mes.toLocaleString('es-EC')}</td>
+                      <td className="py-1.5 pr-4 text-right font-mono text-warning">{a.compra_sugerida.toLocaleString('es-EC')}</td>
                       <td className="py-1.5 text-slate-500">{a.metodo === 'ml_demand_rf' ? 'ML' : 'Estadístico'}</td>
                     </tr>
                   ))}

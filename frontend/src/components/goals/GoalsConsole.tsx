@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo } from "react";
-import { TrendingUp, Trophy } from "lucide-react";
+import { TrendingUp, Trophy, Info } from "lucide-react";
 
-import { usePeriods, useGoalsTracking, useGenerateGoals, useReviewGoal } from "../../hooks/goals";
+import { usePeriods, useGoalsTracking, useGenerateGoals, useReviewGoal, useMetaSugeridaGerencia } from "../../hooks/goals";
 import type { GoalPeriodOption, GoalProposal } from "../../types/goals";
 import { Select } from "../ui/Select";
 import { Button } from "../ui/Button";
 import { DataTable, type DataTableColumn } from "../ui/DataTable";
 import { AlertBadge } from "../ui/AlertBadge";
+import { Drawer } from "../ui/Drawer";
 import { useToast } from "../../store/toastStore";
+import { fmtMoney, pct } from "../../utils/format";
 
 const ESTADO_BADGE: Record<string, { variant: 'success' | 'critical' | 'warning'; label: string }> = {
   APROBADA: { variant: 'success', label: 'APROBADA' },
@@ -18,7 +20,9 @@ export function GoalsConsole() {
   const [pressure, setPressure] = useState<number>(10);
   const [period, setPeriod] = useState({ anio: new Date().getFullYear(), mes: new Date().getMonth() + 1 });
   const [hasInitializedPeriod, setHasInitializedPeriod] = useState(false);
+  const [detalleVendedor, setDetalleVendedor] = useState<GoalProposal | null>(null);
   const toast = useToast();
+  const desglose = useMetaSugeridaGerencia(detalleVendedor?.vendedor_origen ?? null);
 
   const periods = usePeriods();
   const months = useMemo<GoalPeriodOption[]>(() => periods.data.map((d) => {
@@ -75,7 +79,19 @@ export function GoalsConsole() {
   };
 
   const columns: DataTableColumn<GoalProposal>[] = [
-    { key: 'vendedor', header: 'Vendedor', render: (p) => <span className="font-semibold text-teal-50">{p.vendedor}</span> },
+    {
+      key: 'vendedor', header: 'Vendedor',
+      render: (p) => (
+        <button
+          className="font-semibold text-primary hover:text-primary hover:underline inline-flex items-center gap-1"
+          onClick={() => setDetalleVendedor(p)}
+          title="Ver cómo se calculó la meta sugerida (IQR)"
+        >
+          {p.vendedor}
+          <Info size={12} className="text-slate-500" aria-hidden="true" />
+        </button>
+      ),
+    },
     {
       key: 'monto',
       header: 'Meta Propuesta ($)',
@@ -168,7 +184,7 @@ export function GoalsConsole() {
   return (
     <div className="p-6 bg-slate-900 text-white rounded-lg border border-slate-800 shadow-xl max-w-7xl mx-auto mt-6">
       <div className="flex items-center gap-3 mb-6">
-        <Trophy className="w-8 h-8 text-teal-400" aria-hidden="true" />
+        <Trophy className="w-8 h-8 text-primary" aria-hidden="true" />
         <h2 className="text-2xl font-bold tracking-tight">
           Consola Inteligente de Metas & Comisiones
         </h2>
@@ -236,6 +252,58 @@ export function GoalsConsole() {
           emptyDescription="Genera el plan usando la configuración de arriba."
         />
       </div>
+
+      <Drawer
+        open={!!detalleVendedor}
+        onClose={() => setDetalleVendedor(null)}
+        title={detalleVendedor ? `Cómo se calculó la meta de ${detalleVendedor.vendedor}` : ''}
+      >
+        {desglose.loading ? (
+          <div className="skeleton h-40 rounded" />
+        ) : desglose.error ? (
+          <p className="text-sm text-danger">{desglose.error}</p>
+        ) : desglose.data ? (
+          <div className="space-y-4">
+            <div className="card p-3">
+              <p className="text-xs text-slate-500">Meta sugerida (estadística)</p>
+              <p className="text-lg font-semibold text-slate-100">{fmtMoney(desglose.data.meta_sugerida_estadistica)}</p>
+              <p className="text-xs text-slate-500 mt-1">{desglose.data.metodo_estadistico}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="card p-3">
+                <p className="text-xs text-slate-500">Meses de histórico</p>
+                <p className="text-base font-semibold text-slate-200">{desglose.data.meses_historico_usados}</p>
+              </div>
+              <div className="card p-3">
+                <p className="text-xs text-slate-500">Atípicos excluidos (IQR)</p>
+                <p className="text-base font-semibold text-slate-200">{desglose.data.valores_atipicos_excluidos}</p>
+              </div>
+              <div className="card p-3">
+                <p className="text-xs text-slate-500">Meses atípicos (IsolationForest)</p>
+                <p className="text-base font-semibold text-slate-200">{desglose.data.meses_atipicos_ml_detectados}</p>
+              </div>
+              <div className="card p-3">
+                <p className="text-xs text-slate-500">Coef. de variación</p>
+                <p className="text-base font-semibold text-slate-200">{pct(desglose.data.coeficiente_variacion * 100)}</p>
+              </div>
+              <div className="card p-3">
+                <p className="text-xs text-slate-500">Componente estacional</p>
+                <p className="text-base font-semibold text-slate-200">
+                  {desglose.data.componente_estacional != null ? fmtMoney(desglose.data.componente_estacional) : '—'}
+                </p>
+              </div>
+              <div className="card p-3">
+                <p className="text-xs text-slate-500">Componente tendencia</p>
+                <p className="text-base font-semibold text-slate-200">{fmtMoney(desglose.data.componente_tendencia)}</p>
+              </div>
+            </div>
+            <div className="card p-3">
+              <p className="text-xs text-slate-500">Factor de tendencia aplicado</p>
+              <p className="text-base font-semibold text-slate-200">{desglose.data.factor_tendencia_aplicado.toFixed(3)}×</p>
+            </div>
+          </div>
+        ) : null}
+      </Drawer>
     </div>
   );
 }

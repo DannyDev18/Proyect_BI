@@ -65,10 +65,10 @@ export const DashboardBodega = () => {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Link to="/bodega/almacenes" className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-700 text-slate-300 hover:border-cyan-500 hover:text-cyan-400 transition-colors focus-ring">
+          <Link to="/bodega/almacenes" className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-700 text-slate-300 hover:border-primary hover:text-primary transition-colors focus-ring">
             Status por Almacén
           </Link>
-          <Link to="/bodega/reportes" className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-700 text-slate-300 hover:border-cyan-500 hover:text-cyan-400 transition-colors focus-ring">
+          <Link to="/bodega/reportes" className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-700 text-slate-300 hover:border-primary hover:text-primary transition-colors focus-ring">
             Reportes Gerencia
           </Link>
         </div>
@@ -78,25 +78,25 @@ export const DashboardBodega = () => {
       <BodegaFilterBar />
 
       {/* §1.2 KPIs — cobertura operativa (3): qué tengo, qué falta reponer, cuánto dura */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 stagger-children">
         {kpis.loading ? (
           <><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /></>
         ) : kpis.error ? (
-          <div className="col-span-full card p-4 text-red-400 text-sm">{kpis.error}</div>
+          <div className="col-span-full card p-4 text-danger text-sm">{kpis.error}</div>
         ) : kpis.data && (
           <>
             <KpiCard title="Artículos en Inventario" icon={Boxes}
               value={kpis.data.total_articulos.skus_activos.toLocaleString('es-EC')}
               subValue={`${kpis.data.total_articulos.cantidad_total.toLocaleString('es-EC', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} unidades · de ${kpis.data.total_articulos.total_skus.toLocaleString('es-EC')} en catálogo · ${kpis.data.total_articulos.skus_stock_cero} en cero · ${tendencia(kpis.data.total_articulos.tendencia_pct)}`}
-              trend={(kpis.data.total_articulos.tendencia_pct ?? 0) >= 0 ? 'up' : 'down'} animDelay={0} />
+              trend={(kpis.data.total_articulos.tendencia_pct ?? 0) >= 0 ? 'up' : 'down'} />
             <KpiCard title="Productos con Stock Bajo" icon={AlertTriangle}
               value={kpis.data.stock_bajo.productos_bajo_reorden}
               subValue={`${pct(kpis.data.stock_bajo.pct_del_total)} del catálogo bajo punto de reorden`}
-              trend={kpis.data.stock_bajo.color === 'verde' ? 'up' : kpis.data.stock_bajo.color === 'amarillo' ? 'neutral' : 'down'} animDelay={60} />
+              trend={kpis.data.stock_bajo.color === 'verde' ? 'up' : kpis.data.stock_bajo.color === 'amarillo' ? 'neutral' : 'down'} />
             <KpiCard title="Días de Inventario" icon={CalendarClock}
               value={kpis.data.dias_inventario.dias != null ? `${kpis.data.dias_inventario.dias} días` : '—'}
               subValue={kpis.data.dias_inventario.alerta_desabastecimiento ? '⚠ Riesgo de desabastecimiento (<15 días)' : 'Cobertura saludable'}
-              trend={kpis.data.dias_inventario.alerta_desabastecimiento ? 'down' : 'up'} animDelay={120} />
+              trend={kpis.data.dias_inventario.alerta_desabastecimiento ? 'down' : 'up'} />
           </>
         )}
       </div>
@@ -207,7 +207,7 @@ export const DashboardBodega = () => {
                       <div style={tooltipStyle} className="p-3 border">
                         <p className="font-semibold text-slate-200">{p.categoria}</p>
                         <p className="text-slate-400">{(p.unidades ?? 0).toLocaleString('es-EC')} uds ({p.pct_participacion ?? 0}%)</p>
-                        {p.monto_ventas != null && <p className="text-emerald-400">Monto: {fmt(p.monto_ventas)}</p>}
+                        {p.monto_ventas != null && <p className="text-success">Monto: {fmt(p.monto_ventas)}</p>}
                       </div>
                     );
                   }} />
@@ -235,7 +235,7 @@ export const DashboardBodega = () => {
       <ChartCard title="Top 20 Productos con Mayor Salida" badge={{ label: 'Prioridad de abastecimiento', variant: 'hist' }}
         height="h-[560px]" loading={top.loading} error={top.error ?? undefined} onRetry={top.refetch}
         empty={!top.loading && !top.error && (top.data ?? []).length === 0}
-        actions={<Link to="/bodega/almacenes" className="text-xs text-cyan-400 hover:underline focus-ring rounded">Ver todos los productos →</Link>}>
+        actions={<Link to="/bodega/almacenes" className="text-xs text-primary hover:underline focus-ring rounded">Ver todos los productos →</Link>}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={top.data ?? []} layout="vertical" margin={{ top: 4, right: 90, left: 40, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} horizontal={false} />
@@ -250,7 +250,7 @@ export const DashboardBodega = () => {
                   <div style={tooltipStyle} className="p-3 border">
                     <p className="font-semibold text-slate-200">{p.nombre} <span className="text-slate-500">({p.codart})</span></p>
                     <p className="text-slate-400">Salidas: {p.unidades.toLocaleString('es-EC')} uds {p.tendencia_pct != null && (p.tendencia_pct >= 0 ? `↑ +${p.tendencia_pct}%` : `↓ ${p.tendencia_pct}%`)}</p>
-                    {p.monto_ventas != null && <p className="text-emerald-400">Monto: {fmt(p.monto_ventas)}</p>}
+                    {p.monto_ventas != null && <p className="text-success">Monto: {fmt(p.monto_ventas)}</p>}
                     <p className="text-slate-400">Stock: {p.stock_actual} uds · {p.dias_inventario != null ? `${p.dias_inventario} días` : 'sin consumo'}</p>
                   </div>
                 );

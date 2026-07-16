@@ -2,22 +2,27 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'ghost' | 'danger';
-  size?: 'sm' | 'md';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'outline' | 'success' | 'danger';
+  size?: 'sm' | 'md' | 'lg';
   loading?: boolean;
   icon?: ReactNode;
+  iconRight?: ReactNode;
   children: ReactNode;
 }
 
 const variants = {
-  primary: 'bg-cyan-600 text-white border border-cyan-600 hover:bg-cyan-500 hover:border-cyan-500 disabled:hover:bg-cyan-600',
-  ghost: 'bg-transparent text-slate-300 border border-slate-700 hover:border-cyan-500 hover:text-cyan-400',
-  danger: 'bg-red-600/90 text-white border border-red-600/90 hover:bg-red-500 hover:border-red-500 disabled:hover:bg-red-600/90',
+  primary: 'bg-primary text-white border border-primary hover:bg-accent hover:border-accent disabled:hover:bg-primary',
+  secondary: 'bg-bg-hover text-text-primary border border-border-strong hover:bg-bg-elevated',
+  ghost: 'bg-transparent text-slate-300 border border-slate-700 hover:border-primary hover:text-primary',
+  outline: 'bg-transparent text-primary border border-primary/40 hover:bg-primary/10',
+  success: 'bg-success text-white border border-success hover:bg-success/90 disabled:hover:bg-success',
+  danger: 'bg-danger/90 text-white border border-danger/90 hover:bg-danger hover:border-danger disabled:hover:bg-danger/90',
 };
 
 const sizes = {
   sm: 'px-3 py-1.5 text-xs gap-1.5',
   md: 'px-4 py-2 text-sm gap-2',
+  lg: 'px-5 py-2.5 text-base gap-2',
 };
 
 /** Botón base del sistema (P2): variantes primary/ghost/danger, foco accesible,

@@ -24,12 +24,12 @@ export const Tabs = ({ items, value, onChange, className = '' }: TabsProps) => (
           aria-selected={active}
           onClick={() => onChange(item.value)}
           className={`relative px-4 py-2.5 text-sm font-medium transition-colors duration-150 focus-ring cursor-pointer ${
-            active ? 'text-cyan-400' : 'text-slate-500 hover:text-slate-300'
+            active ? 'text-primary' : 'text-slate-500 hover:text-slate-300'
           }`}
         >
           {item.label}
           {active && (
-            <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-cyan-400 rounded-full animate-tab-indicator" />
+            <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-primary rounded-full animate-tab-indicator" />
           )}
         </button>
       );

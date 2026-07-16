@@ -18,17 +18,17 @@ export const CHART_PALETTE = [
 export const COLORS = CHART_PALETTE;
 
 export const chartTheme = {
-  grid: '#1e293b',
-  axis: '#64748b',
-  axisLabel: '#94a3b8',
-  live: '#22d3ee',
-  ml: '#f5b135',
-  danger: '#ef4444',
-  success: '#10b981',
-  cursor: '#1e293b',
-  cardBg: '#0f172a', // --color-bg-surface — borde de activeDot para que "flote" sobre la card
+  grid: 'rgba(255,255,255,0.06)', // --color-chart-grid
+  axis: '#64748b', // --color-chart-axis / --color-text-disabled
+  axisLabel: '#94a3b8', // --color-text-muted
+  live: '#38bdf8', // --color-provenance-live (dato real EDW)
+  ml: '#f59e0b', // --color-provenance-ml (predicción)
+  danger: '#ef4444', // --color-danger
+  success: '#22c55e', // --color-success
+  cursor: 'rgba(255,255,255,0.06)',
+  cardBg: '#171F31', // --color-bg-card — borde de activeDot para que "flote" sobre la card
   needle: '#f8fafc', // --color-text-primary — aguja/pivote de gauges D3
-  median: '#475569', // slate-600 — líneas de referencia (mediana/promedio), distinto del grid
+  median: '#475569', // línea de referencia (mediana/promedio), distinto del grid
   palette: CHART_PALETTE,
 } as const;
 
@@ -44,10 +44,10 @@ export const axisTickLabel = { fill: chartTheme.axisLabel, fontSize: 10 } as con
 /** @deprecated usar <ChartTooltip /> (components/ui/ChartTooltip.tsx) como `content` de <Tooltip> */
 export const chartTooltipStyle = {
   contentStyle: {
-    backgroundColor: '#0f172a',
-    borderColor: '#1e293b',
+    backgroundColor: '#171F31',
+    borderColor: 'rgba(255,255,255,0.06)',
     borderRadius: '10px',
-    color: '#f1f5f9',
+    color: '#f8fafc',
     fontSize: '12px',
   },
 };

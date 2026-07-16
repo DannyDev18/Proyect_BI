@@ -19,7 +19,7 @@ const estadoBadge: Record<EstadoStock, 'critical' | 'warning' | 'neutral' | 'inf
 
 // Tinte de fila por estado (heat-map ligero, mismo patrón que `rowClassName` en DashboardBodega).
 const estadoRowTint: Record<EstadoStock, string> = {
-  'Crítico': 'bg-red-500/5', 'Cerca': 'bg-amber-500/5', 'Seguro': '', 'Exceso': 'bg-blue-500/5',
+  'Crítico': 'bg-danger/5', 'Cerca': 'bg-warning/5', 'Seguro': '', 'Exceso': 'bg-primary/5',
 };
 
 const ESTADOS: EstadoStock[] = ['Crítico', 'Cerca', 'Seguro', 'Exceso'];
@@ -61,7 +61,7 @@ export const BodegaAlmacenes = () => {
     { key: 'stock', header: 'Stock', numeric: true, render: (p) => <span className="text-slate-300">{p.stock_actual}</span> },
     { key: 'salida', header: 'Salida diaria', numeric: true, render: (p) => <span className="text-slate-400">{p.salida_diaria}/día</span> },
     { key: 'llega', header: 'Llega a reorden', numeric: true, render: (p) => <span className="text-slate-400">{p.fecha_estimada_reorden ?? '—'}</span> },
-    { key: 'cantidad', header: 'Cant. sugerida', numeric: true, render: (p) => <span className="text-cyan-400 font-semibold">{p.cantidad_sugerida}</span> },
+    { key: 'cantidad', header: 'Cant. sugerida', numeric: true, render: (p) => <span className="text-info font-semibold">{p.cantidad_sugerida}</span> },
     { key: 'costo', header: 'Costo total', numeric: true, render: (p) => <span className="text-slate-300">{fmt(p.costo_total)}</span> },
     {
       key: 'prioridad', header: 'Prioridad',
@@ -122,7 +122,7 @@ export const BodegaAlmacenes = () => {
         </span>
       ),
     },
-    { key: 'cantidad', header: 'Cantidad', numeric: true, render: (t) => <span className="text-cyan-400 font-semibold">{t.cantidad_transferir}</span> },
+    { key: 'cantidad', header: 'Cantidad', numeric: true, render: (t) => <span className="text-info font-semibold">{t.cantidad_transferir}</span> },
     { key: 'dias_post', header: 'Días destino post', numeric: true, render: (t) => <span className="text-slate-400">{t.dias_inv_destino_post != null ? `${t.dias_inv_destino_post}d` : '—'}</span> },
     {
       key: 'prioridad', header: 'Prioridad',
@@ -148,15 +148,15 @@ export const BodegaAlmacenes = () => {
         return (
           <div className="flex items-center gap-1.5">
             <button type="button" onClick={() => decidir(key, 'aprobada')} aria-label="Aprobar transferencia" title="Aprobar"
-              className={`p-1.5 rounded-md transition-colors cursor-pointer focus-ring ${decision === 'aprobada' ? 'bg-emerald-500/20 text-emerald-400' : 'text-slate-500 hover:text-emerald-400'}`}>
+              className={`p-1.5 rounded-md transition-colors cursor-pointer focus-ring ${decision === 'aprobada' ? 'bg-success/20 text-success' : 'text-slate-500 hover:text-success'}`}>
               <CheckCircle2 size={16} />
             </button>
             <button type="button" onClick={() => decidir(key, 'rechazada')} aria-label="Rechazar transferencia" title="Rechazar"
-              className={`p-1.5 rounded-md transition-colors cursor-pointer focus-ring ${decision === 'rechazada' ? 'bg-red-500/20 text-red-400' : 'text-slate-500 hover:text-red-400'}`}>
+              className={`p-1.5 rounded-md transition-colors cursor-pointer focus-ring ${decision === 'rechazada' ? 'bg-danger/20 text-danger' : 'text-slate-500 hover:text-danger'}`}>
               <XCircle size={16} />
             </button>
             <button type="button" onClick={() => setDetalle(t)} aria-label="Ver detalle de la transferencia" title="Ver detalle"
-              className="p-1.5 rounded-md transition-colors cursor-pointer focus-ring text-slate-500 hover:text-cyan-400">
+              className="p-1.5 rounded-md transition-colors cursor-pointer focus-ring text-slate-500 hover:text-primary">
               <Eye size={16} />
             </button>
           </div>
@@ -169,7 +169,7 @@ export const BodegaAlmacenes = () => {
     <div className="space-y-6">
       <div className="flex flex-wrap justify-between items-center gap-3 animate-fade-in">
         <div>
-          <Link to="/bodega" className="text-xs text-slate-500 hover:text-cyan-400 flex items-center gap-1 mb-1 focus-ring rounded">
+          <Link to="/bodega" className="text-xs text-slate-500 hover:text-primary flex items-center gap-1 mb-1 focus-ring rounded">
             <ArrowLeft size={12} /> Dashboard de Bodega
           </Link>
           <h1 className="text-3xl font-display font-semibold text-slate-100">Status de Artículos por Almacén</h1>
@@ -219,11 +219,11 @@ export const BodegaAlmacenes = () => {
       <div className="animate-fade-in-up">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <div className="flex items-center gap-3">
-            <ArrowLeftRight size={18} className="text-cyan-400" aria-hidden="true" />
+            <ArrowLeftRight size={18} className="text-info" aria-hidden="true" />
             <h3 className="font-sans font-semibold text-slate-200">Transferencias Inteligentes Sugeridas</h3>
           </div>
           {transferencias.data && (
-            <span className="text-xs text-emerald-400">
+            <span className="text-xs text-success">
               Ahorro estimado por no comprar: {fmt(transferencias.data.ahorro_total_estimado)}
             </span>
           )}
@@ -253,13 +253,13 @@ export const BodegaAlmacenes = () => {
       <div className="animate-fade-in-up">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <div className="flex items-center gap-3">
-            <ShoppingCart size={18} className="text-cyan-400" />
+            <ShoppingCart size={18} className="text-info" />
             <h3 className="font-sans font-semibold text-slate-200">Predicción de Necesidad de Compra</h3>
           </div>
           {plan.data && (
             <div className="flex items-center gap-4 text-xs text-slate-400">
               <span>{plan.data.total_productos_a_comprar} productos · {fmt(plan.data.valor_total_compra)} · proyección {plan.data.horizonte_dias} días</span>
-              <span className="text-emerald-400">Ahorro por no comprar: {fmt(plan.data.ahorro_por_no_comprar)}</span>
+              <span className="text-success">Ahorro por no comprar: {fmt(plan.data.ahorro_por_no_comprar)}</span>
             </div>
           )}
         </div>
@@ -270,7 +270,7 @@ export const BodegaAlmacenes = () => {
           loading={plan.loading}
           error={plan.error ?? undefined}
           onRetry={plan.refetch}
-          rowClassName={(p) => p.prioridad === 'Alta' ? 'bg-red-500/5' : ''}
+          rowClassName={(p) => p.prioridad === 'Alta' ? 'bg-danger/5' : ''}
           maxHeight="max-h-[420px]"
           emptyTitle="Sin necesidades de compra"
           emptyDescription="No hay artículos que requieran reposición con los filtros actuales."
@@ -290,7 +290,7 @@ export const BodegaAlmacenes = () => {
           <div className="p-6 border-b border-slate-800">
             <h3 className="font-sans font-semibold text-slate-200">NO Comprar (excedente / baja rotación)</h3>
             {plan.data && (
-              <p className="text-xs text-emerald-400 mt-1">Ahorro estimado: {fmt(plan.data.ahorro_por_no_comprar)}</p>
+              <p className="text-xs text-success mt-1">Ahorro estimado: {fmt(plan.data.ahorro_por_no_comprar)}</p>
             )}
           </div>
           <div className="overflow-x-auto max-h-[360px] overflow-y-auto">
@@ -341,7 +341,7 @@ export const BodegaAlmacenes = () => {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-[11px] uppercase tracking-widest text-slate-500">Cantidad a transferir</p>
-                <p className="text-cyan-400 font-mono font-semibold">{detalle.cantidad_transferir}</p>
+                <p className="text-info font-mono font-semibold">{detalle.cantidad_transferir}</p>
               </div>
               <div>
                 <p className="text-[11px] uppercase tracking-widest text-slate-500">Días destino post-transferencia</p>
@@ -389,7 +389,7 @@ export const BodegaAlmacenes = () => {
                   </div>
                   <div>
                     <dt className="text-[10px] uppercase text-slate-500">Venta $ destino (90d)</dt>
-                    <dd className="text-emerald-400 font-mono text-xs">{fmt(detalle.justificacion.venta_monetaria_destino_90d ?? 0)}</dd>
+                    <dd className="text-success font-mono text-xs">{fmt(detalle.justificacion.venta_monetaria_destino_90d ?? 0)}</dd>
                   </div>
                   <div>
                     <dt className="text-[10px] uppercase text-slate-500">Meses con venta (últimos 6)</dt>
@@ -407,7 +407,7 @@ export const BodegaAlmacenes = () => {
                   </div>
                   <div>
                     <dt className="text-[10px] uppercase text-slate-500">Beneficio neto estimado</dt>
-                    <dd className="text-emerald-400 font-mono text-xs font-semibold">{fmt(detalle.justificacion.beneficio_neto_estimado)}</dd>
+                    <dd className="text-success font-mono text-xs font-semibold">{fmt(detalle.justificacion.beneficio_neto_estimado)}</dd>
                   </div>
                 </dl>
               </div>

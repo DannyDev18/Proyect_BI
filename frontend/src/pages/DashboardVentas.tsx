@@ -19,7 +19,7 @@ const NOMBRE_MES = [
 // ─── Gauge: churn probability bar ────────────────────────────────────────────
 const ChurnGauge = ({ prob }: { prob: number }) => {
   const p = Math.min(100, Math.max(0, prob * 100));
-  const color = p >= 70 ? 'bg-red-500' : p >= 40 ? 'bg-amber-400' : 'bg-green-500';
+  const color = p >= 70 ? 'bg-danger' : p >= 40 ? 'bg-warning' : 'bg-success';
   const label = p >= 70 ? 'Riesgo Alto' : p >= 40 ? 'Riesgo Moderado' : 'Riesgo Bajo';
   const variant = p >= 70 ? 'critical' : p >= 40 ? 'warning' : 'success';
   return (
@@ -110,7 +110,7 @@ export const DashboardVentas = () => {
       </div>
 
       {/* KPI Row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children">
         {goals.loading ? (
           <><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /></>
         ) : goals.error ? (
@@ -119,10 +119,10 @@ export const DashboardVentas = () => {
           </div>
         ) : (
           <>
-            <KpiCard title="Meta Mensual" value={goals.data ? `$${(goals.data.meta_mensual/1000).toFixed(0)}k` : '—'} icon={Target} trend="neutral" animDelay={0} />
-            <KpiCard title="Ventas Actuales" value={goals.data ? `$${(goals.data.ventas_actuales/1000).toFixed(0)}k` : '—'} icon={BarChart2} trend={goals.data && goals.data.ventas_actuales >= goals.data.meta_mensual * 0.9 ? 'up' : 'down'} animDelay={60} />
-            <KpiCard title="Cumplimiento" value={goals.data ? pct(goals.data.cumplimiento_pct) : '—'} icon={TrendingDown} trend={goals.data && goals.data.cumplimiento_pct >= 80 ? 'up' : 'down'} animDelay={120} />
-            <KpiCard title="Clientes Activos" value={goals.data?.clientes_activos ?? '—'} icon={Users} trend="neutral" animDelay={180} />
+            <KpiCard title="Meta Mensual" value={goals.data ? `$${(goals.data.meta_mensual/1000).toFixed(0)}k` : '—'} icon={Target} trend="neutral" />
+            <KpiCard title="Ventas Actuales" value={goals.data ? `$${(goals.data.ventas_actuales/1000).toFixed(0)}k` : '—'} icon={BarChart2} trend={goals.data && goals.data.ventas_actuales >= goals.data.meta_mensual * 0.9 ? 'up' : 'down'} />
+            <KpiCard title="Cumplimiento" value={goals.data ? pct(goals.data.cumplimiento_pct) : '—'} icon={TrendingDown} trend={goals.data && goals.data.cumplimiento_pct >= 80 ? 'up' : 'down'} />
+            <KpiCard title="Clientes Activos" value={goals.data?.clientes_activos ?? '—'} icon={Users} trend="neutral" />
           </>
         )}
       </div>

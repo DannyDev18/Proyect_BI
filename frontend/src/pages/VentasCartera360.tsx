@@ -10,6 +10,7 @@ import { fmt, fmtMoney, pct } from '../utils/format';
 
 export const VentasCartera360 = () => {
   const [clienteSeleccionado, setClienteSeleccionado] = useState<ClienteListaTrabajo | null>(null);
+  const [soloRiesgoAlto, setSoloRiesgoAlto] = useState(false);
 
   const lista = useListaTrabajo();
   const tasa = useTasaRecuperacion();
@@ -18,6 +19,7 @@ export const VentasCartera360 = () => {
 
   const clientes = lista.data?.clientes ?? [];
   const conAlerta = clientes.filter((c) => c.alerta_caida_frecuencia).length;
+  const clientesFiltrados = soloRiesgoAlto ? clientes.filter((c) => c.riesgo_alto) : clientes;
 
   const registrar = (evento: EventoGestion) => {
     if (!clienteSeleccionado) return;
@@ -59,16 +61,27 @@ export const VentasCartera360 = () => {
       </div>
 
       <div className="card p-6">
-        <h3 className="text-base font-semibold text-slate-200 mb-4">Lista de trabajo diaria</h3>
+        <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
+          <h3 className="text-base font-semibold text-slate-200">Lista de trabajo diaria</h3>
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={soloRiesgoAlto}
+              onChange={(e) => setSoloRiesgoAlto(e.target.checked)}
+              className="rounded border-slate-700 bg-slate-950 text-primary focus-ring"
+            />
+            Solo riesgo alto
+          </label>
+        </div>
         <DataTable
           columns={[
             {
               key: 'nombre_cliente', header: 'Cliente',
               render: (r) => (
-                <button className="text-left text-cyan-400 hover:underline" onClick={() => setClienteSeleccionado(r)}>
+                <button className="text-left text-primary hover:underline" onClick={() => setClienteSeleccionado(r)}>
                   {r.nombre_cliente}
                   {r.alerta_caida_frecuencia && (
-                    <AlertTriangle size={12} className="inline ml-1.5 text-amber-400" />
+                    <AlertTriangle size={12} className="inline ml-1.5 text-warning" />
                   )}
                 </button>
               ),
@@ -77,7 +90,7 @@ export const VentasCartera360 = () => {
             {
               key: 'probabilidad_abandono', header: 'Riesgo de fuga', numeric: true,
               render: (r) => (
-                <span className={r.probabilidad_abandono > 50 ? 'text-red-400 font-semibold' : undefined}>
+                <span className={r.probabilidad_abandono > 50 ? 'text-danger font-semibold' : undefined}>
                   {pct(r.probabilidad_abandono)}
                 </span>
               ),
@@ -89,12 +102,12 @@ export const VentasCartera360 = () => {
             },
             { key: 'num_compras', header: 'Compras', numeric: true, render: (r) => r.num_compras },
           ]}
-          data={clientes}
+          data={clientesFiltrados}
           rowKey={(r) => r.cliente_id}
           loading={lista.loading}
           error={lista.error ?? undefined}
           density="compact"
-          rowClassName={(r) => (r.alerta_caida_frecuencia ? 'bg-amber-500/5' : '')}
+          rowClassName={(r) => (r.alerta_caida_frecuencia ? 'bg-warning/5' : '')}
         />
       </div>
 
@@ -106,13 +119,13 @@ export const VentasCartera360 = () => {
         {detalle.loading ? (
           <div className="skeleton h-40 rounded" />
         ) : detalle.error ? (
-          <p className="text-sm text-red-400">{detalle.error}</p>
+          <p className="text-sm text-danger">{detalle.error}</p>
         ) : detalle.data ? (
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-3">
               <div className="card p-3">
                 <p className="text-xs text-slate-500">Riesgo de fuga</p>
-                <p className={`text-lg font-semibold ${detalle.data.riesgo_alto ? 'text-red-400' : 'text-slate-200'}`}>
+                <p className={`text-lg font-semibold ${detalle.data.riesgo_alto ? 'text-danger' : 'text-slate-200'}`}>
                   {pct(detalle.data.probabilidad_abandono)}
                 </p>
               </div>

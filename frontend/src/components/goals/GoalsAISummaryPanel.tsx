@@ -23,7 +23,7 @@ export function GoalsAISummaryPanel() {
             <li key={i} className="flex justify-between items-center py-2 border-b border-slate-800 last:border-0">
               <div>
                 <p className="text-sm font-medium text-slate-200 flex items-center gap-1.5">
-                  <AlertTriangle size={13} className="text-red-400" aria-hidden="true" /> {v.nombre}
+                  <AlertTriangle size={13} className="text-danger" aria-hidden="true" /> {v.nombre}
                 </p>
                 <p className="text-xs text-slate-500">{fmt(v.ventas)} / {fmt(v.meta)}</p>
               </div>
@@ -47,7 +47,7 @@ export function GoalsAISummaryPanel() {
             <li key={i} className="flex justify-between items-center py-2 border-b border-slate-800 last:border-0">
               <div>
                 <p className="text-sm font-medium text-slate-200 flex items-center gap-1.5">
-                  <TrendingUp size={13} className="text-green-400" aria-hidden="true" /> {v.nombre}
+                  <TrendingUp size={13} className="text-success" aria-hidden="true" /> {v.nombre}
                 </p>
                 <p className="text-xs text-slate-500">{fmt(v.ventas)} / {fmt(v.meta)}</p>
               </div>
@@ -71,7 +71,7 @@ export function GoalsAISummaryPanel() {
             <li key={i} className="flex justify-between items-center py-2 border-b border-slate-800 last:border-0">
               <div>
                 <p className="text-sm font-medium text-slate-200 flex items-center gap-1.5">
-                  <Sparkles size={13} className="text-amber-400" aria-hidden="true" /> {r.categoria_origen} → {r.categoria_sugerida}
+                  <Sparkles size={13} className="text-warning" aria-hidden="true" /> {r.categoria_origen} → {r.categoria_sugerida}
                 </p>
                 <p className="text-xs text-slate-500 font-mono">{r.producto_sugerido}</p>
               </div>

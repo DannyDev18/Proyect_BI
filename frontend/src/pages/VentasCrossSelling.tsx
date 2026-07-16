@@ -34,7 +34,7 @@ export const VentasCrossSelling = () => {
         {cliente ? (
           <AlertBadge variant="info" className="pr-1">
             {cliente.nombre} <span className="font-mono text-xs opacity-70 ml-1">{cliente.cliente_id}</span>
-            <button onClick={() => setCliente(null)} className="ml-1 hover:text-red-400">
+            <button onClick={() => setCliente(null)} className="ml-1 hover:text-danger">
               <X size={12} />
             </button>
           </AlertBadge>

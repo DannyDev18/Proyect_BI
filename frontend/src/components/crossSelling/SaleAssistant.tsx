@@ -72,7 +72,7 @@ export const SaleAssistant = ({ clienteId }: SaleAssistantProps) => {
             {canasta.map((item) => (
               <AlertBadge key={item.codart} variant="info" className="pr-1">
                 {item.nombre}
-                <button onClick={() => quitarDeCanasta(item.codart)} className="ml-1 hover:text-red-400">
+                <button onClick={() => quitarDeCanasta(item.codart)} className="ml-1 hover:text-danger">
                   <X size={12} />
                 </button>
               </AlertBadge>

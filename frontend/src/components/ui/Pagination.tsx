@@ -45,7 +45,7 @@ export const Pagination = ({
           onClick={() => onPageChange(Math.max(1, page - 1))}
           disabled={page <= 1}
           aria-label="Página anterior"
-          className="p-1.5 rounded-md border border-slate-700 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:border-cyan-500 hover:text-cyan-400 transition-colors cursor-pointer focus-ring"
+          className="p-1.5 rounded-md border border-slate-700 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:border-primary hover:text-primary transition-colors cursor-pointer focus-ring"
         >
           <ChevronLeft size={14} />
         </button>
@@ -57,7 +57,7 @@ export const Pagination = ({
           onClick={() => onPageChange(Math.min(totalPages || 1, page + 1))}
           disabled={page >= totalPages}
           aria-label="Página siguiente"
-          className="p-1.5 rounded-md border border-slate-700 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:border-cyan-500 hover:text-cyan-400 transition-colors cursor-pointer focus-ring"
+          className="p-1.5 rounded-md border border-slate-700 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:border-primary hover:text-primary transition-colors cursor-pointer focus-ring"
         >
           <ChevronRight size={14} />
         </button>

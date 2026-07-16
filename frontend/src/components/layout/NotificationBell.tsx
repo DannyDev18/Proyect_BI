@@ -4,9 +4,9 @@ import { useNavigate } from 'react-router-dom';
 import { useMarcarNotificacionLeida, useMarcarTodasLeidas, useNotificaciones } from '../../hooks/useNotificaciones';
 
 const prioridadStyles: Record<string, string> = {
-  alta: 'border-l-red-500 bg-red-500/5',
-  media: 'border-l-amber-500 bg-amber-500/5',
-  baja: 'border-l-sky-500 bg-sky-500/5',
+  alta: 'border-l-danger bg-danger/5',
+  media: 'border-l-warning bg-warning/5',
+  baja: 'border-l-info bg-info/5',
 };
 
 /** Campana global de notificaciones (docs/features/plan_modulo_notificaciones.md §5.1,
@@ -55,12 +55,12 @@ export const NotificationBell = () => {
         onClick={() => setOpen((o) => !o)}
         aria-label="Notificaciones"
         aria-expanded={open}
-        className="relative p-1 text-slate-400 hover:text-cyan-400 transition-colors cursor-pointer focus-ring"
+        className="relative p-1 text-slate-400 hover:text-primary transition-colors cursor-pointer focus-ring"
       >
         <Bell size={20} />
         {total > 0 && (
           <span className={`absolute -top-1 -right-1.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold flex items-center justify-center
-            ${altas > 0 ? 'bg-red-500 text-white' : 'bg-amber-500 text-slate-950'}`}>
+            ${altas > 0 ? 'bg-danger text-white' : 'bg-warning text-slate-950'}`}>
             {total > 99 ? '99+' : total}
           </span>
         )}
@@ -75,7 +75,7 @@ export const NotificationBell = () => {
               {hayPersistidasNoLeidas && (
                 <button
                   onClick={() => marcarTodas.mutate()}
-                  className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer focus-ring"
+                  className="text-xs text-primary hover:text-accent flex items-center gap-1 cursor-pointer focus-ring"
                   aria-label="Marcar todas como leídas"
                 >
                   <CheckCheck size={12} /> Marcar todas
@@ -102,7 +102,7 @@ export const NotificationBell = () => {
                     {n.accion_url && (
                       <button
                         onClick={() => handleAccion(n.accion_url, n.id)}
-                        className="text-[11px] text-cyan-400 hover:text-cyan-300 cursor-pointer focus-ring"
+                        className="text-[11px] text-primary hover:text-accent cursor-pointer focus-ring"
                       >
                         Ver
                       </button>
@@ -111,7 +111,7 @@ export const NotificationBell = () => {
                       <button
                         onClick={() => marcarLeida.mutate(n.id as number)}
                         aria-label="Marcar como leída"
-                        className="text-slate-500 hover:text-emerald-400 cursor-pointer focus-ring"
+                        className="text-slate-500 hover:text-success cursor-pointer focus-ring"
                       >
                         <Check size={13} />
                       </button>

@@ -1,34 +1,53 @@
 @import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
 @import "tailwindcss";
 
-/* ─── Design System: Signal Deck ───
-   Instrument-panel dark console. Industrial/utilitarian rigor (hairline dividers,
-   flat panels) + one restrained editorial accent (Fraunces, H1 titles only). */
+/* ─── Design System: Signal Deck 3.0 ───
+   Instrument-panel dark console, por capas de profundidad. Violeta = interacción/marca;
+   cian/ámbar reservados en exclusiva a la procedencia del dato (real EDW vs. predicción ML).
+   Ver docs/features/plan_refactor_visual_signal_deck_3.md §2. */
 @theme {
   --font-display: "Fraunces", Georgia, serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
 
-  /* Color tokens */
-  --color-bg-base: hsl(222, 47%, 6%);
-  --color-bg-surface: hsl(222, 47%, 10%);
-  --color-bg-elevated: hsl(217, 33%, 14%);
-  --color-border: hsl(217, 33%, 18%);
-  --color-accent: hsl(189, 94%, 43%);
-  --color-accent-dim: hsl(189, 94%, 43%, 0.12);
-  --color-accent-glow: 0 0 20px hsl(189, 94%, 43%, 0.25);
-  --color-warning: hsl(43, 96%, 56%);
-  --color-warning-dim: hsl(43, 96%, 56%, 0.12);
-  --color-danger: hsl(0, 85%, 60%);
-  --color-danger-dim: hsl(0, 85%, 60%, 0.10);
-  --color-success: hsl(142, 76%, 42%);
-  --color-success-dim: hsl(142, 76%, 42%, 0.10);
-  --color-text-primary: hsl(210, 40%, 98%);
-  --color-text-muted: hsl(215, 20%, 45%);
+  /* Capas de profundidad (sin negros absolutos) */
+  --color-bg-base: #0B0F19;
+  --color-bg-sidebar: #101624;
+  --color-bg-surface: #121826;
+  --color-bg-card: #171F31;
+  --color-bg-elevated: #1A2235;
+  --color-bg-hover: #202A40;
+  --color-border: rgba(255, 255, 255, 0.06);
+  --color-border-strong: rgba(255, 255, 255, 0.12);
 
-  /* Data provenance semantics: cyan = warehouse/live truth, amber = model/predicted */
-  --color-provenance-live: hsl(189, 94%, 43%);
-  --color-provenance-ml: hsl(43, 96%, 56%);
+  /* Texto */
+  --color-text-primary: #F8FAFC;
+  --color-text-muted: #94A3B8;
+  --color-text-disabled: #64748B;
+
+  /* Acento de interacción/marca */
+  --color-primary: #6D5DF6;
+  --color-primary-dim: rgb(109 93 246 / 0.12);
+  --color-primary-glow: 0 0 20px rgb(109 93 246 / 0.25);
+  --color-accent: #8B5CF6;
+
+  /* Semánticos */
+  --color-info: #38BDF8;
+  --color-info-dim: rgb(56 189 248 / 0.12);
+  --color-success: #22C55E;
+  --color-success-dim: rgb(34 197 94 / 0.10);
+  --color-warning: #F59E0B;
+  --color-warning-dim: rgb(245 158 11 / 0.12);
+  --color-danger: #EF4444;
+  --color-danger-dim: rgb(239 68 68 / 0.10);
+
+  /* Data provenance semantics: cian = dato real del EDW, ámbar = predicción ML */
+  --color-provenance-live: #38BDF8;
+  --color-provenance-ml: #F59E0B;
+
+  /* Compat: alias del acento legacy (usado por utilidades glow-accent) */
+  --color-accent-dim: var(--color-primary-dim);
+  --color-accent-glow: var(--color-primary-glow);
 
   /* Categorical chart palette — contrasted against bg-surface, replaces hex hardcodes */
   --color-chart-1: hsl(217, 91%, 60%);
@@ -41,41 +60,46 @@
   --color-chart-8: hsl(84, 60%, 50%);
 
   /* Recharts chrome */
-  --color-chart-grid: hsl(217, 33%, 18%);
-  --color-chart-axis: hsl(215, 20%, 45%);
+  --color-chart-grid: rgba(255, 255, 255, 0.06);
+  --color-chart-axis: #64748B;
 
   /* Elevations and focus */
-  --color-bg-overlay: hsl(222, 47%, 4%, 0.7);
-  --ring-focus: hsl(189, 94%, 43%, 0.6);
+  --color-bg-overlay: rgb(11 15 25 / 0.7);
+  --ring-focus: rgb(109 93 246 / 0.6);
 
-  /* Motion tokens */
+  /* Motion tokens — escala 120/180/250/300ms, 400ms máximo (entradas orquestadas de página) */
   --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out-panel: cubic-bezier(0.4, 0, 0.2, 1);
-  --duration-fast: 150ms;
-  --duration-base: 300ms;
-  --duration-slow: 500ms;
+  --duration-fast: 120ms;
+  --duration-base: 250ms;
+  --duration-slow: 300ms;
+  --duration-page: 400ms;
 }
 
 @layer base {
   body {
-    @apply bg-slate-950 text-slate-300 font-sans antialiased overflow-x-hidden;
+    background: var(--color-bg-base);
+    color: var(--color-text-muted);
+    @apply font-sans antialiased overflow-x-hidden;
   }
 
   /* Fraunces (serif) is reserved for true page H1 titles — an editorial accent
      against the technical mono/sans body, not a general heading font. h3-h6
      inherit the sans body face. */
   h1 {
-    @apply font-display text-slate-100;
+    font-family: var(--font-display);
+    color: var(--color-text-primary);
   }
   h2, h3, h4, h5, h6 {
-    @apply font-sans text-slate-100;
+    @apply font-sans;
+    color: var(--color-text-primary);
   }
 
   /* Custom scrollbar — dark analytic aesthetic */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: theme("colors.slate.950"); }
-  ::-webkit-scrollbar-thumb { background: theme("colors.slate.800"); border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: theme("colors.slate.700"); }
+  ::-webkit-scrollbar-track { background: var(--color-bg-base); }
+  ::-webkit-scrollbar-thumb { background: var(--color-bg-elevated); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-bg-hover); }
 }
 
 /* ─── Animation Keyframes ─── */
@@ -164,28 +188,47 @@
 
   /* Skeleton shimmer */
   .skeleton {
-    background: linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%);
+    background: linear-gradient(90deg, var(--color-bg-card) 25%, var(--color-bg-hover) 50%, var(--color-bg-card) 75%);
     background-size: 400px 100%;
     animation: shimmer 1.4s infinite;
     border-radius: 6px;
   }
 
-  /* Cyan accent glow utilities */
-  .glow-accent { box-shadow: 0 0 18px hsl(189 94% 43% / 0.22); }
-  .glow-accent-sm { box-shadow: 0 0 10px hsl(189 94% 43% / 0.15); }
+  /* Glow violeta de marca/interacción (elemento activo del sidebar, foco) */
+  .glow-accent { box-shadow: var(--color-primary-glow); }
+  .glow-accent-sm { box-shadow: 0 0 10px rgb(109 93 246 / 0.15); }
+
+  /* Glassmorphism ligero — solo superficies flotantes (dropdowns, modales, toasts, header sticky) */
+  .glass-elevated {
+    background: rgb(26 34 53 / 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
 
   /* Card base — flat panel with a hairline border, no glass-blur/glow treatment */
   .card {
-    @apply bg-slate-900 border border-slate-800 rounded-xl;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    @apply rounded-xl;
   }
   .card-hover {
-    @apply transition-colors duration-200 hover:border-slate-700;
+    @apply transition-colors duration-200;
+  }
+  .card-hover:hover {
+    border-color: var(--color-border-strong);
   }
 
   /* Bare text/number input — same visual language as <Select>, for compact inline
      forms (ej. paneles de configuración de gerencia) that don't need a full component. */
   .input-field {
-    @apply bg-slate-950 border border-slate-700 text-slate-300 rounded-md outline-none px-3 py-2 text-sm hover:border-slate-600 focus-ring disabled:opacity-40 disabled:cursor-not-allowed;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-strong);
+    color: var(--color-text-muted);
+    @apply rounded-md outline-none px-3 py-2 text-sm focus-ring disabled:opacity-40 disabled:cursor-not-allowed;
+    transition: border-color var(--duration-fast) var(--ease-out-soft);
+  }
+  .input-field:hover {
+    border-color: rgb(255 255 255 / 0.18);
   }
 
   @media (prefers-reduced-motion: reduce) {

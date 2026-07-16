@@ -11,8 +11,8 @@ interface ErrorStateProps {
  * y ofrece "Reintentar" cuando el hook expone `refetch`. */
 export const ErrorState = ({ message = 'No se pudo cargar la información.', onRetry, className = '' }: ErrorStateProps) => (
   <div className={`flex flex-col items-center justify-center text-center py-12 px-6 gap-3 ${className}`}>
-    <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20">
-      <AlertOctagon size={22} className="text-red-400" />
+    <div className="p-3 rounded-xl bg-danger/10 border border-danger/20">
+      <AlertOctagon size={22} className="text-danger" />
     </div>
     <p className="text-sm text-slate-300 max-w-sm">{message}</p>
     {onRetry && (

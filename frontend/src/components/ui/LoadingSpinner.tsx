@@ -3,7 +3,7 @@ export const LoadingSpinner = ({ size = 'md', label }: { size?: 'sm' | 'md' | 'l
   return (
     <div className="flex flex-col items-center justify-center gap-3">
       <svg
-        className={`${sz[size]} animate-spin text-cyan-500`}
+        className={`${sz[size]} animate-spin text-primary`}
         xmlns="http://www.w3.org/2000/svg"
         fill="none"
         viewBox="0 0 24 24"

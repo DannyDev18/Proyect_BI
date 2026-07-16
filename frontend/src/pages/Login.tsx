@@ -58,8 +58,8 @@ export const Login = () => {
     <div className="min-h-screen bg-slate-950 flex items-center justify-center relative overflow-hidden font-sans">
       <div className="w-full max-w-md relative z-10 p-8 sm:p-10 bg-slate-900 rounded-2xl border border-slate-800">
         <div className="flex justify-center mb-8 animate-fade-in-up" style={{ animationDelay: '0ms' }}>
-          <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
-            <Building2 className="text-cyan-400 w-8 h-8" />
+          <div className="w-16 h-16 rounded-2xl bg-info/10 border border-info/20 flex items-center justify-center">
+            <Building2 className="text-info w-8 h-8" />
           </div>
         </div>
 
@@ -73,7 +73,7 @@ export const Login = () => {
         </div>
 
         {error && (
-          <div role="alert" className="mb-6 p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center animate-fade-in">
+          <div role="alert" className="mb-6 p-4 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm flex items-center animate-fade-in">
             <ShieldAlert size={16} className="mr-2 shrink-0" />
             {error}
           </div>

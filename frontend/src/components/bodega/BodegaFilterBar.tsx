@@ -69,7 +69,7 @@ export const BodegaFilterBar = () => {
         onClick={f.reset}
         title="Limpiar filtros"
         aria-label="Limpiar filtros"
-        className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer focus-ring"
+        className="p-2 text-slate-400 hover:text-primary hover:bg-slate-800 rounded-lg transition-colors cursor-pointer focus-ring"
       >
         <RotateCcw size={16} />
       </button>

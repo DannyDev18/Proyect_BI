@@ -4,14 +4,21 @@ import {
   BarChart, Bar,
   PieChart, Pie, Cell, Legend
 } from 'recharts';
-import { DollarSign, TrendingUp, ShoppingBag, Target, Filter } from 'lucide-react';
-import { useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores, useAlmacenes } from '../hooks/gerencia';
+import { DollarSign, TrendingUp, ShoppingBag, Target, Filter, CheckCircle2, FileSpreadsheet, Printer } from 'lucide-react';
+import {
+  useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores, useAlmacenes,
+  useCumplimientoMeta,
+} from '../hooks/gerencia';
+import { descargarReporteDashboardExcel } from '../services/gerencia';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { AlertBadge } from '../components/ui/AlertBadge';
 import { Select } from '../components/ui/Select';
+import { Button } from '../components/ui/Button';
 import { ChartTooltip } from '../components/ui/ChartTooltip';
 import { ErrorState } from '../components/ui/ErrorState';
+import { CrossSellKpiPanel } from '../components/crossSelling/CrossSellKpiPanel';
+import { useToast } from '../store/toastStore';
 import { fmt, fmtMoney, formatEjeFecha, pct } from '../utils/format';
 import { chartTheme, colorByIndex, axisTick } from '../utils/chartTheme';
 
@@ -24,8 +31,15 @@ export const DashboardGerencia = () => {
     almacen: '',
   });
   const [granularidad, setGranularidad] = useState<'semana' | 'mes'>('semana');
+  const [descargando, setDescargando] = useState(false);
+  const toast = useToast();
 
   const kpi  = useGerenciaKPIs(filters);
+  // Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): KPI de
+  // cumplimiento vs metas -- período actual (mes calendario en curso), reutiliza
+  // public.metas_comerciales_operativas, sin ML (regla de negocio 10).
+  const hoy = new Date();
+  const cumplimiento = useCumplimientoMeta(hoy.getFullYear(), hoy.getMonth() + 1);
   const pred = useSalesPrediction({ granularidad, vendedor: filters.vendedor, almacen: filters.almacen });
   const revCat = useRevenueByCategory(filters);
   const { data: categoriasLista } = useCategories();
@@ -40,6 +54,31 @@ export const DashboardGerencia = () => {
 
   const donutTitle = "Distribución por Vendedor";
 
+  // Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): comparativa vs.
+  // período anterior -- null cuando no hay start_date/end_date explícitos (sin subValue).
+  const tendencia = (pctChange: number | null | undefined) => {
+    if (pctChange == null) return { subValue: undefined, trend: 'neutral' as const };
+    return {
+      subValue: `${pctChange > 0 ? '+' : ''}${pctChange.toFixed(1)}% vs período anterior`,
+      trend: pctChange > 0 ? ('up' as const) : pctChange < 0 ? ('down' as const) : ('neutral' as const),
+    };
+  };
+
+  // Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): export del
+  // dashboard -- Excel real (backend, reutiliza warehouse_export.py) + PDF vía
+  // impresión del navegador (mismo patrón que BodegaReportes.tsx, sin librería nueva).
+  const exportarExcel = async () => {
+    setDescargando(true);
+    try {
+      await descargarReporteDashboardExcel(filters);
+      toast('Reporte Excel descargado correctamente.', 'success');
+    } catch {
+      toast('No se pudo descargar el reporte Excel. Intenta nuevamente.', 'error');
+    } finally {
+      setDescargando(false);
+    }
+  };
+
   const salud = kpi.data?.roi_estimado;
   const saludVariant = salud
     ? salud >= 20 ? 'success' : salud >= 10 ? 'warning' : 'critical'
@@ -48,18 +87,33 @@ export const DashboardGerencia = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-wrap justify-between items-center gap-3 animate-fade-in">
+      <div className="flex flex-wrap justify-between items-center gap-3 animate-fade-in print:hidden">
         <div>
           <h1 className="text-3xl font-display font-semibold text-slate-100">Visión Ejecutiva</h1>
           <p className="text-sm text-slate-500 mt-0.5">Datos consolidados del Data Warehouse · Modo tiempo real</p>
         </div>
-        <AlertBadge variant="info" dot>
-          Modelo {pred.data?.metricas.algoritmo ?? 'ML'} activo
-        </AlertBadge>
+        <div className="flex items-center gap-2">
+          <AlertBadge variant="info" dot>
+            Modelo {pred.data?.metricas.algoritmo ?? 'ML'} activo
+          </AlertBadge>
+          <Button
+            variant="success" size="sm" onClick={exportarExcel} disabled={kpi.loading}
+            loading={descargando} icon={!descargando ? <FileSpreadsheet size={14} aria-hidden="true" /> : undefined}
+            aria-label="Exportar reporte del dashboard a Excel"
+          >
+            {descargando ? 'Generando…' : 'Excel'}
+          </Button>
+          <Button
+            variant="primary" size="sm" onClick={() => window.print()} disabled={kpi.loading}
+            icon={<Printer size={14} aria-hidden="true" />} aria-label="Imprimir o exportar a PDF"
+          >
+            PDF
+          </Button>
+        </div>
       </div>
 
       {/* Filter Bar */}
-      <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 flex flex-wrap gap-4 items-center">
+      <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 flex flex-wrap gap-4 items-center print:hidden">
         <div className="flex items-center gap-2 text-slate-400">
           <Filter className="w-4 h-4" />
           <span className="text-sm font-medium">Filtros:</span>
@@ -119,16 +173,17 @@ export const DashboardGerencia = () => {
       </div>
 
       {/* KPI Row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 stagger-children">
         {kpi.loading ? (
           <>
             <KpiCardSkeleton />
             <KpiCardSkeleton />
             <KpiCardSkeleton />
             <KpiCardSkeleton />
+            <KpiCardSkeleton />
           </>
         ) : kpi.error ? (
-          <div className="col-span-4">
+          <div className="col-span-5">
             <ErrorState message={`Error al cargar KPIs: ${kpi.error}`} onRetry={kpi.refetch} />
           </div>
         ) : (
@@ -137,33 +192,50 @@ export const DashboardGerencia = () => {
               title="Ingresos Totales (ventas-devoluciones)"
               value={kpi.data ? fmtMoney(kpi.data.ingresos_totales) : '—'}
               icon={DollarSign}
-              trend="neutral"
-              animDelay={0}
+              {...tendencia(kpi.data?.ingresos_totales_tendencia_pct)}
             />
             <KpiCard
               title="Margen de Utilidad"
               value={kpi.data ? pct(kpi.data.margen_utilidad_neta) : '—'}
               icon={TrendingUp}
-              trend="up"
-              animDelay={60}
+              {...tendencia(kpi.data?.margen_utilidad_neta_tendencia_pct)}
             />
             <KpiCard
               title="FACTURA Promedio"
               value={kpi.data ? fmt(kpi.data.ticket_promedio) : '—'}
               icon={ShoppingBag}
-              trend="neutral"
-              animDelay={120}
+              {...tendencia(kpi.data?.ticket_promedio_tendencia_pct)}
             />
             <KpiCard
               title="Proyección ROI"
               value={kpi.data ? pct(kpi.data.roi_estimado) : '—'}
               icon={Target}
-              trend={saludVariant === 'success' ? 'up' : saludVariant === 'critical' ? 'down' : 'neutral'}
-              animDelay={180}
+              trend={
+                kpi.data?.roi_estimado_tendencia_pct != null
+                  ? tendencia(kpi.data.roi_estimado_tendencia_pct).trend
+                  : saludVariant === 'success' ? 'up' : saludVariant === 'critical' ? 'down' : 'neutral'
+              }
+              subValue={tendencia(kpi.data?.roi_estimado_tendencia_pct).subValue}
+            />
+            <KpiCard
+              title="Cumplimiento vs Meta (mes actual)"
+              value={cumplimiento.data ? pct(cumplimiento.data.pct_cumplimiento) : '—'}
+              icon={CheckCircle2}
+              trend={
+                cumplimiento.data
+                  ? cumplimiento.data.pct_cumplimiento >= 100 ? 'up'
+                    : cumplimiento.data.pct_cumplimiento >= 70 ? 'neutral' : 'down'
+                  : 'neutral'
+              }
             />
           </>
         )}
       </div>
+      {cumplimiento.data && cumplimiento.data.vendedores_con_meta_aprobada === 0 && (
+        <p className="text-xs text-slate-500 -mt-3">
+          Sin metas aprobadas para el mes en curso -- el % de cumplimiento no tiene base de comparación todavía.
+        </p>
+      )}
 
       {/* Panel Ejecutivo de Predicción */}
       {pred.data && !pred.loading && (
@@ -180,7 +252,7 @@ export const DashboardGerencia = () => {
                       type="button"
                       onClick={() => setGranularidad(g)}
                       className={`px-3 py-1 text-xs font-medium rounded-full transition-colors focus-ring ${
-                        granularidad === g ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-slate-200'
+                        granularidad === g ? 'bg-primary/20 text-primary' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
                       {g === 'semana' ? 'Semanas' : 'Meses'}
@@ -291,12 +363,12 @@ export const DashboardGerencia = () => {
             {/* Insights panel */}
             <div className="card p-5 border border-slate-700/50 bg-slate-800/40 rounded-xl flex-grow">
               <h3 className="text-lg font-medium tracking-tight text-slate-100 flex items-center gap-2 mb-4">
-                <Target className="w-5 h-5 text-teal-400" /> Inteligencia Comercial
+                <Target className="w-5 h-5 text-primary" /> Inteligencia Comercial
               </h3>
               <ul className="space-y-4 text-sm text-slate-300">
                 {pred.data.insights.map((insight, idx) => (
                   <li key={idx} className="flex gap-3">
-                    <span className="flex-shrink-0 w-1.5 h-1.5 mt-2 rounded-full bg-teal-400"></span>
+                    <span className="flex-shrink-0 w-1.5 h-1.5 mt-2 rounded-full bg-primary"></span>
                     <span className="leading-snug">{insight}</span>
                   </li>
                 ))}
@@ -307,7 +379,7 @@ export const DashboardGerencia = () => {
               <div className="mt-6 pt-6 border-t border-slate-700/50 grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-xs text-slate-500 mb-1">Crecimiento Est.</div>
-                  <div className={`text-lg font-semibold ${(pred.data.metricas.crecimiento_esperado ?? 0) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  <div className={`text-lg font-semibold ${(pred.data.metricas.crecimiento_esperado ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>
                     {pred.data.metricas.crecimiento_esperado != null
                       ? `${pred.data.metricas.crecimiento_esperado > 0 ? '+' : ''}${pred.data.metricas.crecimiento_esperado.toFixed(1)}%`
                       : '—'}
@@ -317,7 +389,7 @@ export const DashboardGerencia = () => {
                   <div className="text-xs text-slate-500 mb-1">
                     Proyección ({pred.data.periodos_proyectados} {granularidad === 'semana' ? 'sem' : 'meses'})
                   </div>
-                  <div className="text-lg font-semibold text-sky-400">
+                  <div className="text-lg font-semibold text-info">
                     {pred.data.metricas.venta_esperada != null ? fmt(pred.data.metricas.venta_esperada) : '—'}
                   </div>
                 </div>
@@ -430,6 +502,12 @@ export const DashboardGerencia = () => {
             </PieChart>
           </ResponsiveContainer>
         </ChartCard>
+      </div>
+
+      {/* Impacto del módulo de Venta Cruzada (RN-CS2) -- reutiliza el mismo panel que Ventas,
+          nunca montado antes en Gerencia pese a que el endpoint ya está abierto a este rol. */}
+      <div className="card p-6">
+        <CrossSellKpiPanel />
       </div>
     </div>
   );

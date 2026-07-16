@@ -32,8 +32,8 @@ const REPORTES: { tipo: TipoReporteBodega; titulo: string; pregunta: string; des
 ];
 
 const tonoCls: Record<TonoKpi, string> = {
-  positivo: 'text-emerald-400',
-  negativo: 'text-red-400',
+  positivo: 'text-success',
+  negativo: 'text-danger',
   neutral: 'text-slate-200',
 };
 
@@ -85,7 +85,7 @@ const TablaSeccion = ({ seccion }: { seccion: SeccionReporte }) => {
               {filas.map((fila, i) => {
                 const resaltar = seccion.resaltar_key != null && RESALTAR_VALORES.has(String(fila[seccion.resaltar_key]));
                 return (
-                  <tr key={i} className={resaltar ? 'bg-red-500/5 print:bg-red-50' : ''}>
+                  <tr key={i} className={resaltar ? 'bg-danger/5 print:bg-danger' : ''}>
                     {seccion.columnas.map((c) => (
                       <td key={c.key} className="px-3 py-1.5 text-slate-300 print:text-black whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis">
                         {fmtCelda(fila[c.key], c)}
@@ -133,16 +133,15 @@ export const BodegaReportes = () => {
     <div className="space-y-6">
       <div className="flex flex-wrap justify-between items-center gap-3 animate-fade-in print:hidden">
         <div>
-          <Link to="/bodega" className="text-xs text-slate-500 hover:text-cyan-400 flex items-center gap-1 mb-1 focus-ring rounded">
+          <Link to="/bodega" className="text-xs text-slate-500 hover:text-primary flex items-center gap-1 mb-1 focus-ring rounded">
             <ArrowLeft size={12} aria-hidden="true" /> Dashboard de Bodega
           </Link>
           <h1 className="text-3xl font-display font-semibold text-slate-100">Reportes para Gerencia</h1>
           <p className="text-sm text-slate-500 mt-0.5">Justificación de abastecimiento con evidencia del EDW y proyecciones</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="primary" size="sm" onClick={exportarExcel} disabled={reporte.loading}
+          <Button variant="success" size="sm" onClick={exportarExcel} disabled={reporte.loading}
             loading={descargando} icon={!descargando ? <FileSpreadsheet size={14} aria-hidden="true" /> : undefined}
-            className="!bg-emerald-600 !border-emerald-600 hover:!bg-emerald-500 hover:!border-emerald-500"
             aria-label="Exportar reporte a Excel">
             {descargando ? 'Generando…' : 'Exportar Excel'}
           </Button>
@@ -162,9 +161,9 @@ export const BodegaReportes = () => {
         {REPORTES.map((r) => (
           <button key={r.tipo} type="button" onClick={() => setTipo(r.tipo)} aria-pressed={tipo === r.tipo}
             className={`card p-4 text-left transition-all cursor-pointer border focus-ring
-              ${tipo === r.tipo ? 'border-cyan-500 bg-cyan-500/5' : 'border-transparent hover:border-slate-600'}`}>
+              ${tipo === r.tipo ? 'border-primary bg-primary/5' : 'border-transparent hover:border-slate-600'}`}>
             <div className="flex items-center gap-2 mb-1">
-              <FileDown size={15} aria-hidden="true" className={tipo === r.tipo ? 'text-cyan-400' : 'text-slate-500'} />
+              <FileDown size={15} aria-hidden="true" className={tipo === r.tipo ? 'text-primary' : 'text-slate-500'} />
               <p className="font-semibold text-sm text-slate-200">{r.pregunta}</p>
             </div>
             <p className="text-xs text-slate-400 mb-1">{r.titulo}</p>
@@ -192,7 +191,7 @@ export const BodegaReportes = () => {
         </div>
 
         {reporte.loading && <p className="text-sm text-slate-500 animate-pulse-slow">Generando reporte con datos del EDW…</p>}
-        {reporte.error && <p className="text-sm text-red-400">{reporte.error}</p>}
+        {reporte.error && <p className="text-sm text-danger">{reporte.error}</p>}
         {reporte.data && (
           <>
             {/* Banda de KPIs del resumen ejecutivo */}

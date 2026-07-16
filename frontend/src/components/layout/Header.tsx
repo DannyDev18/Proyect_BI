@@ -50,7 +50,7 @@ export const Header = () => {
         <button
           onClick={handleLogout}
           aria-label="Cerrar sesión"
-          className="ml-2 sm:ml-4 p-2 text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all cursor-pointer focus-ring"
+          className="ml-2 sm:ml-4 p-2 text-slate-400 hover:text-danger hover:bg-danger/10 rounded-lg transition-all cursor-pointer focus-ring"
           title="Logout"
         >
           <LogOut size={20} />

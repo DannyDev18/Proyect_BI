@@ -19,9 +19,9 @@ interface ChartCardProps {
 
 // Provenance color system: live/hist = warehouse-sourced truth (cyan), ml = model-predicted (amber).
 const badgeStyles = {
-  live: 'bg-cyan-500/10  text-cyan-400  border border-cyan-500/20',
-  hist: 'bg-cyan-500/10  text-cyan-400  border border-cyan-500/20',
-  ml:   'bg-amber-500/10 text-amber-400 border border-amber-500/20',
+  live: 'bg-info/10  text-info  border border-info/20',
+  hist: 'bg-info/10  text-info  border border-info/20',
+  ml:   'bg-warning/10 text-warning border border-warning/20',
 };
 
 const ChartSkeleton = ({ height }: { height: string }) => (
@@ -41,7 +41,7 @@ export const ChartCard = ({
         {actions}
         {badge && (
           <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${badgeStyles[badge.variant ?? 'hist']}`}>
-            {badge.variant === 'live' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 mr-1.5 animate-pulse-slow" />}
+            {badge.variant === 'live' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-info mr-1.5 animate-pulse-slow" />}
             {badge.label}
           </span>
         )}

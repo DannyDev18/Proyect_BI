@@ -7,6 +7,8 @@ import { getUsers, createUser, updateUser, deactivateUser, activateUser, getRole
 import type { UserData, RoleData, AlmacenOption } from '../types/admin';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
+import { Input } from '../components/ui/Input';
+import { FormField } from '../components/ui/FormField';
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { Drawer } from '../components/ui/Drawer';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
@@ -252,16 +254,15 @@ export const UsersManagement = () => {
       </div>
 
       <div className="card p-4">
-        <div className="relative w-full max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} aria-hidden="true" />
+        <div className="w-full max-w-sm">
           <label htmlFor="users-search" className="sr-only">Buscar por nombre o correo</label>
-          <input
+          <Input
             id="users-search"
             type="text"
             placeholder="Buscar por nombre o correo…"
+            iconLeft={<Search size={18} />}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-950/50 border border-slate-700/50 rounded-lg pl-10 pr-4 py-2 text-sm text-slate-200 outline-none placeholder-slate-500 focus-ring"
           />
         </div>
       </div>
@@ -287,46 +288,39 @@ export const UsersManagement = () => {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label htmlFor="user-nombre" className="text-xs font-semibold uppercase text-slate-400">Nombre completo</label>
-            <input
+          <FormField label="Nombre completo" htmlFor="user-nombre" required>
+            <Input
               id="user-nombre" required type="text"
               value={formData.nombre}
               onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus-ring"
             />
-          </div>
+          </FormField>
 
-          <div className="space-y-1">
-            <label htmlFor="user-email" className="text-xs font-semibold uppercase text-slate-400">Email</label>
-            <input
+          <FormField label="Email" htmlFor="user-email" required>
+            <Input
               id="user-email" required type="email"
               value={formData.email}
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus-ring"
             />
-          </div>
+          </FormField>
 
-          <div className="space-y-1">
-            <label htmlFor="user-password" className="text-xs font-semibold uppercase text-slate-400">
-              Contraseña {modalMode === 'edit' && <span className="text-slate-600 font-normal ml-1">(opcional)</span>}
-            </label>
-            <div className="relative">
-              <KeyRound className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" size={14} aria-hidden="true" />
-              <input
-                id="user-password" type="password"
-                pattern="^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$"
-                title="Mínimo 8 caracteres, al menos una mayúscula, una minúscula, un número y un carácter especial"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-700/50 rounded-lg pl-8 pr-3 py-2 text-sm text-slate-200 outline-none focus-ring"
-                placeholder={modalMode === 'edit' ? 'Dejar en blanco para no cambiar' : '••••••••'}
-              />
-            </div>
-          </div>
+          <FormField
+            label="Contraseña"
+            htmlFor="user-password"
+            helper={modalMode === 'edit' ? 'Opcional — dejar en blanco para no cambiar' : undefined}
+          >
+            <Input
+              id="user-password" type="password"
+              iconLeft={<KeyRound size={14} />}
+              pattern="^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$"
+              title="Mínimo 8 caracteres, al menos una mayúscula, una minúscula, un número y un carácter especial"
+              value={formData.password}
+              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+              placeholder={modalMode === 'edit' ? 'Dejar en blanco para no cambiar' : '••••••••'}
+            />
+          </FormField>
 
-          <div className="space-y-1">
-            <label htmlFor="user-rol" className="text-xs font-semibold uppercase text-slate-400">Rol del sistema</label>
+          <FormField label="Rol del sistema" htmlFor="user-rol">
             <Select
               id="user-rol"
               className="w-full"
@@ -335,20 +329,22 @@ export const UsersManagement = () => {
             >
               {roles.map((r) => <option key={r.id} value={r.id}>{r.nombre}</option>)}
             </Select>
-          </div>
+          </FormField>
 
           <div className="pt-2 border-t border-slate-800 space-y-4">
             {selectedRoleNombre === 'ventas' && (
-              <div className="space-y-1">
-                <label htmlFor="user-vendedor" className="text-xs font-semibold uppercase text-slate-400">Código de vendedor (codven)</label>
-                <input
+              <FormField
+                label="Código de vendedor (codven)"
+                htmlFor="user-vendedor"
+                required
+                helper="Se valida contra el EDW: el vendedor debe existir y estar activo. La cuenta queda enlazada automáticamente a ese vendedor."
+              >
+                <Input
                   id="user-vendedor" type="text" required placeholder="Ej: V001"
                   value={formData.id_vendedor_origen}
                   onChange={(e) => setFormData({ ...formData, id_vendedor_origen: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none placeholder-slate-700 focus-ring"
                 />
-                <p className="text-[11px] text-slate-500">Se valida contra el EDW: el vendedor debe existir y estar activo. La cuenta queda enlazada automáticamente a ese vendedor.</p>
-              </div>
+              </FormField>
             )}
 
             {selectedRoleNombre === 'bodega' && (
@@ -363,8 +359,12 @@ export const UsersManagement = () => {
                   Acceso a todos los almacenes
                 </label>
                 {!formData.todos_los_almacenes && (
-                  <div className="space-y-1">
-                    <label htmlFor="user-almacen" className="text-xs font-semibold uppercase text-slate-400">Almacén asignado</label>
+                  <FormField
+                    label="Almacén asignado"
+                    htmlFor="user-almacen"
+                    required
+                    helper="La cuenta solo podrá ver el almacén seleccionado."
+                  >
                     <Select
                       id="user-almacen"
                       required
@@ -377,22 +377,19 @@ export const UsersManagement = () => {
                         <option key={a.codalm} value={a.codalm}>{a.nombre_almacen} ({a.codalm})</option>
                       ))}
                     </Select>
-                    <p className="text-[11px] text-slate-500">La cuenta solo podrá ver el almacén seleccionado.</p>
-                  </div>
+                  </FormField>
                 )}
               </div>
             )}
 
             {selectedRoleNombre !== 'ventas' && selectedRoleNombre !== 'bodega' && (
-              <div className="space-y-1">
-                <label htmlFor="user-sucursal" className="text-xs font-semibold uppercase text-slate-400">Sucursal (RLS)</label>
-                <input
+              <FormField label="Sucursal (RLS)" htmlFor="user-sucursal">
+                <Input
                   id="user-sucursal" type="text" placeholder="Ej: GYE-01"
                   value={formData.sucursal}
                   onChange={(e) => setFormData({ ...formData, sucursal: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none placeholder-slate-700 focus-ring"
                 />
-              </div>
+              </FormField>
             )}
           </div>
 

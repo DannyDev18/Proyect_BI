@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Settings as SettingsIcon, Shield, Bell, Palette } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { FormField } from '../components/ui/FormField';
 import { useToast } from '../store/toastStore';
 
 const SECTIONS = [
@@ -36,7 +38,7 @@ export const Settings = () => {
               aria-current={section === key}
               className={`w-full text-left px-4 py-2 rounded-lg font-medium flex items-center transition-colors focus-ring cursor-pointer ${
                 section === key
-                  ? 'bg-info/10 text-info border border-info/20'
+                  ? 'bg-primary/10 text-primary border border-primary/20'
                   : 'border border-transparent hover:bg-slate-800/50 text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -53,30 +55,15 @@ export const Settings = () => {
               </h3>
 
               <div className="space-y-4">
-                <div>
-                  <label htmlFor="settings-nombre" className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Nombre completo</label>
-                  <input
-                    id="settings-nombre" type="text" disabled
-                    value={user?.name || ''}
-                    className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 outline-none cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="settings-email" className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Correo electrónico</label>
-                  <input
-                    id="settings-email" type="email" disabled
-                    value={user?.email || ''}
-                    className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 outline-none cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="settings-rol" className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Rol asignado</label>
-                  <input
-                    id="settings-rol" type="text" disabled
-                    value={(user?.role || '').toUpperCase()}
-                    className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 outline-none cursor-not-allowed font-mono"
-                  />
-                </div>
+                <FormField label="Nombre completo" htmlFor="settings-nombre">
+                  <Input id="settings-nombre" type="text" disabled value={user?.name || ''} />
+                </FormField>
+                <FormField label="Correo electrónico" htmlFor="settings-email">
+                  <Input id="settings-email" type="email" disabled value={user?.email || ''} />
+                </FormField>
+                <FormField label="Rol asignado" htmlFor="settings-rol">
+                  <Input id="settings-rol" type="text" disabled value={(user?.role || '').toUpperCase()} className="font-mono" />
+                </FormField>
               </div>
 
               <div className="mt-8 flex justify-end">

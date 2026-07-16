@@ -4,6 +4,8 @@ import { Lock, User, ArrowRight, Building2, ShieldAlert } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { authLogin, getMe } from '../services/auth';
 import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { FormField } from '../components/ui/FormField';
 
 export const Login = () => {
   const [username, setUsername] = useState('');
@@ -80,42 +82,30 @@ export const Login = () => {
         )}
 
         <form onSubmit={handleLogin} className="space-y-5 animate-fade-in-up" style={{ animationDelay: '160ms' }}>
-          <div className="space-y-1">
-            <label htmlFor="login-username" className="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">Usuario / Email</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500">
-                <User size={18} />
-              </div>
-              <input
-                id="login-username"
-                type="text"
-                autoComplete="username"
-                autoFocus
-                className="block w-full pl-11 px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-lg text-slate-200 transition-colors placeholder-slate-600 outline-none focus-ring"
-                placeholder="usuario@empresa.com"
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-              />
-            </div>
-          </div>
+          <FormField label="Usuario / Email" htmlFor="login-username">
+            <Input
+              id="login-username"
+              type="text"
+              autoComplete="username"
+              autoFocus
+              iconLeft={<User size={18} />}
+              placeholder="usuario@empresa.com"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+            />
+          </FormField>
 
-          <div className="space-y-1">
-            <label htmlFor="login-password" className="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">Contraseña</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500">
-                <Lock size={18} />
-              </div>
-              <input
-                id="login-password"
-                type="password"
-                autoComplete="current-password"
-                className="block w-full pl-11 px-4 py-3 bg-slate-950/50 border border-slate-800 rounded-lg text-slate-200 transition-colors placeholder-slate-600 outline-none focus-ring"
-                placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-              />
-            </div>
-          </div>
+          <FormField label="Contraseña" htmlFor="login-password">
+            <Input
+              id="login-password"
+              type="password"
+              autoComplete="current-password"
+              iconLeft={<Lock size={18} />}
+              placeholder="••••••••"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+            />
+          </FormField>
 
           <Button
             type="submit"

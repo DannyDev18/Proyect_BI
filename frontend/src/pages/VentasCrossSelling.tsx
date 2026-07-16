@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { AlertBadge } from '../components/ui/AlertBadge';
+import { Badge } from '../components/ui/Badge';
 import { Autocomplete } from '../components/ui/Autocomplete';
 import { TopCombinacionesPanel } from '../components/crossSelling/TopCombinacionesPanel';
 import { SaleAssistant } from '../components/crossSelling/SaleAssistant';
@@ -23,7 +23,7 @@ export const VentasCrossSelling = () => {
           <h1 className="text-3xl font-display font-semibold text-slate-100">Venta Cruzada</h1>
           <p className="text-sm text-slate-500 mt-0.5">Asistente de recomendaciones y combinaciones de productos más vendidas</p>
         </div>
-        <AlertBadge variant="info" dot>ML Activo — Filtrado Colaborativo Item-Item</AlertBadge>
+        <Badge variant="info" dot>ML Activo — Filtrado Colaborativo Item-Item</Badge>
       </div>
 
       <TopCombinacionesPanel />
@@ -32,12 +32,12 @@ export const VentasCrossSelling = () => {
       <div className="card p-6 animate-fade-in-up stagger-1">
         <h3 className="font-sans font-semibold text-slate-200 mb-4">Cliente (opcional)</h3>
         {cliente ? (
-          <AlertBadge variant="info" className="pr-1">
+          <Badge variant="info" className="pr-1">
             {cliente.nombre} <span className="font-mono text-xs opacity-70 ml-1">{cliente.cliente_id}</span>
             <button onClick={() => setCliente(null)} className="ml-1 hover:text-danger">
               <X size={12} />
             </button>
-          </AlertBadge>
+          </Badge>
         ) : (
           <Autocomplete<ClienteBusqueda>
             placeholder="Busca por cédula/RUC o nombre del cliente…"

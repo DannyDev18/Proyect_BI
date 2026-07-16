@@ -14,9 +14,6 @@ export const CHART_PALETTE = [
   '#9acd32', // --color-chart-8
 ] as const;
 
-/** @deprecated usar CHART_PALETTE */
-export const COLORS = CHART_PALETTE;
-
 export const chartTheme = {
   grid: 'rgba(255,255,255,0.06)', // --color-chart-grid
   axis: '#64748b', // --color-chart-axis / --color-text-disabled

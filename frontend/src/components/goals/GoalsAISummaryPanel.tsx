@@ -1,7 +1,7 @@
 import { AlertTriangle, TrendingUp, Sparkles } from 'lucide-react';
 import { useGoalsAISummary } from '../../hooks/goals';
 import { ChartCard } from '../ui/ChartCard';
-import { AlertBadge } from '../ui/AlertBadge';
+import { Badge } from '../ui/Badge';
 import { fmt, pct } from '../../utils/format';
 
 export function GoalsAISummaryPanel() {
@@ -27,7 +27,7 @@ export function GoalsAISummaryPanel() {
                 </p>
                 <p className="text-xs text-slate-500">{fmt(v.ventas)} / {fmt(v.meta)}</p>
               </div>
-              <AlertBadge variant="critical">{pct(v.pct_cumplimiento)} vs {pct(v.pct_esperado_a_la_fecha)} esperado</AlertBadge>
+              <Badge variant="danger">{pct(v.pct_cumplimiento)} vs {pct(v.pct_esperado_a_la_fecha)} esperado</Badge>
             </li>
           ))}
         </ul>
@@ -51,7 +51,7 @@ export function GoalsAISummaryPanel() {
                 </p>
                 <p className="text-xs text-slate-500">{fmt(v.ventas)} / {fmt(v.meta)}</p>
               </div>
-              <AlertBadge variant="success">{pct(v.pct_cumplimiento)} vs {pct(v.pct_esperado_a_la_fecha)} esperado</AlertBadge>
+              <Badge variant="success">{pct(v.pct_cumplimiento)} vs {pct(v.pct_esperado_a_la_fecha)} esperado</Badge>
             </li>
           ))}
         </ul>
@@ -75,7 +75,7 @@ export function GoalsAISummaryPanel() {
                 </p>
                 <p className="text-xs text-slate-500 font-mono">{r.producto_sugerido}</p>
               </div>
-              <AlertBadge variant="info">lift {r.score_afinidad.toFixed(1)}</AlertBadge>
+              <Badge variant="info">lift {r.score_afinidad.toFixed(1)}</Badge>
             </li>
           ))}
         </ul>

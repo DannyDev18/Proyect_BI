@@ -6,14 +6,14 @@ import type { GoalPeriodOption, GoalProposal } from "../../types/goals";
 import { Select } from "../ui/Select";
 import { Button } from "../ui/Button";
 import { DataTable, type DataTableColumn } from "../ui/DataTable";
-import { AlertBadge } from "../ui/AlertBadge";
+import { Badge } from "../ui/Badge";
 import { Drawer } from "../ui/Drawer";
 import { useToast } from "../../store/toastStore";
 import { fmtMoney, pct } from "../../utils/format";
 
-const ESTADO_BADGE: Record<string, { variant: 'success' | 'critical' | 'warning'; label: string }> = {
+const ESTADO_BADGE: Record<string, { variant: 'success' | 'danger' | 'warning'; label: string }> = {
   APROBADA: { variant: 'success', label: 'APROBADA' },
-  RECHAZADA: { variant: 'critical', label: 'RECHAZADA' },
+  RECHAZADA: { variant: 'danger', label: 'RECHAZADA' },
 };
 
 export function GoalsConsole() {
@@ -146,7 +146,7 @@ export function GoalsConsole() {
       header: 'Estado',
       render: (p) => {
         const badge = ESTADO_BADGE[p.estado] ?? { variant: 'warning' as const, label: p.estado };
-        return <AlertBadge variant={badge.variant}>{badge.label}</AlertBadge>;
+        return <Badge variant={badge.variant}>{badge.label}</Badge>;
       },
     },
     {

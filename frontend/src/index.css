@@ -119,6 +119,13 @@
   0%   { background-position: -400px 0; }
   100% { background-position: 400px 0; }
 }
+@keyframes scope-scan {
+  to { stroke-dashoffset: -800; }
+}
+@keyframes scope-scan-glow {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
 @keyframes route-enter {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -166,6 +173,8 @@
   .animate-toast-enter { animation: toast-enter var(--duration-base) var(--ease-out-soft) both; }
   .animate-row-fade    { animation: fade-in var(--duration-fast) var(--ease-out-soft) both; }
   .animate-tab-indicator { animation: tab-indicator var(--duration-fast) var(--ease-out-soft) both; }
+  .animate-scope-scan  { animation: scope-scan 6s linear infinite; }
+  .animate-scope-glow  { animation: scope-scan-glow 3s ease-in-out infinite; }
 
   /* Staggered children delays */
   .stagger-1 { animation-delay: 0.05s; }
@@ -234,7 +243,8 @@
   @media (prefers-reduced-motion: reduce) {
     .animate-fade-in-up, .animate-fade-in, .animate-pulse-slow, .skeleton,
     .animate-route-enter, .animate-drawer-enter, .animate-overlay-enter,
-    .animate-toast-enter, .animate-row-fade, .animate-tab-indicator, .stagger-children > * {
+    .animate-toast-enter, .animate-row-fade, .animate-tab-indicator, .stagger-children > *,
+    .animate-scope-scan, .animate-scope-glow {
       animation: none;
     }
   }

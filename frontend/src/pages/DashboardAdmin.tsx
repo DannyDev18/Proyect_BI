@@ -5,7 +5,7 @@ import {
   useSystemHealth,
 } from '../hooks/admin';
 import { usePagination } from '../hooks/usePagination';
-import { AlertBadge } from '../components/ui/AlertBadge';
+import { Badge } from '../components/ui/Badge';
 import { SearchInput } from '../components/ui/SearchInput';
 import { ChartCard } from '../components/ui/ChartCard';
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
@@ -36,8 +36,8 @@ const auditColumns: DataTableColumn<AuditEntry>[] = [
   { key: 'msg', header: 'Mensaje', render: (e) => <span className="text-slate-300 max-w-xs truncate block">{e.msg}</span> },
 ];
 
-const estadoBadgeVariant: Record<AnomaliaEstado, 'critical' | 'warning' | 'neutral' | 'success'> = {
-  nueva: 'critical',
+const estadoBadgeVariant: Record<AnomaliaEstado, 'danger' | 'warning' | 'neutral' | 'success'> = {
+  nueva: 'danger',
   revisada: 'neutral',
   descartada: 'neutral',
   confirmada: 'warning',
@@ -65,7 +65,7 @@ export const DashboardAdmin = () => {
     { key: 'score', header: 'Score', render: (r) => <span className="font-mono text-slate-400">{r.score.toFixed(4)}</span> },
     {
       key: 'estado', header: 'Estado',
-      render: (r) => <AlertBadge variant={estadoBadgeVariant[r.estado]}>{r.estado}</AlertBadge>,
+      render: (r) => <Badge variant={estadoBadgeVariant[r.estado]}>{r.estado}</Badge>,
     },
     {
       key: 'acciones', header: 'Acción',
@@ -120,7 +120,7 @@ export const DashboardAdmin = () => {
           <h1 className="text-3xl font-display font-semibold text-slate-100">Sistema & Administración</h1>
           <p className="text-sm text-slate-500 mt-0.5">Logs de auditoría · Estado MLOps · Detección de anomalías</p>
         </div>
-        <AlertBadge variant="success" dot>Sistema operativo</AlertBadge>
+        <Badge variant="success" dot>Sistema operativo</Badge>
       </div>
 
       {/* Main 2-column grid */}
@@ -147,9 +147,9 @@ export const DashboardAdmin = () => {
                   <div className="p-5 rounded-xl border bg-slate-800/40 border-slate-700 space-y-3">
                     <div className="flex justify-between items-center">
                       <p className="text-xs text-slate-500 uppercase tracking-widest">Resultado del análisis</p>
-                      <AlertBadge variant={anomaly.data.es_anomalia ? 'critical' : 'success'} dot>
+                      <Badge variant={anomaly.data.es_anomalia ? 'danger' : 'success'} dot>
                         {anomaly.data.es_anomalia ? 'Anomalía Detectada' : 'Transacción Normal'}
-                      </AlertBadge>
+                      </Badge>
                     </div>
                     <div className="flex gap-6">
                       <div>
@@ -196,7 +196,7 @@ export const DashboardAdmin = () => {
                       {m.r2 != null && <p className="text-xs text-slate-500 font-mono">R² = {m.r2.toFixed(2)}</p>}
                     </div>
                   </div>
-                  <AlertBadge variant={m.status === 'OK' ? 'success' : 'critical'}>{m.status}</AlertBadge>
+                  <Badge variant={m.status === 'OK' ? 'success' : 'danger'}>{m.status}</Badge>
                 </div>
               ))
             )}
@@ -209,7 +209,7 @@ export const DashboardAdmin = () => {
         <div className="flex items-center gap-3 mb-3 flex-wrap">
           <ShieldAlert size={18} className="text-slate-400" aria-hidden="true" />
           <h3 className="font-sans font-semibold text-slate-200">Triage de Anomalías</h3>
-          <AlertBadge variant="neutral">{revisiones.total} en "{revisionEstado}"</AlertBadge>
+          <Badge variant="neutral">{revisiones.total} en "{revisionEstado}"</Badge>
           <div className="ml-auto">
             <Select
               size="sm"
@@ -254,9 +254,9 @@ export const DashboardAdmin = () => {
           <Database size={18} className="text-slate-400" aria-hidden="true" />
           <h3 className="font-sans font-semibold text-slate-200">Salud del Sistema</h3>
           {health.data && (
-            <AlertBadge variant={health.data.logins_fallidos_conteo > 0 ? 'warning' : 'success'} className="ml-auto">
+            <Badge variant={health.data.logins_fallidos_conteo > 0 ? 'warning' : 'success'} className="ml-auto">
               {health.data.logins_fallidos_conteo} logins fallidos (últimas {health.data.logins_fallidos_ventana_horas}h)
-            </AlertBadge>
+            </Badge>
           )}
         </div>
 
@@ -282,7 +282,7 @@ export const DashboardAdmin = () => {
                   <tr key={e.tabla_destino} className="border-t border-slate-800">
                     <td className="py-1.5 font-mono text-slate-300">{e.tabla_destino}</td>
                     <td className="py-1.5">
-                      <AlertBadge variant={e.estado === 'SUCCESS' ? 'success' : 'critical'}>{e.estado ?? '—'}</AlertBadge>
+                      <Badge variant={e.estado === 'SUCCESS' ? 'success' : 'danger'}>{e.estado ?? '—'}</Badge>
                     </td>
                     <td className="py-1.5 text-slate-500">{e.ultimo_etl_ok ? new Date(e.ultimo_etl_ok).toLocaleString() : '—'}</td>
                     <td className="py-1.5 font-mono text-slate-400">{e.registros_cargados ?? '—'}</td>
@@ -309,7 +309,7 @@ export const DashboardAdmin = () => {
         <div className="flex items-center gap-3 mb-3">
           <FileText size={18} className="text-slate-400" aria-hidden="true" />
           <h3 className="font-sans font-semibold text-slate-200">Log de Auditoría del Sistema</h3>
-          <AlertBadge variant="neutral" className="ml-auto">{auditLogs.total} eventos</AlertBadge>
+          <Badge variant="neutral" className="ml-auto">{auditLogs.total} eventos</Badge>
         </div>
 
         <div className="card p-3 mb-3 grid grid-cols-2 md:grid-cols-4 gap-3">

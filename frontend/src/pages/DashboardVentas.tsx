@@ -4,7 +4,7 @@ import { useSalesGoals, useChurnRisk, useRecommendations, useCustomerSegment } f
 import { usePeriods } from '../hooks/goals';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
-import { AlertBadge } from '../components/ui/AlertBadge';
+import { Badge } from '../components/ui/Badge';
 import { ErrorState } from '../components/ui/ErrorState';
 import { SearchInput } from '../components/ui/SearchInput';
 import { Select } from '../components/ui/Select';
@@ -21,12 +21,12 @@ const ChurnGauge = ({ prob }: { prob: number }) => {
   const p = Math.min(100, Math.max(0, prob * 100));
   const color = p >= 70 ? 'bg-danger' : p >= 40 ? 'bg-warning' : 'bg-success';
   const label = p >= 70 ? 'Riesgo Alto' : p >= 40 ? 'Riesgo Moderado' : 'Riesgo Bajo';
-  const variant = p >= 70 ? 'critical' : p >= 40 ? 'warning' : 'success';
+  const variant = p >= 70 ? 'danger' : p >= 40 ? 'warning' : 'success';
   return (
     <div className="space-y-3">
       <div className="flex justify-between items-center">
         <span className="font-mono text-3xl font-semibold text-slate-100">{p.toFixed(1)}%</span>
-        <AlertBadge variant={variant}>{label}</AlertBadge>
+        <Badge variant={variant}>{label}</Badge>
       </div>
       <div className="h-3 bg-slate-800 rounded-full overflow-hidden">
         <div
@@ -40,11 +40,11 @@ const ChurnGauge = ({ prob }: { prob: number }) => {
 };
 
 // ─── Segment chip ─────────────────────────────────────────────────────────────
-const segmentVariant = (nombre: string): 'success' | 'info' | 'warning' | 'critical' => {
+const segmentVariant = (nombre: string): 'success' | 'info' | 'warning' | 'danger' => {
   const n = nombre.toLowerCase();
   if (n.includes('vip') || n.includes('leal')) return 'success';
   if (n.includes('nuevo')) return 'info';
-  if (n.includes('riesgo') || n.includes('inactiv')) return 'critical';
+  if (n.includes('riesgo') || n.includes('inactiv')) return 'danger';
   return 'warning';
 };
 
@@ -105,7 +105,7 @@ export const DashboardVentas = () => {
               </option>
             ))}
           </Select>
-          <AlertBadge variant="info" dot>ML Activo — K-Means + Random Forest</AlertBadge>
+          <Badge variant="info" dot>ML Activo — K-Means + Random Forest</Badge>
         </div>
       </div>
 
@@ -154,9 +154,9 @@ export const DashboardVentas = () => {
           >
             {seg.data && (
               <div className="flex flex-col items-center justify-center h-full gap-4">
-                <AlertBadge variant={segmentVariant(seg.data.nombre_segmento)} className="text-base px-4 py-2">
+                <Badge variant={segmentVariant(seg.data.nombre_segmento)} className="text-base px-4 py-2">
                   {seg.data.nombre_segmento}
-                </AlertBadge>
+                </Badge>
                 <p className="text-xs text-slate-500 font-mono">Cluster #{seg.data.segmento} · Cliente: {seg.data.cliente_id}</p>
               </div>
             )}
@@ -196,7 +196,7 @@ export const DashboardVentas = () => {
                       <p className="text-xs text-slate-500 font-mono">{r.producto_cod}</p>
                     </div>
                     {r.confianza != null && (
-                      <AlertBadge variant="info">{(r.confianza * 100).toFixed(0)}%</AlertBadge>
+                      <Badge variant="info">{(r.confianza * 100).toFixed(0)}%</Badge>
                     )}
                   </li>
                 ))}

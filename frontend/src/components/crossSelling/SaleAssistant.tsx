@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import { ChartCard } from '../ui/ChartCard';
 import { Autocomplete } from '../ui/Autocomplete';
-import { AlertBadge } from '../ui/AlertBadge';
+import { Badge } from '../ui/Badge';
 import { SuggestionCard } from './SuggestionCard';
 import { useCrossSellSugerencias, useSearchProductos } from '../../hooks/crossSelling';
 import type { ProductoBusqueda, SugerenciaProducto } from '../../types/crossSelling';
@@ -70,12 +70,12 @@ export const SaleAssistant = ({ clienteId }: SaleAssistantProps) => {
         {canasta.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {canasta.map((item) => (
-              <AlertBadge key={item.codart} variant="info" className="pr-1">
+              <Badge key={item.codart} variant="info" className="pr-1">
                 {item.nombre}
                 <button onClick={() => quitarDeCanasta(item.codart)} className="ml-1 hover:text-danger">
                   <X size={12} />
                 </button>
-              </AlertBadge>
+              </Badge>
             ))}
           </div>
         )}

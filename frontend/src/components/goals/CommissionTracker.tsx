@@ -6,13 +6,13 @@ import type { GoalPeriodOption, NivelComision, VendorCommissionRow } from '../..
 import { fmtMoney, pct } from '../../utils/format';
 import { Select } from '../ui/Select';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
-import { AlertBadge } from '../ui/AlertBadge';
+import { Badge } from '../ui/Badge';
 
-const NIVEL_VARIANT: Record<NivelComision, 'success' | 'info' | 'warning' | 'critical'> = {
+const NIVEL_VARIANT: Record<NivelComision, 'success' | 'info' | 'warning' | 'danger'> = {
   EXCELENTE: 'success',
   META: 'info',
   CERCA: 'warning',
-  LEJOS: 'critical',
+  LEJOS: 'danger',
 };
 
 const NIVEL_LABEL: Record<NivelComision, string> = {
@@ -62,7 +62,7 @@ export function CommissionTracker() {
     {
       key: 'nivel',
       header: 'Nivel',
-      render: (f) => <AlertBadge variant={NIVEL_VARIANT[f.nivel]}>{NIVEL_LABEL[f.nivel]}</AlertBadge>,
+      render: (f) => <Badge variant={NIVEL_VARIANT[f.nivel]}>{NIVEL_LABEL[f.nivel]}</Badge>,
     },
     { key: 'tasa', header: 'Tasa', render: (f) => <span className="text-slate-400">{f.tasa_aplicada_pct.toFixed(2)}%</span> },
     {

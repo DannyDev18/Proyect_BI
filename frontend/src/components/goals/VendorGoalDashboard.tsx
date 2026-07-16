@@ -5,7 +5,7 @@ import {
 } from '../../hooks/ventas';
 import { KpiCard, KpiCardSkeleton } from '../ui/KpiCard';
 import { ChartCard } from '../ui/ChartCard';
-import { AlertBadge } from '../ui/AlertBadge';
+import { Badge } from '../ui/Badge';
 import { GoalProgressGauge } from './GoalProgressGauge';
 import { fmt, fmtMoney, pct } from '../../utils/format';
 import type { NivelComision } from '../../types/ventas';
@@ -14,8 +14,8 @@ type EstadoMeta = 'riesgo' | 'cerca' | 'proxima' | 'alcanzada';
 
 // Umbrales fijados por el diseño del dashboard vendedor (no son un cálculo de negocio
 // derivado de datos -- son las bandas de estado a mostrar, ya definidas por el enunciado).
-const ESTADO_CONFIG: Record<EstadoMeta, { label: string; barColor: string; badgeVariant: 'critical' | 'warning' | 'info' | 'success' }> = {
-  riesgo:    { label: 'Riesgo',         barColor: 'bg-danger',   badgeVariant: 'critical' },
+const ESTADO_CONFIG: Record<EstadoMeta, { label: string; barColor: string; badgeVariant: 'danger' | 'warning' | 'info' | 'success' }> = {
+  riesgo:    { label: 'Riesgo',         barColor: 'bg-danger',   badgeVariant: 'danger' },
   cerca:     { label: 'Cerca',          barColor: 'bg-warning', badgeVariant: 'warning' },
   proxima:   { label: 'Meta próxima',   barColor: 'bg-info',  badgeVariant: 'info' },
   alcanzada: { label: 'Meta alcanzada', barColor: 'bg-success', badgeVariant: 'success' },
@@ -30,8 +30,8 @@ const estadoDeMeta = (cumplimientoPct: number): EstadoMeta => {
 
 // Mismos 4 niveles que commission_engine.py::NivelCumplimiento -- la fuente de verdad del
 // tramo es el backend, esto solo mapea la etiqueta a mostrar y su color.
-const NIVEL_CONFIG: Record<NivelComision, { label: string; badgeVariant: 'critical' | 'warning' | 'info' | 'success' }> = {
-  LEJOS:     { label: 'Lejos',     badgeVariant: 'critical' },
+const NIVEL_CONFIG: Record<NivelComision, { label: string; badgeVariant: 'danger' | 'warning' | 'info' | 'success' }> = {
+  LEJOS:     { label: 'Lejos',     badgeVariant: 'danger' },
   CERCA:     { label: 'Cerca',     badgeVariant: 'warning' },
   META:      { label: 'Meta',      badgeVariant: 'info' },
   EXCELENTE: { label: 'Excelente', badgeVariant: 'success' },
@@ -60,7 +60,7 @@ export const VendorGoalDashboard = () => {
           <h1 className="text-3xl font-display font-semibold text-slate-100">Mi Meta y Comisión</h1>
           <p className="text-sm text-slate-500 mt-0.5">Período vigente</p>
         </div>
-        <AlertBadge variant="info" dot>Datos en vivo — EDW</AlertBadge>
+        <Badge variant="info" dot>Datos en vivo — EDW</Badge>
       </div>
 
       {error && <div className="card p-4 text-danger text-sm">{error}</div>}
@@ -85,7 +85,7 @@ export const VendorGoalDashboard = () => {
           <GoalProgressGauge pctCumplimiento={cumplimientoPct} />
           <div className="flex flex-col items-center gap-2 -mt-2">
             <span className="font-mono text-3xl font-semibold text-slate-100">{pct(cumplimientoPct)}</span>
-            <AlertBadge variant={estado.badgeVariant}>{estado.label}</AlertBadge>
+            <Badge variant={estado.badgeVariant}>{estado.label}</Badge>
           </div>
           {comision.data?.mensaje_alerta && (
             <p className={`text-sm mt-2 text-center ${comision.data.en_alerta_cierre ? 'text-warning' : 'text-success'}`}>
@@ -241,7 +241,7 @@ export const VendorGoalDashboard = () => {
                   <Sparkles size={13} className="text-warning" aria-hidden="true" />
                   <p className="text-sm font-medium text-slate-200 font-mono">{r.producto_cod}</p>
                 </div>
-                <AlertBadge variant="info">lift {r.score_afinidad.toFixed(1)}</AlertBadge>
+                <Badge variant="info">lift {r.score_afinidad.toFixed(1)}</Badge>
               </li>
             ))}
           </ul>
@@ -260,7 +260,7 @@ export const VendorGoalDashboard = () => {
           <div className="flex flex-col h-full gap-3">
             <div className="flex items-center justify-center gap-2">
               <Trophy size={20} className="text-warning" aria-hidden="true" />
-              <AlertBadge variant="success">¡Meta alcanzada este período!</AlertBadge>
+              <Badge variant="success">¡Meta alcanzada este período!</Badge>
             </div>
             {postMeta.data.length === 0 ? (
               <p className="text-slate-500 text-sm text-center mt-4">Aún no hay facturas registradas después de cruzar la meta.</p>

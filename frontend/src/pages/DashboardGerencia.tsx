@@ -12,8 +12,9 @@ import {
 import { descargarReporteDashboardExcel } from '../services/gerencia';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
-import { AlertBadge } from '../components/ui/AlertBadge';
+import { Badge } from '../components/ui/Badge';
 import { Select } from '../components/ui/Select';
+import { FilterBar, FilterField } from '../components/ui/FilterBar';
 import { Button } from '../components/ui/Button';
 import { ChartTooltip } from '../components/ui/ChartTooltip';
 import { ErrorState } from '../components/ui/ErrorState';
@@ -81,7 +82,7 @@ export const DashboardGerencia = () => {
 
   const salud = kpi.data?.roi_estimado;
   const saludVariant = salud
-    ? salud >= 20 ? 'success' : salud >= 10 ? 'warning' : 'critical'
+    ? salud >= 20 ? 'success' : salud >= 10 ? 'warning' : 'danger'
     : 'neutral';
 
   return (
@@ -93,9 +94,9 @@ export const DashboardGerencia = () => {
           <p className="text-sm text-slate-500 mt-0.5">Datos consolidados del Data Warehouse · Modo tiempo real</p>
         </div>
         <div className="flex items-center gap-2">
-          <AlertBadge variant="info" dot>
+          <Badge variant="info" dot>
             Modelo {pred.data?.metricas.algoritmo ?? 'ML'} activo
-          </AlertBadge>
+          </Badge>
           <Button
             variant="success" size="sm" onClick={exportarExcel} disabled={kpi.loading}
             loading={descargando} icon={!descargando ? <FileSpreadsheet size={14} aria-hidden="true" /> : undefined}
@@ -113,64 +114,73 @@ export const DashboardGerencia = () => {
       </div>
 
       {/* Filter Bar */}
-      <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700/50 flex flex-wrap gap-4 items-center print:hidden">
+      <FilterBar className="print:hidden">
         <div className="flex items-center gap-2 text-slate-400">
           <Filter className="w-4 h-4" />
           <span className="text-sm font-medium">Filtros:</span>
         </div>
 
-        <input
-          type="date"
-          value={filters.start_date}
-          onChange={(e) => setFilters(f => ({ ...f, start_date: e.target.value }))}
-          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus-ring"
-          title="Fecha de Inicio"
-        />
-        <span className="text-slate-500">-</span>
-        <input
-          type="date"
-          value={filters.end_date}
-          onChange={(e) => setFilters(f => ({ ...f, end_date: e.target.value }))}
-          className="bg-slate-900 border border-slate-700 text-sm text-slate-300 rounded p-1.5 focus-ring"
-          title="Fecha de Fin"
-        />
+        <FilterField label="Desde" htmlFor="gerencia-fecha-desde">
+          <input
+            id="gerencia-fecha-desde"
+            type="date"
+            value={filters.start_date}
+            onChange={(e) => setFilters(f => ({ ...f, start_date: e.target.value }))}
+            className="bg-slate-950 border border-slate-700 text-sm text-slate-300 rounded-md px-3 py-1.5 focus-ring"
+          />
+        </FilterField>
+        <FilterField label="Hasta" htmlFor="gerencia-fecha-hasta">
+          <input
+            id="gerencia-fecha-hasta"
+            type="date"
+            value={filters.end_date}
+            onChange={(e) => setFilters(f => ({ ...f, end_date: e.target.value }))}
+            className="bg-slate-950 border border-slate-700 text-sm text-slate-300 rounded-md px-3 py-1.5 focus-ring"
+          />
+        </FilterField>
 
-        <Select
-          aria-label="Filtrar por vendedor"
-          value={filters.vendedor}
-          onChange={(e) => setFilters(f => ({ ...f, vendedor: e.target.value }))}
-          className="min-w-[150px]"
-        >
-          <option value="">Todos los Vendedores</option>
-          {vendedoresLista?.map(vend => (
-            <option key={vend} value={vend}>{vend}</option>
-          ))}
-        </Select>
+        <FilterField label="Vendedor">
+          <Select
+            aria-label="Filtrar por vendedor"
+            value={filters.vendedor}
+            onChange={(e) => setFilters(f => ({ ...f, vendedor: e.target.value }))}
+            className="min-w-[150px]"
+          >
+            <option value="">Todos los Vendedores</option>
+            {vendedoresLista?.map(vend => (
+              <option key={vend} value={vend}>{vend}</option>
+            ))}
+          </Select>
+        </FilterField>
 
-        <Select
-          aria-label="Filtrar por categoría"
-          value={filters.categoria}
-          onChange={(e) => setFilters(f => ({ ...f, categoria: e.target.value }))}
-          className="min-w-[150px]"
-        >
-          <option value="">Todas las Categorías</option>
-          {categoriasLista?.map(cat => (
-            <option key={cat} value={cat}>{cat}</option>
-          ))}
-        </Select>
+        <FilterField label="Categoría">
+          <Select
+            aria-label="Filtrar por categoría"
+            value={filters.categoria}
+            onChange={(e) => setFilters(f => ({ ...f, categoria: e.target.value }))}
+            className="min-w-[150px]"
+          >
+            <option value="">Todas las Categorías</option>
+            {categoriasLista?.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </Select>
+        </FilterField>
 
-        <Select
-          aria-label="Filtrar por almacén"
-          value={filters.almacen}
-          onChange={(e) => setFilters(f => ({ ...f, almacen: e.target.value }))}
-          className="min-w-[150px]"
-        >
-          <option value="">Todos los Almacenes</option>
-          {almacenesLista?.map(alm => (
-            <option key={alm} value={alm}>{alm}</option>
-          ))}
-        </Select>
-      </div>
+        <FilterField label="Almacén">
+          <Select
+            aria-label="Filtrar por almacén"
+            value={filters.almacen}
+            onChange={(e) => setFilters(f => ({ ...f, almacen: e.target.value }))}
+            className="min-w-[150px]"
+          >
+            <option value="">Todos los Almacenes</option>
+            {almacenesLista?.map(alm => (
+              <option key={alm} value={alm}>{alm}</option>
+            ))}
+          </Select>
+        </FilterField>
+      </FilterBar>
 
       {/* KPI Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 stagger-children">
@@ -213,7 +223,7 @@ export const DashboardGerencia = () => {
               trend={
                 kpi.data?.roi_estimado_tendencia_pct != null
                   ? tendencia(kpi.data.roi_estimado_tendencia_pct).trend
-                  : saludVariant === 'success' ? 'up' : saludVariant === 'critical' ? 'down' : 'neutral'
+                  : saludVariant === 'success' ? 'up' : saludVariant === 'danger' ? 'down' : 'neutral'
               }
               subValue={tendencia(kpi.data?.roi_estimado_tendencia_pct).subValue}
             />

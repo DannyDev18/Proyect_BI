@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeftRight, ArrowLeft, CheckCircle2, Eye, ShoppingCart, XCircle } from 'lucide-react';
-import { AlertBadge } from '../components/ui/AlertBadge';
+import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { Drawer } from '../components/ui/Drawer';
@@ -13,8 +13,8 @@ import { useBodegaFiltersStore, toQueryFilters } from '../store/bodegaFiltersSto
 import { fmt } from '../utils/format';
 import type { EstadoStock, ProductoCompra, ProductoMatrizAlmacen, TransferenciaSugerida } from '../types/bodega';
 
-const estadoBadge: Record<EstadoStock, 'critical' | 'warning' | 'neutral' | 'info'> = {
-  'Crítico': 'critical', 'Cerca': 'warning', 'Seguro': 'neutral', 'Exceso': 'info',
+const estadoBadge: Record<EstadoStock, 'danger' | 'warning' | 'neutral' | 'info'> = {
+  'Crítico': 'danger', 'Cerca': 'warning', 'Seguro': 'neutral', 'Exceso': 'info',
 };
 
 // Tinte de fila por estado (heat-map ligero, mismo patrón que `rowClassName` en DashboardBodega).
@@ -66,9 +66,9 @@ export const BodegaAlmacenes = () => {
     {
       key: 'prioridad', header: 'Prioridad',
       render: (p) => (
-        <AlertBadge variant={p.prioridad === 'Alta' ? 'critical' : p.prioridad === 'Media' ? 'warning' : 'neutral'}>
+        <Badge variant={p.prioridad === 'Alta' ? 'danger' : p.prioridad === 'Media' ? 'warning' : 'neutral'}>
           {p.prioridad}
-        </AlertBadge>
+        </Badge>
       ),
     },
   ];
@@ -93,7 +93,7 @@ export const BodegaAlmacenes = () => {
     })),
     { key: 'total', header: 'Total', numeric: true, render: (p) => <span className="font-semibold text-slate-100">{p.stock_total.toLocaleString('es-EC')}</span> },
     { key: 'reorden', header: 'Reorden', numeric: true, render: (p) => <span className="text-slate-400">{p.punto_reorden}</span> },
-    { key: 'estado', header: 'Estado', render: (p) => <AlertBadge variant={estadoBadge[p.estado]}>{p.estado}</AlertBadge> },
+    { key: 'estado', header: 'Estado', render: (p) => <Badge variant={estadoBadge[p.estado]}>{p.estado}</Badge> },
   ], [almacenes]);
 
   const transferenciasColumns: DataTableColumn<TransferenciaSugerida>[] = [
@@ -127,17 +127,17 @@ export const BodegaAlmacenes = () => {
     {
       key: 'prioridad', header: 'Prioridad',
       render: (t) => (
-        <AlertBadge variant={t.prioridad === 'Alta' ? 'critical' : t.prioridad === 'Media' ? 'warning' : 'neutral'}>
+        <Badge variant={t.prioridad === 'Alta' ? 'danger' : t.prioridad === 'Media' ? 'warning' : 'neutral'}>
           {t.prioridad}
-        </AlertBadge>
+        </Badge>
       ),
     },
     {
       key: 'confianza', header: 'Confianza',
       render: (t) => t.confianza ? (
-        <AlertBadge variant={t.confianza === 'alta' ? 'neutral' : t.confianza === 'media' ? 'warning' : 'critical'}>
+        <Badge variant={t.confianza === 'alta' ? 'neutral' : t.confianza === 'media' ? 'warning' : 'danger'}>
           {t.confianza === 'baja' ? 'Baja · revisar' : t.confianza.charAt(0).toUpperCase() + t.confianza.slice(1)}
-        </AlertBadge>
+        </Badge>
       ) : <span className="text-xs text-slate-600">—</span>,
     },
     {
@@ -354,16 +354,16 @@ export const BodegaAlmacenes = () => {
             <div className="flex items-center gap-3">
               <div>
                 <p className="text-[11px] uppercase tracking-widest text-slate-500">Prioridad</p>
-                <AlertBadge variant={detalle.prioridad === 'Alta' ? 'critical' : detalle.prioridad === 'Media' ? 'warning' : 'neutral'}>
+                <Badge variant={detalle.prioridad === 'Alta' ? 'danger' : detalle.prioridad === 'Media' ? 'warning' : 'neutral'}>
                   {detalle.prioridad}
-                </AlertBadge>
+                </Badge>
               </div>
               {detalle.confianza && (
                 <div>
                   <p className="text-[11px] uppercase tracking-widest text-slate-500">Confianza estadística</p>
-                  <AlertBadge variant={detalle.confianza === 'alta' ? 'neutral' : detalle.confianza === 'media' ? 'warning' : 'critical'}>
+                  <Badge variant={detalle.confianza === 'alta' ? 'neutral' : detalle.confianza === 'media' ? 'warning' : 'danger'}>
                     {detalle.confianza === 'baja' ? 'Baja · revisar manualmente' : detalle.confianza.charAt(0).toUpperCase() + detalle.confianza.slice(1)}
-                  </AlertBadge>
+                  </Badge>
                 </div>
               )}
             </div>

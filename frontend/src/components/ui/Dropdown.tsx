@@ -7,6 +7,7 @@ interface DropdownProps {
   trigger: (props: { open: boolean; toggle: () => void }) => ReactNode;
   children: ReactNode;
   align?: 'start' | 'end';
+  placement?: 'bottom' | 'top';
   className?: string;
   panelClassName?: string;
 }
@@ -14,7 +15,7 @@ interface DropdownProps {
 /** Menú desplegable accesible (F2, D-4): cierre por click-fuera/Escape, navegación
  * por flechas entre `[role="menuitem"]`, usado por el menú de usuario (F3) y las
  * acciones agrupadas de fila en tablas (F5). */
-export const Dropdown = ({ trigger, children, align = 'start', className = '', panelClassName = '' }: DropdownProps) => {
+export const Dropdown = ({ trigger, children, align = 'start', placement = 'bottom', className = '', panelClassName = '' }: DropdownProps) => {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -73,7 +74,8 @@ export const Dropdown = ({ trigger, children, align = 'start', className = '', p
             {...slideFromTop}
             ref={panelRef}
             role="menu"
-            className={`absolute z-50 mt-2 min-w-[200px] rounded-xl border border-border glass-elevated shadow-2xl overflow-hidden py-1.5
+            className={`absolute z-50 min-w-[200px] rounded-xl border border-border glass-elevated shadow-2xl overflow-hidden py-1.5
+              ${placement === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'}
               ${align === 'end' ? 'right-0' : 'left-0'} ${panelClassName}`}
             onClick={(e) => {
               const target = (e.target as HTMLElement).closest('[role="menuitem"]');

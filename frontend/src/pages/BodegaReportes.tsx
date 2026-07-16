@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, FileDown, FileSpreadsheet, Printer } from 'lucide-react';
-import { AlertBadge } from '../components/ui/AlertBadge';
+import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { BodegaFilterBar } from '../components/bodega/BodegaFilterBar';
 import { useReporteBodega } from '../hooks/bodega';
@@ -38,8 +38,8 @@ const tonoCls: Record<TonoKpi, string> = {
 };
 
 const RESALTAR_VALORES = new Set(['Alta', 'Crítico']);
-const BADGE_VARIANT: Record<string, 'critical' | 'warning' | 'info' | 'success' | 'neutral'> = {
-  alta: 'critical', crítico: 'critical',
+const BADGE_VARIANT: Record<string, 'danger' | 'warning' | 'info' | 'success' | 'neutral'> = {
+  alta: 'danger', crítico: 'danger',
   media: 'warning', cerca: 'warning', baja: 'neutral',
   seguro: 'success', exceso: 'info',
 };
@@ -48,7 +48,7 @@ const fmtCelda = (valor: unknown, columna: ColumnaReporte): React.ReactNode => {
   if (valor === null || valor === undefined || valor === '') return '—';
   if (columna.tipo === 'badge') {
     const variant = BADGE_VARIANT[String(valor).toLowerCase()] ?? 'neutral';
-    return <AlertBadge variant={variant}>{String(valor)}</AlertBadge>;
+    return <Badge variant={variant}>{String(valor)}</Badge>;
   }
   if (columna.tipo === 'moneda' && typeof valor === 'number') {
     return valor.toLocaleString('es-EC', { style: 'currency', currency: 'USD' });

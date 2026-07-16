@@ -12,12 +12,12 @@ import { Tabs } from '../ui/Tabs';
 import { Button } from '../ui/Button';
 import { Select } from '../ui/Select';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
-import { AlertBadge } from '../ui/AlertBadge';
+import { Badge } from '../ui/Badge';
 import { useToast } from '../../store/toastStore';
 
 const GRUPOS: GrupoComision[] = ['A', 'B', 'C', 'S', 'X'];
-const GRUPO_VARIANT: Record<GrupoComision, 'success' | 'info' | 'warning' | 'critical'> = {
-  A: 'success', B: 'info', C: 'warning', S: 'info', X: 'critical',
+const GRUPO_VARIANT: Record<GrupoComision, 'success' | 'info' | 'warning' | 'danger'> = {
+  A: 'success', B: 'info', C: 'warning', S: 'info', X: 'danger',
 };
 
 /** Panel de configuración de gerencia para el sistema de Comisiones Variables
@@ -106,7 +106,7 @@ function MatrizTab() {
   const columns: DataTableColumn<MatrizCategoria>[] = [
     { key: 'clase', header: 'Clase', headerTitle: 'Código de producto (dim_producto.clase). * = comodín default.', render: (r) => <span className="font-mono text-slate-200">{r.clase}</span> },
     { key: 'subclase', header: 'Subclase', headerTitle: 'Código de subclase; vacío = aplica a toda la clase.', render: (r) => <span className="font-mono text-slate-500">{r.subclase ?? 'Toda la clase'}</span> },
-    { key: 'grupo', header: 'Grupo', headerTitle: 'A/B/C = categorías normales, S = servicio, X = excluido (no comisiona).', render: (r) => <AlertBadge variant={GRUPO_VARIANT[r.grupo]}>{r.grupo}</AlertBadge> },
+    { key: 'grupo', header: 'Grupo', headerTitle: 'A/B/C = categorías normales, S = servicio, X = excluido (no comisiona).', render: (r) => <Badge variant={GRUPO_VARIANT[r.grupo]}>{r.grupo}</Badge> },
     { key: 'tasa_pct', header: 'Tasa', headerTitle: '% aplicado sobre la base para calcular la comisión de la línea.', numeric: true, render: (r) => <span className="font-mono">{r.tasa_pct.toFixed(2)}%</span> },
     { key: 'base', header: 'Base', headerTitle: 'Monto sobre el que se aplica la tasa: margen bruto o valor de venta.', render: (r) => <span className="text-slate-400">{r.base === 'margen' ? 'Margen bruto' : 'Valor de venta'}</span> },
     { key: 'factor_estrategico', header: 'Factor estratégico', headerTitle: 'Multiplicador 0.5x-1.5x sobre la comisión ya calculada; 1.00x = neutro.', numeric: true, render: (r) => <span className="font-mono">{r.factor_estrategico.toFixed(2)}x</span> },

@@ -202,6 +202,8 @@ export const BodegaAlmacenes = () => {
           error={matriz.error ?? undefined}
           onRetry={matriz.refetch}
           rowClassName={(p) => estadoRowTint[p.estado]}
+          stickyFirstColumn
+          responsive
           maxHeight="max-h-[480px]"
           emptyTitle="Sin artículos que reportar"
           emptyDescription="No hay artículos con los filtros actuales."
@@ -236,6 +238,7 @@ export const BodegaAlmacenes = () => {
           error={transferencias.error ?? undefined}
           onRetry={transferencias.refetch}
           rowClassName={(t) => decisiones[`${t.codart}-${t.almacen_origen}-${t.almacen_destino}`] === 'rechazada' ? 'opacity-40' : ''}
+          responsive
           maxHeight="max-h-[420px]"
           emptyTitle="Sin transferencias sugeridas"
           emptyDescription="No hay transferencias sugeridas con los filtros actuales."

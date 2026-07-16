@@ -177,6 +177,8 @@ export const UsersManagement = () => {
   const columns: DataTableColumn<UserData>[] = [
     {
       key: 'usuario', header: 'Usuario',
+      sortable: true,
+      sortAccessor: (u) => u.nombre.toLowerCase(),
       render: (u) => (
         <div className="flex items-center">
           <div className="h-10 w-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-300 font-bold uppercase shrink-0">
@@ -191,6 +193,8 @@ export const UsersManagement = () => {
     },
     {
       key: 'rol', header: 'Rol & Contexto',
+      sortable: true,
+      sortAccessor: (u) => u.role.nombre,
       render: (u) => (
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`px-2.5 py-1 text-xs font-semibold rounded-md border ${roleBadge[u.role.nombre] ?? 'bg-info/10 text-info border-info/20'}`}>
@@ -216,6 +220,8 @@ export const UsersManagement = () => {
     },
     {
       key: 'estado', header: 'Estado',
+      sortable: true,
+      sortAccessor: (u) => (u.es_activo ? 1 : 0),
       render: (u) => (
         <button
           type="button"
@@ -277,6 +283,7 @@ export const UsersManagement = () => {
         emptyTitle="Sin usuarios que mostrar"
         emptyDescription="Ajusta la búsqueda o crea el primer usuario del sistema."
         maxHeight="max-h-none"
+        responsive
       />
 
       <Drawer open={isDrawerOpen} onClose={() => setIsDrawerOpen(false)} title={modalMode === 'create' ? 'Crear nuevo usuario' : 'Editar usuario'}>

@@ -161,26 +161,32 @@ function MatrizTab() {
             </button>
           </div>
         )}
-        <Field label="Clase (código)" help="Código de dim_producto.clase, ej. BAT (baterías). '*' = regla comodín que aplica cuando ningún otro código coincide.">
+        <Field label="Clase (código)" help="Código de dim_producto.clase, ej. BAT (baterías). Busca por código para elegir la clase; usa '*' como regla comodín escribiéndolo en el buscador.">
           <div className="w-52 flex flex-col gap-1.5">
-            {!editing && (
-              <Autocomplete<ClaseBusqueda>
-                placeholder="Buscar clase existente…"
-                loading={claseSearch.loading}
-                options={claseSearch.data}
-                getKey={(c) => c.clase}
-                renderOption={(c) => (
-                  <span className="flex items-center justify-between gap-3">
-                    <span className="font-mono text-slate-200">{c.clase}</span>
-                    <span className="text-slate-500 text-xs">{c.productos} producto{c.productos === 1 ? '' : 's'}</span>
-                  </span>
-                )}
-                onQueryChange={setClaseQuery}
-                onSelect={(c) => setForm({ ...form, clase: c.clase })}
-              />
+            {editing ? (
+              <div className="input-field w-52 flex items-center font-mono text-slate-300">
+                {form.clase}{form.subclase ? ` / ${form.subclase}` : ''}
+              </div>
+            ) : (
+              <>
+                <Autocomplete<ClaseBusqueda>
+                  placeholder="Buscar clase existente… (o escribe '*' para el comodín)"
+                  minChars={1}
+                  loading={claseSearch.loading}
+                  options={claseSearch.data}
+                  getKey={(c) => c.clase}
+                  renderOption={(c) => (
+                    <span className="flex items-center justify-between gap-3">
+                      <span className="font-mono text-slate-200">{c.clase}</span>
+                      <span className="text-slate-500 text-xs">{c.productos} producto{c.productos === 1 ? '' : 's'}</span>
+                    </span>
+                  )}
+                  onQueryChange={(q) => { setClaseQuery(q); if (q) setForm({ ...form, clase: q.toUpperCase() }); }}
+                  onSelect={(c) => setForm({ ...form, clase: c.clase })}
+                />
+                {form.clase && <span className="text-xs text-info font-mono">Seleccionada: {form.clase}</span>}
+              </>
             )}
-            <input value={form.clase} onChange={(e) => setForm({ ...form, clase: e.target.value })}
-              placeholder="Ej. BAT / *" className="input-field w-28" disabled={!!editing} />
           </div>
         </Field>
         <Field label="Subclase (opcional)" help="Código de dim_producto.subclase. Déjalo vacío para que la regla aplique a toda la clase, sin distinguir subclase.">
@@ -403,12 +409,11 @@ function VendedoresTab() {
               onQueryChange={setVendedorQuery}
               onSelect={(v) => { setNuevo({ ...nuevo, vendedor: v.codven }); setNuevoNombre(v.nombre_vendedor); }}
             />
-            <input
-              value={nuevo.vendedor}
-              onChange={(e) => { setNuevo({ ...nuevo, vendedor: e.target.value }); setNuevoNombre(null); }}
-              placeholder="Ej. VEN01" className="input-field w-28"
-            />
-            {nuevoNombre && <span className="text-xs text-info">{nuevoNombre}</span>}
+            {nuevo.vendedor && (
+              <span className="text-xs text-info font-mono">
+                Seleccionado: {nuevo.vendedor}{nuevoNombre ? ` — ${nuevoNombre}` : ''}
+              </span>
+            )}
           </div>
         </Field>
         <Field label="Tipo" help="Externo = vendedor de campo/distribuidor (factor típico 1.0x); Interno = vendedor de mostrador/oficina (factor típico 0.70x, suele tener menor riesgo/esfuerzo comercial).">

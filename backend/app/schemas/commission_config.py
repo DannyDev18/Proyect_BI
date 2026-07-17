@@ -62,6 +62,7 @@ class FactoresCreditoResponse(BaseModel):
 # ── Configuración por vendedor ──────────────────────────────────────────────────
 class ConfigVendedorResponse(BaseModel):
     id_vendedor_origen: str
+    nombre_vendedor: Optional[str] = None
     tipo: str
     factor_tipo: float
     fecha_ingreso: Optional[datetime.date] = None
@@ -76,6 +77,17 @@ class ConfigVendedorPayload(BaseModel):
 
 class ConfigVendedoresResponse(BaseModel):
     vendedores: List[ConfigVendedorResponse]
+
+
+# ── Búsqueda inteligente (autocomplete) ─────────────────────────────────────────
+class VendedorBusqueda(BaseModel):
+    codven: str
+    nombre_vendedor: Optional[str] = None
+
+
+class ClaseBusqueda(BaseModel):
+    clase: str
+    productos: int
 
 
 # ── Simulación retroactiva (Fase 2) ─────────────────────────────────────────────
@@ -133,3 +145,19 @@ class LineaSinCostoResponse(BaseModel):
 
 class LineasSinCostoResponse(BaseModel):
     lineas: List[LineaSinCostoResponse]
+
+
+# ── Bitácora de cambios de configuración (Fase 2 ítem 2, plan_actualizacion_modulo_
+# metas_comisiones.md §3) ────────────────────────────────────────────────────────
+class ComisionConfigAuditoriaResponse(BaseModel):
+    id: int
+    usuario_id: Optional[int]
+    usuario_nombre: Optional[str]
+    tabla: str
+    accion: str
+    detalle_json: dict
+    fecha_creacion: datetime.datetime
+
+
+class ComisionConfigAuditoriaListResponse(BaseModel):
+    entradas: List[ComisionConfigAuditoriaResponse]

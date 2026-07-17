@@ -8,13 +8,18 @@ from app.api.dependencies import (
     GoalMLServiceDep, GoalsServiceDep, resolve_sucursal_filter,
 )
 from app.core.deps import CurrentUserDep, PermissionChecker
-from app.schemas.commission import CommissionTrackingResponse, VendorCommissionRowResponse
+from app.schemas.commission import (
+    CommissionTrackingResponse, CumplimientoMetaPeriodoResponse, VendorCommissionRowResponse,
+)
 from app.schemas.commission_config import (
+    ClaseBusqueda, ComisionConfigAuditoriaListResponse, ComisionConfigAuditoriaResponse,
     ConfigVendedorPayload, ConfigVendedoresResponse, ConfigVendedorResponse, FactorCreditoResponse,
     FactoresCreditoPayload, FactoresCreditoResponse, LineasSinCostoResponse, LineaSinCostoResponse,
     MatrizCategoriaPayload, MatrizCategoriaResponse, MatrizCategoriasResponse, PerfilCategoriaResponse,
     PerfilCategoriasResponse, SimulacionRequest, SimulacionResponse, SimulacionVendedorMesResponse,
+    VendedorBusqueda,
 )
+from app.schemas.analytics import MetaSugeridaResponse
 from app.schemas.goal import (
     CategoryRecommendationItem, GoalReviewPayload, GoalsAISummaryResponse, GoalTrackingResponse, VendorRiskItem,
 )
@@ -33,6 +38,22 @@ sucursal_gerencia = resolve_sucursal_filter(allow_override=True)
 def get_goals_tracking(anio: int, mes: int, goals_service: GoalsServiceDep) -> GoalTrackingResponse:
     reporte = goals_service.get_commission_tracking(anio=anio, mes=mes)
     return GoalTrackingResponse(reporte_cumplimiento=reporte)
+
+
+@router.get(
+    "/meta-sugerida", response_model=MetaSugeridaResponse, dependencies=[Depends(only_management)],
+    summary="Desglose del motor estadístico para un vendedor (transparencia del cálculo IQR)",
+)
+def get_meta_sugerida_vendedor(vendedor_origen: str, goal_ml_service: GoalMLServiceDep) -> MetaSugeridaResponse:
+    """Fase 2 Metas (docs/features/plan_correcciones_pendientes.md §3): expone la misma
+    trazabilidad que `SugerenciaMeta`/`IQRGoalCalculationEngine` ya calculaba pero
+    descartaba tras `generate_proposals` -- método, meses de histórico usados, picos
+    recortados por IQR, componente estacional/tendencia, factor de tendencia aplicado.
+    Equivalente gerencial de `GET /analytics/ventas/goals/meta-sugerida` (esa usa
+    `current_user.id_vendedor_origen`; esta acepta cualquier `vendedor_origen` para que
+    el drawer de revisión de gerencia pueda mostrar el desglose de cualquier fila)."""
+    resultado = goal_ml_service.suggest_goal(vendedor_origen)
+    return MetaSugeridaResponse(**resultado.__dict__)
 
 
 @router.get(
@@ -97,6 +118,20 @@ def get_commissions(anio: int, mes: int, commission_service: CommissionServiceDe
     return CommissionTrackingResponse(comisiones=[VendorCommissionRowResponse(**f.__dict__) for f in filas])
 
 
+@router.get(
+    "/cumplimiento", response_model=CumplimientoMetaPeriodoResponse, dependencies=[Depends(only_management)],
+    summary="KPI de cumplimiento vs metas del período (dashboard principal de Gerencia)",
+)
+def get_cumplimiento_meta_periodo(
+    anio: int, mes: int, commission_service: CommissionServiceDep,
+) -> CumplimientoMetaPeriodoResponse:
+    """Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): agregado
+    company-wide de metas `APROBADA` -- monto meta total, venta real total, % de
+    cumplimiento. Reutiliza `public.metas_comerciales_operativas` vía
+    `CommissionService`/`GoalRepository`, sin ningún modelo ML (regla de negocio 10)."""
+    return CumplimientoMetaPeriodoResponse(**commission_service.get_cumplimiento_meta_periodo(anio=anio, mes=mes))
+
+
 @router.put(
     "/{goal_id}/review", status_code=status.HTTP_200_OK, summary="Aprobar o rechazar meta y actualizar comisión",
     dependencies=[Depends(only_management)],
@@ -159,9 +194,11 @@ def get_factores_credito(commission_config_service: CommissionConfigServiceDep) 
     summary="Reemplaza la matriz de crédito vigente completa",
 )
 def replace_factores_credito(
-    payload: FactoresCreditoPayload, commission_config_service: CommissionConfigServiceDep,
+    payload: FactoresCreditoPayload, commission_config_service: CommissionConfigServiceDep, current_user: CurrentUserDep,
 ) -> FactoresCreditoResponse:
-    nuevos = commission_config_service.replace_factores_credito([f.model_dump() for f in payload.factores])
+    nuevos = commission_config_service.replace_factores_credito(
+        [f.model_dump() for f in payload.factores], usuario_id=current_user.id,
+    )
     return FactoresCreditoResponse(factores=[FactorCreditoResponse(**f) for f in nuevos])
 
 
@@ -181,12 +218,50 @@ def get_config_vendedores(commission_config_service: CommissionConfigServiceDep)
 )
 def upsert_config_vendedor(
     vendedor_origen: str, payload: ConfigVendedorPayload, commission_config_service: CommissionConfigServiceDep,
+    current_user: CurrentUserDep,
 ) -> ConfigVendedorResponse:
     v = commission_config_service.upsert_config_vendedor(
         vendedor_origen=vendedor_origen, tipo=payload.tipo, factor_tipo=payload.factor_tipo,
-        fecha_ingreso=payload.fecha_ingreso,
+        fecha_ingreso=payload.fecha_ingreso, usuario_id=current_user.id,
     )
     return ConfigVendedorResponse(**v)
+
+
+@router.get(
+    "/commission-config/search/clases", response_model=list[ClaseBusqueda],
+    dependencies=[Depends(only_management)],
+    summary="Autocompletar clase de producto (edw.dim_producto) para la Matriz de categorías",
+)
+def search_clases_producto(q: str, commission_config_service: CommissionConfigServiceDep) -> list[ClaseBusqueda]:
+    return [ClaseBusqueda(**c) for c in commission_config_service.search_clases_producto(q)]
+
+
+@router.get(
+    "/commission-config/search/vendedores", response_model=list[VendedorBusqueda],
+    dependencies=[Depends(only_management)],
+    summary="Autocompletar vendedor por código SAP o nombre (edw.dim_vendedor) para Tipo de vendedor",
+)
+def search_commission_config_vendedores(
+    q: str, commission_config_service: CommissionConfigServiceDep,
+) -> list[VendedorBusqueda]:
+    return [VendedorBusqueda(**v) for v in commission_config_service.search_vendedores(q)]
+
+
+@router.get(
+    "/commission-config/auditoria", response_model=ComisionConfigAuditoriaListResponse,
+    dependencies=[Depends(only_management)],
+    summary="Bitácora de cambios a la configuración de comisiones (quién cambió qué y cuándo)",
+)
+def get_commission_config_auditoria(
+    commission_config_service: CommissionConfigServiceDep, limit: int = 100,
+) -> ComisionConfigAuditoriaListResponse:
+    """Fase 2 Metas (docs/features/plan_actualizacion_modulo_metas_comisiones.md §3
+    ítem 2): antes solo `comision_matriz_categorias` guardaba `creado_por` en la fila
+    vigente y ese rastro se perdía al cerrarla; esta bitácora append-only registra cada
+    cambio (matriz, crédito, vendedor) con quién y cuándo, sin importar qué tabla."""
+    return ComisionConfigAuditoriaListResponse(
+        entradas=[ComisionConfigAuditoriaResponse(**a) for a in commission_config_service.get_auditoria(limit)],
+    )
 
 
 @router.post(

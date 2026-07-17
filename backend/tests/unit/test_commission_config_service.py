@@ -19,7 +19,7 @@ def commission_config_repo():
 
 @pytest.fixture
 def service(commission_config_repo):
-    return CommissionConfigService(commission_config_repo, goal_repo=MagicMock())
+    return CommissionConfigService(commission_config_repo, goal_repo=MagicMock(), catalog_repo=MagicMock())
 
 
 def test_rangos_de_credito_sin_solape_se_aceptan(service, commission_config_repo):

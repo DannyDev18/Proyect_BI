@@ -99,6 +99,57 @@ class CatalogRepository:
             })
         return resultado
 
+    def search_vendedores(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Autocompletar vendedor por código SAP o nombre (config de Comisiones
+        Variables -- pestaña "Tipo de vendedor"): una sola consulta ILIKE sobre
+        `edw.dim_vendedor`, sin joins a fact, para no colapsar el backend con cada
+        tecla escrita en el frontend (el caller debe debouncear/paginar con `limit`)."""
+        like = f"%{query}%"
+        rows = self.db.execute(text(
+            """
+            SELECT codven, nombre_vendedor
+            FROM edw.dim_vendedor
+            WHERE vendedor_sk <> -1 AND activo
+              AND (codven ILIKE :like OR nombre_vendedor ILIKE :like)
+            ORDER BY nombre_vendedor
+            LIMIT :limit
+            """
+        ), {"like": like, "limit": limit}).fetchall()
+        return [{"codven": str(r[0]), "nombre_vendedor": r[1]} for r in rows]
+
+    def get_vendedores_info(self, codvens: list[str]) -> dict[str, str | None]:
+        """Enriquecimiento por lote: `codven -> nombre_vendedor` para una lista ya
+        conocida de códigos (ej. la tabla de configuración de comisiones por
+        vendedor). Una sola consulta con `= ANY(...)`, nunca una consulta por fila
+        (evita N+1) -- mismo patrón que `get_products_info`."""
+        if not codvens:
+            return {}
+        rows = self.db.execute(text(
+            "SELECT codven, nombre_vendedor FROM edw.dim_vendedor WHERE codven = ANY(:codvens)"
+        ), {"codvens": codvens}).fetchall()
+        return {str(r[0]): r[1] for r in rows}
+
+    def search_clases_producto(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Autocompletar clase de producto (config de Comisiones Variables --
+        Matriz de categorías): `edw.dim_producto.nombre_clase` está 100% vacío en el
+        catálogo real (auditoría 30 H2), así que la búsqueda es solo por código de
+        `clase`, agregando cuántos productos vigentes tiene cada una como contexto
+        para que gerencia identifique la categoría sin adivinar. Una sola consulta
+        agregada, sin joins a fact."""
+        like = f"%{query}%"
+        rows = self.db.execute(text(
+            """
+            SELECT clase, COUNT(*) AS productos
+            FROM edw.dim_producto
+            WHERE es_vigente AND producto_sk <> -1 AND clase IS NOT NULL AND clase <> ''
+              AND clase ILIKE :like
+            GROUP BY clase
+            ORDER BY clase
+            LIMIT :limit
+            """
+        ), {"like": like, "limit": limit}).fetchall()
+        return [{"clase": str(r[0]), "productos": int(r[1])} for r in rows]
+
     def get_cliente_sk_vigente(self, cliente_id: str) -> int | None:
         """Resuelve `cliente_sk` vigente (SCD2) a partir del id transaccional público
         (`public.cliente_lookup`), para telemetría del módulo de Venta Cruzada."""

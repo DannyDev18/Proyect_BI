@@ -9,6 +9,7 @@ from fastapi import Depends, Request
 from app.core.deps import CurrentUserDep, SessionDep
 from app.ml.model_loader import ModelLoader
 from app.repositories.analytics_repository import AnalyticsRepository
+from app.repositories.anomalia_revision_repository import AnomaliaRevisionRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.cartera360_repository import Cartera360Repository
 from app.repositories.catalog_repository import CatalogRepository
@@ -23,6 +24,7 @@ from app.repositories.system_repository import SystemRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.warehouse_repository import WarehouseRepository
 from app.services.analytics_service import AnalyticsService
+from app.services.anomalia_revision_service import AnomaliaRevisionService
 from app.services.audit_service import AuditService
 from app.services.cartera360_service import Cartera360Service
 from app.services.commission_config_service import CommissionConfigService
@@ -74,6 +76,10 @@ def get_catalog_repository(db: SessionDep) -> CatalogRepository:
 
 def get_audit_repository(db: SessionDep) -> AuditRepository:
     return AuditRepository(db)
+
+
+def get_anomalia_revision_repository(db: SessionDep) -> AnomaliaRevisionRepository:
+    return AnomaliaRevisionRepository(db)
 
 
 def get_recommendation_event_repository(db: SessionDep) -> RecommendationEventRepository:
@@ -175,20 +181,37 @@ def get_cartera360_service(
     return Cartera360Service(cartera360_repo, prediction_service, catalog_repo)
 
 
+def get_commission_simulation_service(
+    goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+    commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
+) -> CommissionSimulationService:
+    """Definido antes de `get_notification_service` (igual que `get_cartera360_service`
+    arriba): ese servicio la inyecta para el generador calculado de divergencia
+    plano vs. variable del piloto en sombra (Fase 2 ítem 3, docs/features/
+    plan_actualizacion_modulo_metas_comisiones.md)."""
+    return CommissionSimulationService(goal_repo, commission_config_repo)
+
+
 def get_notification_service(
     notification_repo: Annotated[NotificationRepository, Depends(get_notification_repository)],
     warehouse_service: Annotated[WarehouseService, Depends(get_warehouse_service)],
     prediction_service: Annotated[PredictionService, Depends(get_prediction_service)],
     cartera360_service: Annotated[Cartera360Service, Depends(get_cartera360_service)],
+    commission_simulation_service: Annotated[CommissionSimulationService, Depends(get_commission_simulation_service)],
 ) -> NotificationService:
     """Módulo de Notificaciones (docs/auditoria/31_modulo_notificaciones.md): compone el
     repositorio de notificaciones persistidas con `WarehouseService` (generador calculado de
     Bodega + salud de modelos de Admin), `PredictionService` (desvío de forecast de
-    Gerencia, reutiliza `get_sales_forecast`) y `Cartera360Service` (churn alto de la
-    cartera propia de Ventas, reutiliza `get_lista_trabajo` -- RLS ya resuelto ahí, RN-V3).
-    Sin modelos ML nuevos. Definido antes de `get_goal_ml_service` porque ese servicio la
-    inyecta para emitir `metas_generadas` (RN-N2)."""
-    return NotificationService(notification_repo, warehouse_service, prediction_service, cartera360_service)
+    Gerencia, reutiliza `get_sales_forecast`), `Cartera360Service` (churn alto de la
+    cartera propia de Ventas, reutiliza `get_lista_trabajo` -- RLS ya resuelto ahí, RN-V3)
+    y `CommissionSimulationService` (divergencia plano vs variable del piloto en sombra,
+    Fase 2 ítem 3 de plan_actualizacion_modulo_metas_comisiones.md -- reutiliza `simular`,
+    el mismo cálculo que ya sirve `POST /commission-simulation`). Sin modelos ML nuevos.
+    Definido antes de `get_goal_ml_service` porque ese servicio la inyecta para emitir
+    `metas_generadas` (RN-N2)."""
+    return NotificationService(
+        notification_repo, warehouse_service, prediction_service, cartera360_service, commission_simulation_service,
+    )
 
 
 def get_goal_ml_service(
@@ -216,6 +239,12 @@ def get_audit_service(
     return AuditService(audit_repo)
 
 
+def get_anomalia_revision_service(
+    repo: Annotated[AnomaliaRevisionRepository, Depends(get_anomalia_revision_repository)],
+) -> AnomaliaRevisionService:
+    return AnomaliaRevisionService(repo)
+
+
 def get_system_service(
     system_repo: Annotated[SystemRepository, Depends(get_system_repository)],
     model_loader: ModelLoaderDep,
@@ -237,18 +266,12 @@ def get_commission_service(
     return CommissionService(goal_repo, commission_config_repo)
 
 
-def get_commission_simulation_service(
-    goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
-    commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
-) -> CommissionSimulationService:
-    return CommissionSimulationService(goal_repo, commission_config_repo)
-
-
 def get_commission_config_service(
     commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
 ) -> CommissionConfigService:
-    return CommissionConfigService(commission_config_repo, goal_repo)
+    return CommissionConfigService(commission_config_repo, goal_repo, catalog_repo)
 
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
@@ -263,6 +286,7 @@ CommissionConfigServiceDep = Annotated[CommissionConfigService, Depends(get_comm
 CommissionConfigRepositoryDep = Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)]
 WarehouseServiceDep = Annotated[WarehouseService, Depends(get_warehouse_service)]
 AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
+AnomaliaRevisionServiceDep = Annotated[AnomaliaRevisionService, Depends(get_anomalia_revision_service)]
 CatalogRepositoryDep = Annotated[CatalogRepository, Depends(get_catalog_repository)]
 Cartera360ServiceDep = Annotated[Cartera360Service, Depends(get_cartera360_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]

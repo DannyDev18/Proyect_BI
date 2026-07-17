@@ -15,7 +15,7 @@ interface ChartTooltipProps {
  * Uso: <Tooltip content={<ChartTooltipRenderer />} /> o construir el payload manualmente
  * con `renderChartTooltip` cuando la forma del payload lo amerita. */
 export const ChartTooltip = ({ title, rows }: ChartTooltipProps) => (
-  <div className="card border-slate-800 p-3 shadow-xl min-w-[160px]">
+  <div className="glass-elevated border border-border rounded-xl p-3 shadow-xl min-w-[160px]">
     {title && <p className="font-semibold text-slate-200 text-xs mb-1.5">{title}</p>}
     <div className="space-y-1">
       {rows.map((r, i) => (

@@ -1,6 +1,8 @@
 import type { LucideIcon } from 'lucide-react';
 import { ArrowDown, ArrowUp, Minus } from 'lucide-react';
+import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import { CountUp } from './CountUp';
+import { Tooltip } from './Tooltip';
 
 interface KpiCardProps {
   title: string;
@@ -8,6 +10,12 @@ interface KpiCardProps {
   subValue?: string;
   icon: LucideIcon;
   trend?: 'up' | 'down' | 'neutral';
+  /** Estado de negocio (F7): resalta el borde superior de la card, independiente del trend numérico. */
+  state?: 'success' | 'warning' | 'danger';
+  /** Serie ya cargada por la página (p. ej. histórico de predicción) para el mini-gráfico. Sin fetch nuevo. */
+  sparkline?: number[];
+  /** Explicación corta mostrada al pasar el mouse/foco sobre el título (F7). */
+  tooltip?: string;
   className?: string;
 }
 
@@ -17,15 +25,30 @@ const trendConfig = {
   neutral: { bg: 'bg-slate-700/30 border-slate-600/20', text: 'text-slate-400', Icon: Minus },
 };
 
+const stateBorder = {
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-danger',
+};
+
 export const KpiCard = ({
-  title, value, subValue, icon: Icon, trend = 'neutral',
+  title, value, subValue, icon: Icon, trend = 'neutral', state, sparkline, tooltip,
 }: KpiCardProps) => {
   const t = trendConfig[trend];
   const TrendIcon = t.Icon;
+  const sparkData = sparkline?.map((v, i) => ({ i, v }));
+  const sparkGradientId = `kpiSpark-${title.replace(/[^a-zA-Z0-9]/g, '')}`;
   return (
-    <div className="card card-hover p-6 group relative">
+    <div className="card card-hover p-6 group relative overflow-hidden">
+      {state && <span className={`absolute inset-x-0 top-0 h-[2px] ${stateBorder[state]}`} aria-hidden="true" />}
       <div className="flex justify-between items-start mb-4 relative z-10">
-        <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">{title}</p>
+        {tooltip ? (
+          <Tooltip label={tooltip} side="top">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 cursor-default">{title}</p>
+          </Tooltip>
+        ) : (
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">{title}</p>
+        )}
         <div className={`p-2.5 rounded-xl border transition-shadow duration-150 group-hover:glow-accent-sm ${t.bg}`}>
           <Icon size={18} className={t.text} />
         </div>
@@ -42,6 +65,25 @@ export const KpiCard = ({
           </p>
         )}
       </div>
+
+      {sparkData && sparkData.length > 1 && (
+        <div className="h-10 -mx-1 mt-3 relative z-10">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={sparkData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id={sparkGradientId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.35} />
+                  <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <Area
+                type="monotone" dataKey="v" stroke="var(--color-primary)" strokeWidth={1.5}
+                fill={`url(#${sparkGradientId})`} dot={false} isAnimationActive={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 };

@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Boxes, CalendarClock } from 'lucide-react';
 import {
-  Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart,
+  Area, Bar, BarChart, Brush, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart,
   ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis,
 } from 'recharts';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
+import { ChartTooltip } from '../components/ui/ChartTooltip';
 import { Select } from '../components/ui/Select';
 import { BodegaFilterBar } from '../components/bodega/BodegaFilterBar';
 import { PrediccionComprasChart } from '../components/bodega/PrediccionComprasChart';
@@ -17,9 +18,8 @@ import { useBodegaFiltersStore, toQueryFilters } from '../store/bodegaFiltersSto
 import { fmt, pct } from '../utils/format';
 import { chartTheme, colorByCategory } from '../utils/chartTheme';
 
-const tooltipStyle = {
-  backgroundColor: chartTheme.cardBg, borderColor: chartTheme.grid, borderRadius: '8px', fontSize: '12px',
-} as const;
+/** Vidrio ligero para tooltips custom de Recharts (F7.2 — mismo lenguaje que <ChartTooltip />). */
+const tooltipBoxClass = 'glass-elevated border border-border rounded-xl p-3 shadow-xl text-xs';
 
 const tendencia = (v: number | null | undefined) =>
   v == null ? '—' : `${v > 0 ? '▲ +' : v < 0 ? '▼ ' : ''}${v.toFixed(1)}% vs mes anterior`;
@@ -130,11 +130,24 @@ export const DashboardBodega = () => {
             <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
             <XAxis dataKey="fecha" tick={{ fill: chartTheme.axis, fontSize: 10 }} tickFormatter={(f: string) => f.slice(5)} axisLine={false} tickLine={false} />
             <YAxis tick={{ fill: chartTheme.axis, fontSize: 11 }} axisLine={false} tickLine={false} />
-            <Tooltip contentStyle={tooltipStyle} />
+            <Tooltip content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              const rows = payload
+                .filter((p) => p.value != null && p.name !== 'banda')
+                .map((p) => ({
+                  label: p.name === 'real' ? 'Salidas reales' : p.name === 'pred' ? 'Predicción' : String(p.name),
+                  value: `${Number(p.value).toLocaleString('es-EC')} uds`,
+                  color: p.color,
+                }));
+              if (!rows.length) return null;
+              return <ChartTooltip title={String(label)} rows={rows} />;
+            }} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Area dataKey="banda" name="Banda de confianza" stroke="none" fill={chartTheme.ml} fillOpacity={0.15} connectNulls />
-            <Line dataKey="real" name="Salidas reales" stroke={chartTheme.palette[0]} strokeWidth={2} dot={false} connectNulls={false} />
-            <Line dataKey="pred" name="Predicción" stroke={chartTheme.ml} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />
+            <Line dataKey="real" name="Salidas reales" stroke={chartTheme.palette[0]} strokeWidth={2} dot={false} connectNulls={false}
+              activeDot={{ r: 4, fill: chartTheme.palette[0], stroke: chartTheme.cardBg, strokeWidth: 2 }} />
+            <Line dataKey="pred" name="Predicción" stroke={chartTheme.ml} strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls
+              activeDot={{ r: 4, fill: chartTheme.ml, stroke: chartTheme.cardBg, strokeWidth: 2 }} />
             {forecast.data?.punto_reorden != null && (
               <ReferenceLine y={forecast.data.punto_reorden} stroke={chartTheme.danger} strokeDasharray="4 4"
                 label={{ value: `Punto reorden (${forecast.data.punto_reorden})`, fill: chartTheme.danger, fontSize: 10, position: 'insideTopRight' }} />
@@ -143,6 +156,9 @@ export const DashboardBodega = () => {
               <ReferenceLine y={forecast.data.stock_actual} stroke={chartTheme.success}
                 label={{ value: `Stock actual (${forecast.data.stock_actual})`, fill: chartTheme.success, fontSize: 10, position: 'insideBottomRight' }} />
             )}
+            {/* Zoom/selección de rango (F7.4) — serie temporal larga (histórico + predicción) */}
+            <Brush dataKey="fecha" height={24} stroke="var(--color-primary)" fill="var(--color-bg-elevated)"
+              tickFormatter={(f: string) => f.slice(5)} travellerWidth={8} />
           </ComposedChart>
         </ResponsiveContainer>
       </ChartCard>
@@ -161,13 +177,12 @@ export const DashboardBodega = () => {
                 label={{ value: 'Margen $/ud', fill: chartTheme.axis, fontSize: 11, angle: -90, position: 'insideLeft' }} />
               <ZAxis type="number" dataKey="valor_inventario" range={[40, 400]} name="Valor inventario" />
               <Tooltip
-                contentStyle={tooltipStyle}
                 content={({ payload }) => {
                   const p = payload?.[0]?.payload;
                   if (!p) return null;
                   return (
-                    <div style={tooltipStyle} className="p-3 border">
-                      <p className="font-semibold text-slate-200">{p.nombre}</p>
+                    <div className={tooltipBoxClass}>
+                      <p className="font-semibold text-slate-200 mb-1">{p.nombre}</p>
                       <p className="text-slate-400">Rotación: {p.rotacion_mensual ?? '—'} veces/mes</p>
                       <p className="text-slate-400">Margen: ${p.margen_unitario}/ud</p>
                       <p className="text-slate-400">Stock: {p.stock_actual} · Días inv: {p.dias_inventario ?? '∞'}</p>
@@ -199,13 +214,13 @@ export const DashboardBodega = () => {
                     <Cell key={c.categoria} fill={colorByCategory(c.categoria, nombresCategorias)} stroke="none" />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={tooltipStyle}
+                <Tooltip
                   content={({ payload }) => {
                     const p = payload?.[0]?.payload as { categoria?: string; unidades?: number; pct_participacion?: number; monto_ventas?: number | null } | undefined;
                     if (!p) return null;
                     return (
-                      <div style={tooltipStyle} className="p-3 border">
-                        <p className="font-semibold text-slate-200">{p.categoria}</p>
+                      <div className={tooltipBoxClass}>
+                        <p className="font-semibold text-slate-200 mb-1">{p.categoria}</p>
                         <p className="text-slate-400">{(p.unidades ?? 0).toLocaleString('es-EC')} uds ({p.pct_participacion ?? 0}%)</p>
                         {p.monto_ventas != null && <p className="text-success">Monto: {fmt(p.monto_ventas)}</p>}
                       </div>
@@ -242,13 +257,13 @@ export const DashboardBodega = () => {
             <XAxis type="number" tick={{ fill: chartTheme.axis, fontSize: 11 }} axisLine={false} tickLine={false} />
             <YAxis type="category" dataKey="nombre" width={180} tick={{ fill: chartTheme.axisLabel, fontSize: 10 }}
               tickFormatter={(n: string) => n.length > 26 ? `${n.slice(0, 26)}…` : n} axisLine={false} tickLine={false} />
-            <Tooltip contentStyle={tooltipStyle} cursor={{ fill: chartTheme.grid }}
+            <Tooltip cursor={{ fill: chartTheme.grid }}
               content={({ payload }) => {
                 const p = payload?.[0]?.payload;
                 if (!p) return null;
                 return (
-                  <div style={tooltipStyle} className="p-3 border">
-                    <p className="font-semibold text-slate-200">{p.nombre} <span className="text-slate-500">({p.codart})</span></p>
+                  <div className={tooltipBoxClass}>
+                    <p className="font-semibold text-slate-200 mb-1">{p.nombre} <span className="text-slate-500">({p.codart})</span></p>
                     <p className="text-slate-400">Salidas: {p.unidades.toLocaleString('es-EC')} uds {p.tendencia_pct != null && (p.tendencia_pct >= 0 ? `↑ +${p.tendencia_pct}%` : `↓ ${p.tendencia_pct}%`)}</p>
                     {p.monto_ventas != null && <p className="text-success">Monto: {fmt(p.monto_ventas)}</p>}
                     <p className="text-slate-400">Stock: {p.stock_actual} uds · {p.dias_inventario != null ? `${p.dias_inventario} días` : 'sin consumo'}</p>

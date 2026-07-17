@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell, Legend, Brush
 } from 'recharts';
 import { DollarSign, TrendingUp, ShoppingBag, Target, Filter, CheckCircle2, FileSpreadsheet, Printer } from 'lucide-react';
 import {
@@ -202,6 +202,11 @@ export const DashboardGerencia = () => {
               title="Ingresos Totales (ventas-devoluciones)"
               value={kpi.data ? fmtMoney(kpi.data.ingresos_totales) : '—'}
               icon={DollarSign}
+              tooltip="Últimas semanas de venta neta real, tomadas de la misma serie del forecast de ventas"
+              sparkline={pred.data?.historial_y_prediccion
+                .map((d) => d.monto_real)
+                .filter((v): v is number => v != null)
+                .slice(-12)}
               {...tendencia(kpi.data?.ingresos_totales_tendencia_pct)}
             />
             <KpiCard
@@ -220,6 +225,7 @@ export const DashboardGerencia = () => {
               title="Proyección ROI"
               value={kpi.data ? pct(kpi.data.roi_estimado) : '—'}
               icon={Target}
+              state={kpi.data ? saludVariant === 'neutral' ? undefined : saludVariant : undefined}
               trend={
                 kpi.data?.roi_estimado_tendencia_pct != null
                   ? tendencia(kpi.data.roi_estimado_tendencia_pct).trend
@@ -236,6 +242,12 @@ export const DashboardGerencia = () => {
                   ? cumplimiento.data.pct_cumplimiento >= 100 ? 'up'
                     : cumplimiento.data.pct_cumplimiento >= 70 ? 'neutral' : 'down'
                   : 'neutral'
+              }
+              state={
+                cumplimiento.data
+                  ? cumplimiento.data.pct_cumplimiento >= 100 ? 'success'
+                    : cumplimiento.data.pct_cumplimiento >= 70 ? 'warning' : 'danger'
+                  : undefined
               }
             />
           </>
@@ -364,6 +376,16 @@ export const DashboardGerencia = () => {
                       <Area type="monotone" dataKey="intervalo_inferior" stroke={chartTheme.live} strokeWidth={1} strokeDasharray="3 3" fill="none" name="Límite Inferior (95%)" dot={false} />
                     </>
                   )}
+
+                  {/* Zoom/selección de rango (F7.4) — serie temporal larga (histórico + predicción) */}
+                  <Brush
+                    dataKey="fecha"
+                    height={24}
+                    stroke="var(--color-primary)"
+                    fill="var(--color-bg-elevated)"
+                    tickFormatter={(v) => formatEjeFecha(String(v), granularidad)}
+                    travellerWidth={8}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             </ChartCard>

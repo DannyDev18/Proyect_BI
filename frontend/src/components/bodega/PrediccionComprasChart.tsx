@@ -4,14 +4,11 @@ import {
   Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { ChartCard } from '../ui/ChartCard';
+import { ChartTooltip } from '../ui/ChartTooltip';
 import { usePrediccionComprasMes } from '../../hooks/bodega';
 import { fmt } from '../../utils/format';
 import { chartTheme } from '../../utils/chartTheme';
 import type { BodegaQueryFilters } from '../../services/bodega';
-
-const tooltipStyle = {
-  backgroundColor: chartTheme.cardBg, borderColor: chartTheme.grid, borderRadius: '8px', fontSize: '12px',
-} as const;
 
 interface PrediccionComprasChartProps {
   filters: BodegaQueryFilters;
@@ -89,9 +86,17 @@ export const PrediccionComprasChart = ({ filters }: PrediccionComprasChartProps)
               <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
               <XAxis dataKey="fecha" tick={{ fill: chartTheme.axis, fontSize: 10 }} tickFormatter={(f: string) => f.slice(8)} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: chartTheme.axis, fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={tooltipStyle} />
+              <Tooltip content={({ active, payload, label }) => {
+                if (!active || !payload?.length) return null;
+                const rows = payload
+                  .filter((p) => p.value != null && p.name !== 'banda')
+                  .map((p) => ({ label: String(p.name), value: `${Number(p.value).toLocaleString('es-EC')} uds`, color: p.color }));
+                if (!rows.length) return null;
+                return <ChartTooltip title={String(label)} rows={rows} />;
+              }} />
               <Area dataKey="banda" name="Banda de confianza" stroke="none" fill={chartTheme.ml} fillOpacity={0.15} connectNulls />
-              <Line dataKey="unidades" name="Predicción (unidades)" stroke={chartTheme.ml} strokeWidth={2} dot={false} connectNulls />
+              <Line dataKey="unidades" name="Predicción (unidades)" stroke={chartTheme.ml} strokeWidth={2} dot={false} connectNulls
+                activeDot={{ r: 4, fill: chartTheme.ml, stroke: chartTheme.cardBg, strokeWidth: 2 }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>

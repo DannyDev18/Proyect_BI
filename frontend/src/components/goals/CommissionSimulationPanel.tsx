@@ -24,12 +24,12 @@ export function CommissionSimulationPanel() {
     { key: 'vendedor', header: 'Vendedor', render: (r) => <span className="font-mono text-slate-200">{r.vendedor_origen}</span> },
     { key: 'periodo', header: 'Período', render: (r) => <span className="text-slate-400">{r.mes}/{r.anio}</span> },
     { key: 'venta_neta', header: 'Venta Neta', numeric: true, render: (r) => <span className="text-slate-300">{fmtMoney(r.venta_neta)}</span> },
-    { key: 'comision_plana', header: 'Comisión plana', numeric: true, render: (r) => <span className="text-teal-300">{fmtMoney(r.comision_plana)}</span> },
-    { key: 'comision_variable', header: 'Comisión variable', numeric: true, render: (r) => <span className="text-amber-300">{fmtMoney(r.comision_variable)}</span> },
+    { key: 'comision_plana', header: 'Comisión plana', numeric: true, render: (r) => <span className="text-primary">{fmtMoney(r.comision_plana)}</span> },
+    { key: 'comision_variable', header: 'Comisión variable', numeric: true, render: (r) => <span className="text-warning">{fmtMoney(r.comision_variable)}</span> },
     {
       key: 'diferencia', header: 'Diferencia', numeric: true,
       render: (r) => (
-        <span className={`inline-flex items-center gap-1 font-semibold ${r.diferencia >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+        <span className={`inline-flex items-center gap-1 font-semibold ${r.diferencia >= 0 ? 'text-success' : 'text-danger'}`}>
           {r.diferencia >= 0 ? <TrendingUp size={13} aria-hidden="true" /> : <TrendingDown size={13} aria-hidden="true" />}
           {fmtMoney(r.diferencia)}{r.diferencia_pct != null && ` (${r.diferencia_pct >= 0 ? '+' : ''}${r.diferencia_pct.toFixed(1)}%)`}
         </span>
@@ -41,7 +41,7 @@ export function CommissionSimulationPanel() {
     <div className="p-6 bg-slate-900 text-white rounded-lg border border-slate-800 shadow-xl max-w-7xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
         <div className="flex items-center gap-3">
-          <FlaskConical className="w-8 h-8 text-amber-400" aria-hidden="true" />
+          <FlaskConical className="w-8 h-8 text-warning" aria-hidden="true" />
           <div>
             <h2 className="text-2xl font-bold tracking-tight">Simulación: esquema plano vs. variable</h2>
             <p className="text-sm text-slate-500 mt-0.5">
@@ -62,7 +62,7 @@ export function CommissionSimulationPanel() {
         </div>
       </div>
 
-      {simulation.error && <div className="p-4 mb-4 text-red-400 text-sm bg-red-950/30 rounded-lg border border-red-900/50">{simulation.error}</div>}
+      {simulation.error && <div className="p-4 mb-4 text-danger text-sm bg-danger/30 rounded-lg border border-danger/50">{simulation.error}</div>}
 
       {simulation.data && (
         <>

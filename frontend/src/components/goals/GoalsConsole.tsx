@@ -250,6 +250,7 @@ export function GoalsConsole() {
           onRetry={tracking.refetch}
           emptyTitle="No hay metas propuestas para este periodo"
           emptyDescription="Genera el plan usando la configuración de arriba."
+          maxHeight="max-h-none"
         />
       </div>
 

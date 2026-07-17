@@ -133,6 +133,7 @@ export function CommissionTracker() {
           error={tracking.error ?? undefined}
           onRetry={tracking.refetch}
           emptyTitle="No hay metas configuradas para este período"
+          maxHeight="max-h-none"
         />
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { Settings, Plus, CreditCard, Users } from 'lucide-react';
+import { Settings, Plus, CreditCard, Users, Pencil, X } from 'lucide-react';
 
 import {
   useMatrizCategorias, useUpsertMatrizCategoria, useFactoresCredito, useReplaceFactoresCredito,
@@ -80,7 +80,22 @@ function MatrizTab() {
   const upsertMut = useUpsertMatrizCategoria();
   const toast = useToast();
 
-  const [form, setForm] = useState({ clase: '', subclase: '', grupo: 'B' as GrupoComision, tasa_pct: 8, base: 'margen' as 'margen' | 'valor', factor_estrategico: 1.0 });
+  const emptyForm = { clase: '', subclase: '', grupo: 'B' as GrupoComision, tasa_pct: 8, base: 'margen' as 'margen' | 'valor', factor_estrategico: 1.0 };
+  const [form, setForm] = useState(emptyForm);
+  const [editing, setEditing] = useState<MatrizCategoria | null>(null);
+
+  const handleEdit = (r: MatrizCategoria) => {
+    setEditing(r);
+    setForm({
+      clase: r.clase, subclase: r.subclase ?? '', grupo: r.grupo,
+      tasa_pct: r.tasa_pct, base: r.base, factor_estrategico: r.factor_estrategico,
+    });
+  };
+
+  const handleCancelEdit = () => {
+    setEditing(null);
+    setForm(emptyForm);
+  };
 
   const handleSubmit = async () => {
     if (!form.clase.trim()) {
@@ -96,8 +111,9 @@ function MatrizTab() {
         base: form.base,
         factor_estrategico: form.factor_estrategico,
       });
-      toast('Regla de categoría guardada. La vigencia anterior (si existía) quedó cerrada.', 'success');
-      setForm({ clase: '', subclase: '', grupo: 'B', tasa_pct: 8, base: 'margen', factor_estrategico: 1.0 });
+      toast(editing ? 'Regla de categoría actualizada. La vigencia anterior quedó cerrada.' : 'Regla de categoría guardada.', 'success');
+      setEditing(null);
+      setForm(emptyForm);
     } catch {
       toast('No se pudo guardar la regla de categoría.', 'error');
     }
@@ -111,6 +127,13 @@ function MatrizTab() {
     { key: 'base', header: 'Base', headerTitle: 'Monto sobre el que se aplica la tasa: margen bruto o valor de venta.', render: (r) => <span className="text-slate-400">{r.base === 'margen' ? 'Margen bruto' : 'Valor de venta'}</span> },
     { key: 'factor_estrategico', header: 'Factor estratégico', headerTitle: 'Multiplicador 0.5x-1.5x sobre la comisión ya calculada; 1.00x = neutro.', numeric: true, render: (r) => <span className="font-mono">{r.factor_estrategico.toFixed(2)}x</span> },
     { key: 'vigente_desde', header: 'Vigente desde', headerTitle: 'Fecha desde la que rige esta regla; la anterior queda cerrada, nunca se sobreescribe.', render: (r) => <span className="text-slate-500">{r.vigente_desde}</span> },
+    {
+      key: 'acciones', header: '', render: (r) => (
+        <Button variant="ghost" size="sm" onClick={() => handleEdit(r)} icon={<Pencil className="w-3.5 h-3.5" aria-hidden="true" />}>
+          Editar
+        </Button>
+      ),
+    },
   ];
 
   return (
@@ -123,13 +146,23 @@ function MatrizTab() {
         comisiona nunca (ej. líneas de regalo/promoción).
       </p>
       <div className="p-5 bg-slate-800/50 rounded-lg border border-slate-700/50 flex flex-wrap gap-4 items-end">
+        {editing && (
+          <div className="w-full flex items-center justify-between gap-3 -mb-1">
+            <span className="text-xs text-info font-medium">
+              Editando regla de {editing.clase}{editing.subclase ? ` / ${editing.subclase}` : ''} — al guardar se cierra la vigencia actual y se crea una nueva.
+            </span>
+            <button type="button" onClick={handleCancelEdit} className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1 cursor-pointer focus-ring rounded">
+              <X className="w-3.5 h-3.5" aria-hidden="true" /> Cancelar edición
+            </button>
+          </div>
+        )}
         <Field label="Clase (código)" help="Código de dim_producto.clase, ej. BAT (baterías). '*' = regla comodín que aplica cuando ningún otro código coincide.">
           <input value={form.clase} onChange={(e) => setForm({ ...form, clase: e.target.value })}
-            placeholder="Ej. BAT / *" className="input-field w-28" />
+            placeholder="Ej. BAT / *" className="input-field w-28" disabled={!!editing} />
         </Field>
         <Field label="Subclase (opcional)" help="Código de dim_producto.subclase. Déjalo vacío para que la regla aplique a toda la clase, sin distinguir subclase.">
           <input value={form.subclase} onChange={(e) => setForm({ ...form, subclase: e.target.value })}
-            placeholder="Toda la clase" className="input-field w-28" />
+            placeholder="Toda la clase" className="input-field w-28" disabled={!!editing} />
         </Field>
         <Field label="Grupo" help="Etiqueta de negocio para reportes y reglas especiales: A/B/C son categorías normales (más alta = mayor prioridad estratégica), S = servicio, X = excluido de comisión.">
           <Select value={form.grupo} onChange={(e) => setForm({ ...form, grupo: e.target.value as GrupoComision })}>
@@ -151,7 +184,7 @@ function MatrizTab() {
             onChange={(e) => setForm({ ...form, factor_estrategico: parseFloat(e.target.value) || 1.0 })} className="input-field w-20" />
         </Field>
         <Button variant="primary" onClick={handleSubmit} loading={upsertMut.loading} icon={<Plus className="w-4 h-4" aria-hidden="true" />}>
-          Guardar regla
+          {editing ? 'Guardar cambios' : 'Guardar regla'}
         </Button>
       </div>
 

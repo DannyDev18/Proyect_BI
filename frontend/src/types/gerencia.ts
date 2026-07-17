@@ -9,6 +9,12 @@ export interface GerenciaKPIs {
   roi_estimado: number;
   ventas_por_sucursal: Record<string, number>;
   ventas_por_vendedor?: Record<string, number>;
+  // Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): comparativa vs.
+  // período anterior de igual longitud -- null sin start_date/end_date explícitos.
+  ingresos_totales_tendencia_pct: number | null;
+  margen_utilidad_neta_tendencia_pct: number | null;
+  ticket_promedio_tendencia_pct: number | null;
+  roi_estimado_tendencia_pct: number | null;
 }
 
 // Campos nullables: cuando la serie filtrada (vendedor/almacén/sucursal) no tiene datos,
@@ -44,4 +50,16 @@ export interface SalesPredictionResponse {
   historial_y_prediccion: SalesPredictionPoint[];
   metricas: MetricasPrediccion;
   insights: string[];
+}
+
+// Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): KPI de
+// cumplimiento vs metas del dashboard principal -- agregado company-wide de metas
+// APROBADA del período (public.metas_comerciales_operativas), sin ML.
+export interface CumplimientoMetaPeriodo {
+  anio: number;
+  mes: number;
+  monto_meta_total: number;
+  venta_real_total: number;
+  pct_cumplimiento: number;
+  vendedores_con_meta_aprobada: number;
 }

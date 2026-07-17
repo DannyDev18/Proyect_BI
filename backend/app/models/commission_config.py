@@ -3,8 +3,11 @@
 plan_integracion_comisiones_variables.md, docs/auditoria/30_comisiones_variables.md).
 Todas las tablas viven en `public.*` -- no se toca el esquema `edw` (regla de negocio
 del proyecto: el DW es solo lectura/append desde el ETL)."""
+import datetime
+
 from sqlalchemy import (
-    Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func,
+    Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String,
+    UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -62,20 +65,34 @@ class ComisionFactorCredito(Base):
 class ComisionConfigVendedor(Base):
     """Tipo y parámetros de comisión por vendedor -- cubre la brecha B1 (auditoría 30):
     `edw.dim_vendedor` no tiene tipo externo/interno ni fecha de ingreso, así que se
-    mantiene en `public.*` mediante gestión de gerencia, no en el EDW."""
+    mantiene en `public.*` mediante gestión de gerencia, no en el EDW.
+
+    Con vigencias (C-3, docs/features/plan_correcciones_pendientes.md; auditoría 35 H4):
+    antes un cambio de tipo externo/interno se aplicaba retroactivamente a cualquier
+    período cerrado que aún no se hubiera congelado por primera vez -- mismo patrón que
+    `ComisionMatrizCategoria`/`ComisionFactorCredito`, nunca se edita una fila vigente,
+    se cierra (`vigente_hasta`) y se inserta una nueva."""
     __tablename__ = "comision_config_vendedor"
     __table_args__ = (
         CheckConstraint("tipo IN ('externo','interno')", name="check_tipo_vendedor_valido"),
         CheckConstraint("factor_tipo >= 0 AND factor_tipo <= 1.5", name="check_factor_tipo_valido"),
+        # A lo sumo una fila "abierta" (vigente_hasta NULL) por vendedor -- reemplaza el
+        # UNIQUE plano que tenía id_vendedor_origen antes de admitir historial.
+        Index(
+            "uq_comision_config_vendedor_vigente", "id_vendedor_origen", unique=True,
+            postgresql_where=text("vigente_hasta IS NULL"),
+        ),
         {"schema": "public"},
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    id_vendedor_origen = Column(String(15), nullable=False, unique=True)
+    id_vendedor_origen = Column(String(15), nullable=False)
     tipo = Column(String(10), nullable=False, default="externo")
     factor_tipo = Column(Numeric(4, 2), nullable=False, default=1.0)
     fecha_ingreso = Column(Date, nullable=True)
     activo = Column(Boolean, nullable=False, default=True)
+    vigente_desde = Column(Date, nullable=False, default=lambda: datetime.date(1900, 1, 1))
+    vigente_hasta = Column(Date, nullable=True)
 
 
 class ComisionLiquidacion(Base):
@@ -101,3 +118,28 @@ class ComisionLiquidacion(Base):
     comision_total = Column(Numeric(15, 4), nullable=False)
     detalle_json = Column(JSONB, nullable=False)
     fecha_calculo = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ComisionConfigAuditoria(Base):
+    """Bitácora append-only de cambios a la configuración de Comisiones Variables
+    (matriz de categorías, factores de crédito, tipo de vendedor) -- cubre la Fase 2
+    ítem 2 de docs/features/plan_actualizacion_modulo_metas_comisiones.md §3: hoy
+    `comision_matriz_categorias` guarda `creado_por` en la fila vigente, pero un cambio
+    posterior pierde ese rastro (se cierra la fila vieja, la nueva no dice qué cambió
+    respecto a la anterior); `comision_factores_credito`/`comision_config_vendedor` ni
+    eso. Nunca se actualiza ni se borra una fila -- es un log de auditoría, no estado."""
+    __tablename__ = "comision_config_auditoria"
+    __table_args__ = (
+        CheckConstraint(
+            "tabla IN ('comision_matriz_categorias', 'comision_factores_credito', 'comision_config_vendedor')",
+            name="check_tabla_auditoria_valida",
+        ),
+        {"schema": "public"},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("public.usuarios.id", ondelete="SET NULL"), nullable=True)
+    tabla = Column(String(50), nullable=False)
+    accion = Column(String(20), nullable=False)
+    detalle_json = Column(JSONB, nullable=False)
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

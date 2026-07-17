@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import {
-  getGerenciaKPIs, getRevenueByCategory, getCategories, getSucursales, getVendedores, getAlmacenes, getSalesPrediction,
+  getCumplimientoMetaPeriodo, getGerenciaKPIs, getRevenueByCategory, getCategories, getSucursales, getVendedores,
+  getAlmacenes, getSalesPrediction,
 } from '../services/gerencia';
 import { qk } from '../constants/queryKeys';
 
@@ -16,6 +17,16 @@ export const useGerenciaKPIs = (params: GerenciaKpiParams = {}) => {
     queryFn: () => getGerenciaKPIs(params).then((r) => r.data),
   });
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
+};
+
+// Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): KPI de
+// cumplimiento vs metas del período en el dashboard principal.
+export const useCumplimientoMeta = (anio: number, mes: number) => {
+  const query = useQuery({
+    queryKey: qk.gerencia.cumplimientoMeta(anio, mes),
+    queryFn: () => getCumplimientoMetaPeriodo(anio, mes).then((r) => r.data),
+  });
+  return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error) };
 };
 
 export const useRevenueByCategory = (params: RevenueByCategoryParams = {}) => {

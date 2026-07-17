@@ -73,3 +73,75 @@ def test_actualizar_usuario_con_email_de_otro_usuario_devuelve_error_de_negocio(
     )
     assert r.status_code in (400, 409)
     assert r.status_code != 500
+
+
+# ── Fase 2: triage de anomalías (docs/features/plan_correcciones_pendientes.md §3) ──
+def test_anomalies_revisiones_devuelve_pagina_tipada(client, auth_headers):
+    r = client.get("/api/v1/analytics/admin/anomalies/revisiones", headers=auth_headers("administrador"))
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body.keys()) >= {"items", "total", "page", "page_size", "total_pages"}
+
+
+def test_anomalies_revisiones_rechaza_roles_no_admin(client, auth_headers):
+    r = client.get("/api/v1/analytics/admin/anomalies/revisiones", headers=auth_headers("ventas"))
+    assert r.status_code == 403
+
+
+def test_detectar_anomalia_normal_no_crea_item_de_triage(client, auth_headers):
+    """transaccion_id inexistente -> get_anomaly_status devuelve es_anomalia=False sin
+    tocar el modelo (features=None); no debe crear ningún ítem de triage."""
+    r = client.get(
+        "/api/v1/analytics/admin/anomalies",
+        params={"transaccion_id": "TXN-INEXISTENTE-9999999"},
+        headers=auth_headers("administrador"),
+    )
+    assert r.status_code == 200
+    assert r.json()["es_anomalia"] is False
+
+
+def test_actualizar_revision_inexistente_devuelve_404(client, auth_headers):
+    r = client.patch(
+        "/api/v1/analytics/admin/anomalies/revisiones/999999999",
+        json={"estado": "revisada", "nota": "no existe"},
+        headers=auth_headers("administrador"),
+    )
+    assert r.status_code == 404
+
+
+def test_actualizar_revision_con_estado_invalido_devuelve_422(client, auth_headers):
+    r = client.patch(
+        "/api/v1/analytics/admin/anomalies/revisiones/1",
+        json={"estado": "estado-inventado"},
+        headers=auth_headers("administrador"),
+    )
+    assert r.status_code == 422
+
+
+# ── Fase 2: panel de salud del sistema (docs/features/plan_correcciones_pendientes.md §3) ──
+def test_system_health_devuelve_detalle_etl_y_conteo_logins(client, auth_headers):
+    r = client.get("/api/v1/analytics/admin/system-health", headers=auth_headers("administrador"))
+    assert r.status_code == 200
+    body = r.json()
+    assert "etl_detalle" in body
+    assert isinstance(body["etl_detalle"], list)
+    assert "logins_fallidos_conteo" in body
+    assert "logins_fallidos_ventana_horas" in body
+
+
+def test_system_health_rechaza_roles_no_admin(client, auth_headers):
+    r = client.get("/api/v1/analytics/admin/system-health", headers=auth_headers("ventas"))
+    assert r.status_code == 403
+
+
+def test_login_fallido_incrementa_conteo_en_system_health(client, auth_headers):
+    r_antes = client.get("/api/v1/analytics/admin/system-health", headers=auth_headers("administrador"))
+    conteo_antes = r_antes.json()["logins_fallidos_conteo"]
+
+    client.post(
+        "/api/v1/auth/login",
+        data={"username": "admin@empresa.com", "password": "credencial-erronea-para-conteo"},
+    )
+
+    r_despues = client.get("/api/v1/analytics/admin/system-health", headers=auth_headers("administrador"))
+    assert r_despues.json()["logins_fallidos_conteo"] == conteo_antes + 1

@@ -105,7 +105,7 @@ class CommissionSimulationService:
                     )
                     for l in lineas_repo
                 ]
-                config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor)
+                config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor, fecha_periodo)
                 factor_tipo = (
                     float(config_vendedor.factor_tipo) if config_vendedor else settings.COMISION_FACTOR_EXTERNO_DEFAULT
                 )

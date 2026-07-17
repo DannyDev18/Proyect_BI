@@ -12,6 +12,8 @@ export interface ClienteListaTrabajo {
   alerta_caida_frecuencia: boolean;
   /** Churn real del modelo (churn_rf), 0-100. Ya viene calculado en la lista de trabajo. */
   probabilidad_abandono: number;
+  /** CHURN_UMBRAL_RIESGO_ALTO ya evaluado en el backend -- filtrar por esto, no por un umbral duplicado en el frontend. */
+  riesgo_alto: boolean;
   prioridad: number;
 }
 

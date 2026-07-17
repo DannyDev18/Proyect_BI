@@ -3,6 +3,25 @@
 -- Motor: PostgreSQL 16 | Base: edw (postgres_edw Docker)
 -- Separadas del esquema analítico edw.* por diseño
 -- Propósito: Autenticación, autorización y acceso a la plataforma web
+--
+-- REFERENCIA -- la fuente de verdad del esquema `public` es `backend/alembic/`
+-- (docs/features/plan_migraciones_esquema_public.md). Este archivo se conserva
+-- funcionalmente activo (sigue ejecutándose vía /docker-entrypoint-initdb.d en un
+-- volumen Docker nuevo) por dos razones, no por inercia:
+--   1. `edw/09_vistas_ml.sql` crea una vista que hace JOIN contra
+--      `public.cliente_lookup` en el mismo initdb -- si esta tabla se moviera a
+--      "solo Alembic", esa vista fallaría al crear un volumen nuevo (Alembic recién
+--      corre cuando arranca el CONTENEDOR DEL BACKEND, después de que Postgres ya
+--      terminó su secuencia de initdb).
+--   2. Los 3 usuarios de negocio precargados por `edw/08_seed_roles_usuarios.sql`
+--      (gerencia/bodega/ventas de ejemplo) son datos de demostración, no algo que
+--      Alembic deba versionar.
+-- Todo cambio de ESQUEMA (agregar/quitar columnas, índices, constraints) en
+-- `public.*` a partir de ahora se hace en `backend/alembic/versions/`, nunca aquí --
+-- el backend detecta al arrancar si la BD fue inicializada por este archivo (existe
+-- `public.usuarios`, no existe `public.alembic_version`) y la sella con
+-- `alembic stamp 0001_baseline_public` antes de aplicar lo pendiente
+-- (`backend/scripts/apply_migrations.py`).
 -- ============================================================
 
 -- ── 1. Tabla de Roles (catálogo cerrado) ─────────────────────
@@ -108,9 +127,9 @@ CREATE INDEX IF NOT EXISTS idx_recomendaciones_eventos_evento ON public.recomend
 
 -- ── 5. Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md,
 -- docs/auditoria/30_comisiones_variables.md) ─────────────────────────────────────
--- Espejo del DDL para volúmenes nuevos; en desarrollo estas tablas también se crean
--- vía `Base.metadata.create_all` (app/models/commission_config.py) al arrancar el
--- backend -- ambos caminos deben mantenerse sincronizados.
+-- Espejo del DDL para volúmenes nuevos (bootstrap initdb); la fuente de verdad para
+-- cambios de esquema es `backend/alembic/versions/0001_baseline_public.py`, que crea
+-- estas mismas tablas a partir de `app/models/commission_config.py`.
 
 CREATE TABLE IF NOT EXISTS public.comision_matriz_categorias (
     id                  SERIAL PRIMARY KEY,
@@ -149,16 +168,27 @@ COMMENT ON TABLE public.comision_factores_credito IS
 
 CREATE TABLE IF NOT EXISTS public.comision_config_vendedor (
     id                  SERIAL PRIMARY KEY,
-    id_vendedor_origen  VARCHAR(15) NOT NULL UNIQUE,
+    id_vendedor_origen  VARCHAR(15) NOT NULL,
     tipo                VARCHAR(10) NOT NULL DEFAULT 'externo' CHECK (tipo IN ('externo','interno')),
     factor_tipo         NUMERIC(4,2) NOT NULL DEFAULT 1.0 CHECK (factor_tipo >= 0 AND factor_tipo <= 1.5),
     fecha_ingreso       DATE,
-    activo              BOOLEAN NOT NULL DEFAULT TRUE
+    activo              BOOLEAN NOT NULL DEFAULT TRUE,
+    vigente_desde       DATE NOT NULL DEFAULT '1900-01-01',
+    vigente_hasta       DATE
 );
 COMMENT ON TABLE public.comision_config_vendedor IS
     'Tipo (externo/interno) y parámetros de comisión por vendedor -- cubre la brecha B1
      (auditoría 30): edw.dim_vendedor no distingue externo/interno ni tiene fecha de
-     ingreso, así que se gestiona en public.* por gerencia, no en el EDW.';
+     ingreso, así que se gestiona en public.* por gerencia, no en el EDW. Con vigencias
+     (C-3, docs/features/plan_correcciones_pendientes.md; auditoría 35 H4): nunca se
+     edita una fila vigente, se cierra (vigente_hasta) y se inserta una nueva, para que
+     una liquidación ya congelada de un período cerrado siga leyendo el tipo/factor con
+     el que se calculó.';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_comision_config_vendedor_vigente
+    ON public.comision_config_vendedor(id_vendedor_origen) WHERE vigente_hasta IS NULL;
+CREATE INDEX IF NOT EXISTS idx_comision_config_vendedor_vigencia
+    ON public.comision_config_vendedor(id_vendedor_origen, vigente_desde, vigente_hasta);
 
 CREATE TABLE IF NOT EXISTS public.comision_liquidaciones (
     id                  SERIAL PRIMARY KEY,
@@ -211,3 +241,97 @@ CREATE INDEX IF NOT EXISTS idx_notif_rol_fecha
     ON public.notificaciones(rol_destino, fecha_creacion DESC);
 CREATE INDEX IF NOT EXISTS idx_notif_dedupe
     ON public.notificaciones(tipo_evento, rol_destino, fecha_creacion DESC);
+
+-- ── 6. Metas Comerciales Operativas (regla de negocio 10, grano vendedor) ──────
+-- docs/auditoria/19_.../20_decomision_goals_rf.md: grano (anio, mes, id_vendedor_origen),
+-- NO por sucursal (edw.dim_vendedor no tiene sucursal propia). Espejo de app/models/goal.py
+-- (C-4, docs/features/plan_correcciones_pendientes.md): esta tabla se creaba solo vía
+-- `Base.metadata.create_all` y faltaba en el DDL versionado -- un despliegue desde cero
+-- ejecutando edw/01..09 nunca la generaba.
+CREATE TABLE IF NOT EXISTS public.metas_comerciales_operativas (
+    id                      SERIAL PRIMARY KEY,
+    anio                    INTEGER NOT NULL CHECK (anio >= 2020),
+    mes                     INTEGER NOT NULL CHECK (mes BETWEEN 1 AND 12),
+    id_vendedor_origen      VARCHAR(15),
+    monto_meta              NUMERIC(15, 4) NOT NULL DEFAULT 0.0000 CHECK (monto_meta >= 0),
+    unidades_meta           NUMERIC(15, 4) NOT NULL DEFAULT 0.0000 CHECK (unidades_meta >= 0),
+    comision_base_pct       NUMERIC(5, 2) NOT NULL DEFAULT 2.00 CHECK (comision_base_pct BETWEEN 0 AND 100),
+    bono_sobrecumplimiento  NUMERIC(15, 4) NOT NULL DEFAULT 100.0000 CHECK (bono_sobrecumplimiento >= 0),
+    estado                  VARCHAR(20) NOT NULL DEFAULT 'PROPUESTA'
+                             CHECK (estado IN ('PROPUESTA', 'APROBADA', 'RECHAZADA')),
+    approved_by             INTEGER REFERENCES public.usuarios(id) ON DELETE SET NULL,
+    created_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    updated_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+COMMENT ON TABLE public.metas_comerciales_operativas IS
+    'Metas comerciales generadas por IQRGoalCalculationEngine (100% estadística, sin ML --
+     goals_rf fue decomisionado). Grano (anio, mes, id_vendedor_origen), NO por sucursal.
+     updated_at se actualiza a nivel de aplicación (SQLAlchemy onupdate), no vía trigger --
+     a diferencia de public.usuarios, esta tabla no tiene trigger de BD equivalente.';
+
+CREATE INDEX IF NOT EXISTS idx_metas_periodo_vendedor
+    ON public.metas_comerciales_operativas(anio, mes, id_vendedor_origen);
+
+-- ── 7. Gestión de Cartera 360 (módulo Ventas) ───────────────────────────────
+-- docs/features/propuesta_nuevos_modulos_roi.md §4, auditoría 32. Mismo espíritu que
+-- la telemetría de Venta Cruzada (public.recomendaciones_eventos): el vendedor marca el
+-- resultado de cada contacto. Espejo de app/models/gestion_cartera_evento.py (C-4).
+CREATE TABLE IF NOT EXISTS public.gestion_cartera_eventos (
+    id          BIGSERIAL PRIMARY KEY,
+    fecha       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    usuario_id  INTEGER REFERENCES public.usuarios(id) ON DELETE SET NULL,
+    cliente_sk  INTEGER,
+    evento      VARCHAR(20) NOT NULL,
+    motivo      TEXT,
+    CONSTRAINT check_gestion_evento_valido CHECK (evento IN ('contactado', 'recompro', 'perdido'))
+);
+COMMENT ON TABLE public.gestion_cartera_eventos IS
+    'Registro de gestión de Cartera 360: el vendedor marca el resultado de cada contacto
+     con un cliente en riesgo, creando el dato de efectividad que antes no existía.
+     Deduplicación de doble-click vía CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS (RN-V... ver
+     Cartera360Repository.log_gestion).';
+
+CREATE INDEX IF NOT EXISTS idx_gestion_cartera_dedupe
+    ON public.gestion_cartera_eventos(usuario_id, cliente_sk, evento, fecha DESC);
+
+-- ── 8. Triage de Anomalías (módulo Admin, Fase 2) ───────────────────────────
+-- docs/features/plan_correcciones_pendientes.md §3 Admin item 1; auditoría 36 confirmó
+-- que GET /admin/anomalies es una consulta puntual por transacción, no un listado --
+-- esta tabla convierte cada detección en un ítem de trabajo con estado, en vez de un
+-- resultado que se pierde al cerrar la pantalla. Espejo de app/models/anomalia_revision.py.
+CREATE TABLE IF NOT EXISTS public.anomalias_revisiones (
+    id              SERIAL PRIMARY KEY,
+    transaccion_id  VARCHAR(50) NOT NULL UNIQUE,
+    score           NUMERIC(10, 4) NOT NULL,
+    estado          VARCHAR(20) NOT NULL DEFAULT 'nueva'
+                     CHECK (estado IN ('nueva', 'revisada', 'descartada', 'confirmada')),
+    revisor_id      INTEGER REFERENCES public.usuarios(id) ON DELETE SET NULL,
+    nota            TEXT,
+    fecha_deteccion TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+    fecha_revision  TIMESTAMP WITH TIME ZONE
+);
+COMMENT ON TABLE public.anomalias_revisiones IS
+    'Una fila por transacción calificada como anómala por Isolation Forest. Se crea (si
+     no existe ya, UNIQUE en transaccion_id) cuando GET /admin/anomalies detecta
+     es_anomalia=True. El dashboard de Admin separa "nueva" de las ya trabajadas
+     (revisada/descartada/confirmada) -- lo que convierte el detector en herramienta de
+     trabajo en vez de un resultado puntual que se pierde al cerrar la pantalla.';
+
+CREATE INDEX IF NOT EXISTS idx_anomalias_revisiones_estado
+    ON public.anomalias_revisiones(estado, fecha_deteccion DESC);
+
+-- ── 9. Intentos de login fallidos (módulo Admin, panel de salud, Fase 2) ────────
+-- docs/features/plan_correcciones_pendientes.md §3 Admin item 2: antes no se
+-- registraban en absoluto. Espejo de app/models/login_intento_fallido.py.
+CREATE TABLE IF NOT EXISTS public.intentos_login_fallidos (
+    id      BIGSERIAL PRIMARY KEY,
+    email   VARCHAR(100) NOT NULL,
+    ip      VARCHAR(45),
+    fecha   TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+COMMENT ON TABLE public.intentos_login_fallidos IS
+    'Un intento de login con credenciales incorrectas. Best-effort: un fallo al escribir
+     aquí no debe tumbar el login (POST /auth/login). Alimenta el conteo de "logins
+     fallidos" del panel de salud del sistema (GET /analytics/admin/system-health).';
+
+CREATE INDEX IF NOT EXISTS idx_login_fallidos_fecha ON public.intentos_login_fallidos(fecha DESC);

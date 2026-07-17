@@ -1,6 +1,15 @@
 # backend/app/schemas/analytics.py
-from pydantic import BaseModel
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import List, Dict, Any, Optional
+
+# Reutilizado del contrato tipado de reportes de Bodega (Fase 5, docs/features/
+# plan_actualizacion_modulo_bodega.md §5.2) -- Fase 2 Gerencia (docs/features/
+# plan_correcciones_pendientes.md §3): "no duplicar exportadores", así que el reporte
+# del dashboard de Gerencia usa exactamente el mismo contrato/exportador Excel
+# (`warehouse_export.reporte_a_excel`) en vez de inventar uno nuevo.
+from app.schemas.warehouse import KpiResumenEjecutivo, ReporteBodegaResponse as ReporteDashboardResponse, SeccionReporte  # noqa: F401,E501
 
 class GPKPIGerencia(BaseModel):
     # Calculado en SQL (AnalyticsRepository.get_management_kpis, `total_sales`) --
@@ -13,6 +22,13 @@ class GPKPIGerencia(BaseModel):
     roi_estimado: float
     ventas_por_sucursal: Dict[str, float]
     ventas_por_vendedor: Optional[Dict[str, float]] = None
+    # Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): comparativa vs.
+    # período anterior de igual longitud -- None cuando no hay start_date/end_date
+    # explícitos (vista "todo el histórico", sin período previo con el que comparar).
+    ingresos_totales_tendencia_pct: Optional[float] = None
+    margen_utilidad_neta_tendencia_pct: Optional[float] = None
+    ticket_promedio_tendencia_pct: Optional[float] = None
+    roi_estimado_tendencia_pct: Optional[float] = None
 
 class BPKPIBodega(BaseModel):
     items_sobrestock: int
@@ -70,6 +86,35 @@ class AnomaliaResponse(BaseModel):
     transaccion_id: str
     score: float
     es_anomalia: bool
+
+
+class AnomaliaRevisionResponse(BaseModel):
+    """Ítem de triage (Fase 2 Admin, docs/features/plan_correcciones_pendientes.md §3):
+    una transacción calificada como anómala, con su estado de revisión."""
+    id: int
+    transaccion_id: str
+    score: float
+    estado: str
+    revisor_id: int | None = None
+    nota: str | None = None
+    fecha_deteccion: datetime
+    fecha_revision: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AnomaliaRevisionUpdate(BaseModel):
+    estado: str
+    nota: str | None = None
+
+    @field_validator("estado")
+    @classmethod
+    def estado_valido(cls, v: str) -> str:
+        permitidos = {"nueva", "revisada", "descartada", "confirmada"}
+        if v not in permitidos:
+            raise ValueError(f"estado debe ser uno de {sorted(permitidos)}")
+        return v
+
 
 class AuditLogEntryResponse(BaseModel):
     ts: str

@@ -1,10 +1,15 @@
 # backend/app/repositories/user_repository.py
 """Acceso a datos de `public.usuarios` (ORM). Sin reglas de negocio -- eso vive en
 `services/user_service.py` (hashing de contraseñas, validación de duplicados, etc.)."""
+import logging
+
 from sqlalchemy.orm import Session, joinedload
 
+from app.models.login_intento_fallido import LoginIntentoFallido
 from app.models.user import User
 from app.repositories.base import BaseRepository
+
+logger = logging.getLogger("Backend.UserRepository")
 
 
 class UserRepository(BaseRepository):
@@ -44,3 +49,14 @@ class UserRepository(BaseRepository):
     def delete(self, db_user: User) -> None:
         self.db.delete(db_user)
         self.db.commit()
+
+    def registrar_intento_fallido(self, email: str, ip: str | None) -> None:
+        """Best-effort (Fase 2 Admin, panel de salud, docs/features/
+        plan_correcciones_pendientes.md §3): un fallo al escribir esto NUNCA debe
+        tumbar el login -- mismo patrón que AuditRepository.log_action."""
+        try:
+            self.db.add(LoginIntentoFallido(email=email, ip=ip))
+            self.db.commit()
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Fallo al registrar intento de login fallido para email={email}: {e}")

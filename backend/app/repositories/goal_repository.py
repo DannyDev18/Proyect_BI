@@ -152,18 +152,19 @@ class GoalRepository:
             text("""
                 SELECT
                     MAX(v.nombre_vendedor) AS vendedor, m.monto_meta AS meta_monto,
-                    m.comision_base_pct, m.bono_sobrecumplimiento, m.id AS id_meta, m.estado
+                    m.comision_base_pct, m.bono_sobrecumplimiento, m.id AS id_meta, m.estado,
+                    m.id_vendedor_origen
                 FROM public.metas_comerciales_operativas m
                 LEFT JOIN edw.dim_vendedor v ON m.id_vendedor_origen = v.codven
                 WHERE m.anio = :anio AND m.mes = :mes
-                GROUP BY m.id, m.monto_meta, m.comision_base_pct, m.bono_sobrecumplimiento, m.estado
+                GROUP BY m.id, m.monto_meta, m.comision_base_pct, m.bono_sobrecumplimiento, m.estado, m.id_vendedor_origen
                 ORDER BY MAX(v.nombre_vendedor) ASC
             """),
             {"anio": anio, "mes": mes},
         ).fetchall()
         return [
             {
-                "id": int(row[4]), "vendedor": str(row[0]),
+                "id": int(row[4]), "vendedor": str(row[0]), "vendedor_origen": str(row[6]),
                 "monto_meta": float(row[1]), "comision_base_pct": float(row[2]), "estado": str(row[5]),
             }
             for row in rows

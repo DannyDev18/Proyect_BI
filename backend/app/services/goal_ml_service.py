@@ -48,6 +48,7 @@ from app.ml.model_loader import ModelLoader
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository, VendorMonthlySales
+from app.services.commission_engine import fecha_referencia_periodo
 from app.services.goal_calculation_engine import IQRGoalCalculationEngine, RegistroMensual
 
 logger = logging.getLogger("Backend.GoalMLService")
@@ -203,7 +204,9 @@ class GoalMLService:
     ) -> float:
         if self.commission_config_repo is None:
             return meta_base
-        config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor_origen)
+        config_vendedor = self.commission_config_repo.get_config_vendedor(
+            vendedor_origen, fecha_referencia_periodo(anio, mes)
+        )
 
         if config_vendedor and config_vendedor.fecha_ingreso:
             meses_antiguedad = (anio - config_vendedor.fecha_ingreso.year) * 12 + (mes - config_vendedor.fecha_ingreso.month)

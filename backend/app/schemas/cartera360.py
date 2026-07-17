@@ -15,6 +15,10 @@ class ClienteListaTrabajo(BaseModel):
     # Churn real del modelo (no la señal estadística de alerta_caida_frecuencia, que solo
     # se usa para armar el shortlist barato -- ver Cartera360Service.get_lista_trabajo).
     probabilidad_abandono: float
+    # Umbral CHURN_UMBRAL_RIESGO_ALTO ya evaluado en el backend (plan_actualizacion_modulo_ventas.md
+    # Fase 2 "churn accionable"): permite filtrar "solo riesgo alto" en la UI sin duplicar
+    # el umbral como número mágico en el frontend.
+    riesgo_alto: bool
     prioridad: float
 
 

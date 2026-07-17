@@ -34,9 +34,9 @@
 
 ## 3. Fase 2 — Mejoras de valor
 
-1. **Transparencia del cálculo de meta:** el drawer de revisión de meta muestra el desglose del motor IQR (meses usados, picos recortados, tendencia aplicada, techo/piso activado) — la gerencia hoy aprueba un número sin ver el porqué; el motor ya calcula todo esto internamente.
-2. Bitácora de cambios de configuración de comisiones (quién cambió qué factor y cuándo) — crítico porque la config altera dinero; tabla `public.*` append-only.
-3. Alerta automática de divergencia plano vs variable > umbral configurable durante el piloto sombra (conectar con el plan del módulo de notificaciones, `plan_modulo_notificaciones.md`).
+1. ~~**Transparencia del cálculo de meta:**~~ **Resuelto (2026-07-16).** El endpoint `GET /gerencia/goals/meta-sugerida?vendedor_origen=...` ya exponía el desglose completo del motor IQR (`MetaSugeridaResponse`), pero no estaba conectado a ningún lado del frontend. Se agregó un drawer de detalle en `GoalsConsole.tsx` (clic en el nombre del vendedor de la tabla de propuestas) que lo consume -- requirió agregar `vendedor_origen` (código SAP) a `GoalCommissionReportItem`/`GoalRepository.get_commission_report`, que antes solo devolvían el nombre para mostrar, sin el código necesario para pedir el desglose de esa fila.
+2. ~~Bitácora de cambios de configuración de comisiones~~ **Resuelto (2026-07-16).** Tabla `public.comision_config_auditoria` (append-only, migración Alembic `0003_comision_config_auditoria`) registra usuario/tabla/acción/detalle en cada upsert de matriz de categorías, reemplazo de factores de crédito o cambio de tipo de vendedor -- los dos últimos endpoints (`PUT .../credito`, `PUT .../vendedores/{id}`) ni siquiera recibían `current_user` antes de esto. Expuesta en `GET /gerencia/goals/commission-config/auditoria` y una pestaña nueva "Bitácora de cambios" en `CommissionConfigPanel.tsx`.
+3. ~~Alerta automática de divergencia plano vs variable~~ **Resuelto (2026-07-16).** Nuevo generador calculado `NotificationService._generar_divergencia_comisiones` (activo solo con `COMISION_MODO=sombra`, umbral configurable `NOTIF_DIVERGENCIA_COMISION_PCT`, default 15%), conectado al módulo de Notificaciones tal como pedía este ítem. Reutiliza `CommissionSimulationService.simular` sobre el último mes ya cerrado -- sin cálculo nuevo, mismo número que ya sirve `POST /commission-simulation`.
 
 ## 4. Validación
 

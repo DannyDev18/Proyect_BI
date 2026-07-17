@@ -51,6 +51,7 @@ class Cartera360Service:
         for cliente in shortlist:
             churn = churn_map.get(cliente["cliente_id"], {"probabilidad_abandono": 0.0, "riesgo_alto": False})
             cliente["probabilidad_abandono"] = churn["probabilidad_abandono"]
+            cliente["riesgo_alto"] = churn["riesgo_alto"]
             cliente["prioridad"] = round(cliente["valor_historico"] * (1 + churn["probabilidad_abandono"] / 100), 2)
             del cliente["_score_shortlist"]
 

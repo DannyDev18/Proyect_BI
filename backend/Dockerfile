@@ -13,13 +13,20 @@ COPY . .
 # Usuario no-root para producción.
 RUN useradd --create-home --shell /bin/bash appuser \
     && mkdir -p /app/ml_models \
-    && chown -R appuser:appuser /app
+    && chown -R appuser:appuser /app \
+    && chmod +x entrypoint.sh
 USER appuser
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+# entrypoint.sh aplica las migraciones Alembic del esquema public (docs/features/
+# plan_migraciones_esquema_public.md) y luego hace `exec "$@"` con el CMD de abajo --
+# tanto aquí como en docker-compose.override.yml (que sobreescribe el CMD con
+# --reload para desarrollo, pero no el ENTRYPOINT).
+ENTRYPOINT ["./entrypoint.sh"]
 
 # Sin --reload: eso es solo para desarrollo (ver docker-compose.override.yml, que
 # sobreescribe este CMD con --reload cuando corre `docker compose up` localmente).

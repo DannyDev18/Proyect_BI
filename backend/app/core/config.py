@@ -1,6 +1,6 @@
 # backend/app/core/config.py
 import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _INSECURE_JWT_SECRET_DEFAULT = "super_secret_analytical_token_key_for_bi_thesis"
 _INSECURE_PG_PASSWORD_DEFAULT = "CHANGE_ME"
@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     JWT_SECRET: str = os.getenv("JWT_SECRET", _INSECURE_JWT_SECRET_DEFAULT)
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8  # 8 horas de sesión laboral
+
+    # ── Rate limiting de login (S-3, docs/features/plan_correcciones_pendientes.md) ──
+    # /auth/login no tenía ninguna mitigación de fuerza bruta salvo la lentitud de
+    # bcrypt. Formato slowapi: "N/period" (period: second/minute/hour/day).
+    AUTH_LOGIN_RATE_LIMIT: str = os.getenv("AUTH_LOGIN_RATE_LIMIT", "5/minute")
 
     # ── CORS ─────────────────────────────────────────────────────────────
     # Default "*" (todo permitido) para no romper el flujo de dev local; en producción
@@ -167,6 +172,12 @@ class Settings(BaseSettings):
     # Ventana de deduplicación de notificaciones persistidas (RN-N2): mismo
     # (tipo_evento, rol_destino, contexto) no se reinserta dentro de esta ventana.
     NOTIF_DEDUPE_HORAS: int = int(os.getenv("NOTIF_DEDUPE_HORAS", "24"))
+    # Divergencia % (costo_total_variable vs costo_total_plana) del último mes cerrado
+    # que dispara la alerta de piloto en sombra a gerencia (plan_actualizacion_modulo_
+    # metas_comisiones.md Fase 2 ítem 3) -- solo aplica con COMISION_MODO="sombra":
+    # el objetivo del piloto es justamente detectar esta divergencia antes de decidir
+    # activar el esquema variable como oficial.
+    NOTIF_DIVERGENCIA_COMISION_PCT: float = float(os.getenv("NOTIF_DIVERGENCIA_COMISION_PCT", "15.0"))
 
     # ── Módulo Administrador (docs/auditoria/36_actualizacion_modulo_admin.md) ──
     # Política de contraseña única (antes solo existía como `pattern` HTML en el
@@ -179,6 +190,9 @@ class Settings(BaseSettings):
     # Ventana por defecto de `/analytics/admin/audit-logs` cuando no se especifica
     # `fecha_desde` (H2, auditoría 36): antes no había ningún filtro de fecha.
     ADMIN_AUDIT_LOGS_VENTANA_DIAS: int = int(os.getenv("ADMIN_AUDIT_LOGS_VENTANA_DIAS", "30"))
+    # Ventana del conteo de logins fallidos en el panel de salud (Fase 2 Admin,
+    # docs/features/plan_correcciones_pendientes.md §3).
+    ADMIN_LOGINS_FALLIDOS_VENTANA_HORAS: int = int(os.getenv("ADMIN_LOGINS_FALLIDOS_VENTANA_HORAS", "24"))
 
     # ── Módulo Ventas (docs/auditoria/34_actualizacion_modulo_ventas.md) ──────────
     # Umbral de "riesgo alto" mostrado en el badge de churn del dashboard de Ventas
@@ -194,8 +208,7 @@ class Settings(BaseSettings):
     # evento en días distintos), solo protección contra el doble-click accidental.
     CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS: int = int(os.getenv("CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS", "10"))
 
-    class Config:
-        case_sensitive = True
+    model_config = SettingsConfigDict(case_sensitive=True)
 
 
 settings = Settings()
@@ -212,6 +225,8 @@ def validar_configuracion(config: "Settings") -> None:
         inseguros.append("JWT_SECRET")
     if config.POSTGRES_PASSWORD == _INSECURE_PG_PASSWORD_DEFAULT:
         inseguros.append("POSTGRES_PASSWORD")
+    if config.CORS_ORIGINS == ["*"]:
+        inseguros.append("CORS_ORIGINS")
 
     if not inseguros:
         return

@@ -1,5 +1,5 @@
 import { api } from './http';
-import type { GoalPeriod, GoalProposal, GoalsAISummary, VendorCommissionRow } from '../types/goals';
+import type { GoalPeriod, GoalProposal, GoalsAISummary, MetaSugeridaDesglose, VendorCommissionRow } from '../types/goals';
 
 export const getGoalPeriods = () =>
   api.get<GoalPeriod[]>('/api/v1/gerencia/goals/periods');
@@ -28,4 +28,13 @@ export const getGoalsAISummary = () =>
 export const getCommissionTracking = (anio: number, mes: number) =>
   api.get<{ comisiones: VendorCommissionRow[] }>('/api/v1/gerencia/goals/commissions', {
     params: { anio, mes },
+  });
+
+/** Desglose del motor estadístico IQR para el drawer de revisión de gerencia
+ * (plan_actualizacion_modulo_metas_comisiones.md Fase 2 ítem 1) -- equivalente
+ * gerencial de `getMetaSugerida` (services/ventas.ts), que solo cubre al vendedor
+ * autenticado; esta acepta cualquier `vendedor_origen` de la propuesta seleccionada. */
+export const getMetaSugeridaGerencia = (vendedorOrigen: string) =>
+  api.get<MetaSugeridaDesglose>('/api/v1/gerencia/goals/meta-sugerida', {
+    params: { vendedor_origen: vendedorOrigen },
   });

@@ -1,5 +1,7 @@
 import { api } from './http';
-import type { GerenciaKPIs, SalesPredictionGranularidad, SalesPredictionResponse } from '../types/gerencia';
+import type {
+  CumplimientoMetaPeriodo, GerenciaKPIs, SalesPredictionGranularidad, SalesPredictionResponse,
+} from '../types/gerencia';
 
 interface DateRangeParams {
   start_date?: string;
@@ -27,6 +29,26 @@ const cleanParams = <T extends object>(params?: T): Partial<T> | undefined => {
 
 export const getGerenciaKPIs = (params?: DateRangeParams & { categoria?: string; sucursal?: string; vendedor?: string; almacen?: string }) =>
   api.get<GerenciaKPIs>('/api/v1/analytics/gerencia/kpis', { params: cleanParams(params) });
+
+export const getCumplimientoMetaPeriodo = (anio: number, mes: number) =>
+  api.get<CumplimientoMetaPeriodo>('/api/v1/gerencia/goals/cumplimiento', { params: { anio, mes } });
+
+// Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): export del
+// dashboard -- mismo patrón que descargarReporteExcel de Bodega (services/bodega.ts).
+export const descargarReporteDashboardExcel = async (
+  params?: DateRangeParams & { categoria?: string; sucursal?: string; vendedor?: string; almacen?: string },
+) => {
+  const res = await api.get<Blob>('/api/v1/analytics/gerencia/reportes/dashboard/excel', {
+    params: cleanParams(params),
+    responseType: 'blob',
+  });
+  const url = URL.createObjectURL(res.data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'reporte_dashboard_gerencial.xlsx';
+  link.click();
+  URL.revokeObjectURL(url);
+};
 
 export const getRevenueByCategory = (params?: DateRangeParams & { sucursal?: string; vendedor?: string; almacen?: string }) =>
   api.get<{ cat: string, v: number }[]>('/api/v1/analytics/gerencia/revenue-by-category', { params: cleanParams(params) });

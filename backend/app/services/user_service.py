@@ -78,6 +78,9 @@ class UserService:
     def get_all(self, skip: int = 0, limit: int = 100) -> list[User]:
         return self.user_repo.get_all(skip=skip, limit=limit)
 
+    def registrar_intento_fallido(self, email: str, ip: str | None) -> None:
+        self.user_repo.registrar_intento_fallido(email, ip)
+
     def authenticate(self, email: str, password: str) -> User | None:
         """Valida credenciales. Retorna None si son incorrectas (sin revelar cuál)."""
         user = self.user_repo.get_by_email(email)

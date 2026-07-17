@@ -4,6 +4,19 @@ export interface AnomaliaResponse {
   es_anomalia: boolean;
 }
 
+export type AnomaliaEstado = 'nueva' | 'revisada' | 'descartada' | 'confirmada';
+
+export interface AnomaliaRevision {
+  id: number;
+  transaccion_id: string;
+  score: number;
+  estado: AnomaliaEstado;
+  revisor_id: number | null;
+  nota: string | null;
+  fecha_deteccion: string;
+  fecha_revision: string | null;
+}
+
 export interface RoleData {
   id: number;
   nombre: string;
@@ -57,4 +70,20 @@ export interface AuditLogFilters {
   fecha_hasta?: string;
   usuario?: string;
   modulo?: string;
+}
+
+export interface EtlControlEntry {
+  tabla_destino: string;
+  estado: string | null;
+  ultimo_etl_ok: string | null;
+  registros_cargados: number | null;
+  duracion_seg: number | null;
+  mensaje_error: string | null;
+  fecha_ejecucion: string | null;
+}
+
+export interface SystemHealth {
+  etl_detalle: EtlControlEntry[];
+  logins_fallidos_ventana_horas: number;
+  logins_fallidos_conteo: number;
 }

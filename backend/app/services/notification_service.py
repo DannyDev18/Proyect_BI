@@ -10,6 +10,8 @@ caído no debe tumbar el resto de la campana."""
 import logging
 from typing import Any, Callable
 
+import datetime
+
 from app.core.config import settings
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.models.notification import Notification
@@ -18,6 +20,7 @@ from app.repositories.notification_repository import NotificationRepository
 from app.schemas.notification import NotificacionOut
 from app.schemas.pagination import Page, PaginationParams, paginar
 from app.services.cartera360_service import Cartera360Service
+from app.services.commission_simulation_service import CommissionSimulationService
 from app.services.prediction_service import PredictionService
 from app.services.warehouse_service import WarehouseService
 
@@ -39,11 +42,13 @@ class NotificationService:
         warehouse_service: WarehouseService,
         prediction_service: PredictionService,
         cartera360_service: Cartera360Service,
+        commission_simulation_service: CommissionSimulationService,
     ):
         self.repo = notification_repo
         self.warehouse_service = warehouse_service
         self.prediction_service = prediction_service
         self.cartera360_service = cartera360_service
+        self.commission_simulation_service = commission_simulation_service
 
     # ── Orquestación: calculadas + persistidas por rol ──────────────────────
     def get_notificaciones(self, user: User) -> list[NotificacionOut]:
@@ -111,18 +116,51 @@ class NotificationService:
         no inventada, H31-3) como proxy de "desvío" contra la tendencia reciente."""
         forecast = self.prediction_service.get_sales_forecast(granularidad="semana")
         crecimiento = forecast.get("metricas", {}).get("crecimiento_esperado")
-        if crecimiento is None or abs(crecimiento) < settings.NOTIF_DESVIO_FORECAST_PCT:
+        resultado: list[dict[str, Any]] = []
+        if crecimiento is not None and abs(crecimiento) >= settings.NOTIF_DESVIO_FORECAST_PCT:
+            direccion = "por encima" if crecimiento > 0 else "por debajo"
+            resultado.append({
+                "tipo_evento": "desvio_forecast",
+                "titulo": "Desvío del forecast semanal",
+                "mensaje": (
+                    f"📈 La proyección de ventas de la próxima semana está {abs(crecimiento):.1f}% "
+                    f"{direccion} de la tendencia reciente."
+                ),
+                "accion_url": "/gerencia",
+                "prioridad": "alta" if abs(crecimiento) >= settings.NOTIF_DESVIO_FORECAST_PCT * 2 else "media",
+            })
+        return resultado + self._generar_divergencia_comisiones()
+
+    def _generar_divergencia_comisiones(self) -> list[dict[str, Any]]:
+        """Divergencia plano vs variable del piloto en sombra (Fase 2 ítem 3, plan_
+        actualizacion_modulo_metas_comisiones.md §3): solo tiene sentido mientras
+        `COMISION_MODO="sombra"` -- el propio objetivo del piloto es medir esta
+        divergencia antes de decidir activar el esquema variable como oficial. Reutiliza
+        `CommissionSimulationService.simular` (el mismo cálculo de `POST
+        /commission-simulation`) sobre el último mes YA CERRADO (no el mes en curso,
+        que está incompleto y daría una divergencia ruidosa)."""
+        if settings.COMISION_MODO != "sombra":
             return []
-        direccion = "por encima" if crecimiento > 0 else "por debajo"
+        hoy = datetime.date.today()
+        anio_cerrado, mes_cerrado = (hoy.year, hoy.month - 1) if hoy.month > 1 else (hoy.year - 1, 12)
+        resumen = self.commission_simulation_service.simular(meses=1, anio_desde=anio_cerrado, mes_desde=mes_cerrado)
+        if resumen.costo_total_plana <= 0:
+            return []
+        divergencia_pct = (
+            (resumen.costo_total_variable - resumen.costo_total_plana) / resumen.costo_total_plana * 100
+        )
+        if abs(divergencia_pct) < settings.NOTIF_DIVERGENCIA_COMISION_PCT:
+            return []
+        direccion = "más caro" if divergencia_pct > 0 else "más barato"
         return [{
-            "tipo_evento": "desvio_forecast",
-            "titulo": "Desvío del forecast semanal",
+            "tipo_evento": "divergencia_comision_variable",
+            "titulo": "Divergencia del piloto de comisiones variables",
             "mensaje": (
-                f"📈 La proyección de ventas de la próxima semana está {abs(crecimiento):.1f}% "
-                f"{direccion} de la tendencia reciente."
+                f"💰 El esquema variable habría costado {abs(divergencia_pct):.1f}% {direccion} que el "
+                f"plano en {mes_cerrado:02d}/{anio_cerrado} (piloto en sombra, aún no es el esquema oficial)."
             ),
-            "accion_url": "/gerencia",
-            "prioridad": "alta" if abs(crecimiento) >= settings.NOTIF_DESVIO_FORECAST_PCT * 2 else "media",
+            "accion_url": "/gerencia/metas",
+            "prioridad": "alta" if abs(divergencia_pct) >= settings.NOTIF_DIVERGENCIA_COMISION_PCT * 2 else "media",
         }]
 
     def _generar_ventas(self, user: User) -> list[dict[str, Any]]:

@@ -81,11 +81,18 @@ Los detalles y el resto de mejoras (M-11..M-24) están por eje a continuación.
 
 ### M-13 · BAJA — Limpiar artefactos ML duplicados
 
-- **Evidencia:** `.pkl` legacy duplicados en `models/` (raíz), `backend/ml_models/` y
+- ~~**Evidencia:** `.pkl` legacy duplicados en `models/` (raíz), `backend/ml_models/` y
   nombres viejos (`*_rf_model.pkl`) en `ml/models/`; `catboost_info/` en la raíz y en
-  `ml/` (residuos de entrenamiento). El backend solo consume los nombres bajo contrato.
-- **Acción:** eliminar `models/` raíz y `backend/ml_models/` del repo, agregar
-  `catboost_info/` a `.gitignore`, dejar solo `ml/models/*.pkl + *.meta.json`.
+  `ml/` (residuos de entrenamiento).~~
+- **Resuelto (2026-07-16), reducido al hallazgo real:** `models/` (raíz) ya no existe
+  (limpiado en una ronda previa); `backend/ml_models/`/`ml/models/` **no están
+  versionados** (`*.pkl` está en `.gitignore` desde antes, `git ls-files` confirma 0
+  archivos rastreados en ambos) -- son copias locales de runtime, no duplicados del
+  repo, no hay nada que "eliminar del repo" ahí. Lo único que SÍ estaba versionado por
+  error era `ml/catboost_info/` (4 archivos de log de entrenamiento, se regeneran en
+  cada corrida de `ml/main.py`) -- se agregó `catboost_info/` a `.gitignore` y se quitó
+  del índice (`git rm --cached`, los archivos siguen en disco, solo dejan de rastrearse).
+  No se encontró ningún `catboost_info/` en la raíz del repo.
 
 ## 2. Eje EDW / datos
 
@@ -293,9 +300,11 @@ Tres huecos de datos conocidos que siguen abiertos; cada uno con acción concret
 
 ### M-24 · BAJA — Renovar el Postgres del compose con versión menor fijada
 
-- **Evidencia:** `postgres:16-alpine` sin tag menor — un `pull` futuro puede cambiar la
-  versión bajo los pies del volumen. **Acción:** fijar `postgres:16.6-alpine` (o la
-  menor vigente) y documentar el procedimiento de upgrade.
+- ~~**Evidencia:** `postgres:16-alpine` sin tag menor.~~ **Resuelto (2026-07-16):**
+  fijado a `postgres:16.13-alpine` en `docker-compose.yml` -- la misma versión que ya
+  corre el contenedor `bi_postgres_edw` (confirmado en sus logs de arranque), así que
+  no hay ningún upgrade real de por medio, solo se deja de depender de qué resuelva
+  "16-alpine" en el próximo `pull`.
 
 ---
 

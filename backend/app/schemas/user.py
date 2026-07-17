@@ -1,7 +1,7 @@
 # backend/app/schemas/user.py
 import re
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 from typing import Optional
 from datetime import datetime
 from app.core.config import settings
@@ -38,8 +38,7 @@ class UserOut(BaseModel):
     updated_at: datetime
     role: RoleOut  # Objeto completo del rol (no solo el ID)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserMe(BaseModel):
@@ -56,8 +55,7 @@ class UserMe(BaseModel):
     es_activo: bool
     role: RoleOut
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Schemas de entrada (request) ──────────────────────────────────────────────

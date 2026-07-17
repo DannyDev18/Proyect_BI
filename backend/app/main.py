@@ -8,18 +8,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.routes.api import api_router
 from app.core.config import settings, validar_configuracion
 from app.core.exceptions import ConflictError, DomainError, NotFoundError, PermissionDeniedError
 from app.core.logging_config import configure_logging
+from app.core.rate_limit import limiter
 from app.ml.model_loader import ModelLoader
 from app.services.training_service import TrainingService
-
-# Importa base con todos los modelos registrados para create_all
-import app.database.base  # noqa: F401 — registra Role, User, Goal en Base.metadata
-from app.database.session import Base, engine
 
 configure_logging()
 logger = logging.getLogger("Backend.Main")
@@ -28,19 +27,10 @@ logger = logging.getLogger("Backend.Main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    # El esquema public.* lo gestiona Alembic (backend/alembic/, aplicado por
+    # entrypoint.sh ANTES de que uvicorn arranque) -- ver
+    # docs/features/plan_migraciones_esquema_public.md. Ya no se verifica/crea aquí.
     validar_configuracion(settings)
-
-    try:
-        Base.metadata.create_all(bind=engine)
-        logger.info("Tablas public.* verificadas/creadas correctamente.")
-        # create_all no altera tablas existentes: columna añadida en un volumen Docker
-        # ya inicializado (docs/auditoria/ vínculo usuario-almacén, panel Administrador).
-        with engine.begin() as conn:
-            conn.execute(text(
-                "ALTER TABLE public.usuarios ADD COLUMN IF NOT EXISTS codalm VARCHAR(10)"
-            ))
-    except Exception as e:
-        logger.error(f"Error al verificar tablas: {e}", exc_info=True)
 
     app.state.model_loader = ModelLoader(models_dir=settings.ML_MODELS_DIR, contracts_dir=settings.ML_CONTRACTS_DIR)
     app.state.model_loader.load_all()
@@ -71,6 +61,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Rate limiting (S-3): mitiga fuerza bruta contra /auth/login, hoy solo frenada por
+# la lentitud de bcrypt. Un solo proceso -> límite en memoria (get_remote_address) es
+# suficiente; no hay backend Redis en la arquitectura para compartir el contador.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 

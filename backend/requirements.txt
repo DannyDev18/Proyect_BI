@@ -1,6 +1,8 @@
 fastapi>=0.100.0,<1.0.0
 uvicorn>=0.23.0,<1.0.0
 sqlalchemy>=2.0.19,<2.1.0
+# Migraciones versionadas del esquema public (docs/features/plan_migraciones_esquema_public.md)
+alembic>=1.13.0,<2.0.0
 pydantic>=2.1.1,<3.0.0
 pydantic-settings>=2.0.2,<3.0.0
 psycopg2-binary>=2.9.7,<3.0.0
@@ -26,3 +28,5 @@ catboost==1.2.10
 lightgbm==4.6.0
 # Export XLSX de reportes del módulo Bodega (docs/auditoria/23_modulo_bodega.md)
 openpyxl>=3.1.0,<4.0.0
+# Rate limiting de /auth/login (S-3, docs/features/plan_correcciones_pendientes.md)
+slowapi>=0.1.9,<0.2.0

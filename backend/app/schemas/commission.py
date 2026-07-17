@@ -21,6 +21,18 @@ class CommissionTrackingResponse(BaseModel):
     comisiones: List[VendorCommissionRowResponse]
 
 
+class CumplimientoMetaPeriodoResponse(BaseModel):
+    """KPI de cumplimiento vs metas del dashboard principal de Gerencia (Fase 2, docs/
+    features/plan_correcciones_pendientes.md §3) -- agregado company-wide de metas
+    APROBADA del período, sin cálculo de comisión."""
+    anio: int
+    mes: int
+    monto_meta_total: float
+    venta_real_total: float
+    pct_cumplimiento: float
+    vendedores_con_meta_aprobada: int
+
+
 class MiComisionResponse(BaseModel):
     vendedor_origen: str
     anio: int

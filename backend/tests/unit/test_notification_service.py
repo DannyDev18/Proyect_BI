@@ -53,8 +53,17 @@ def cartera360_service():
 
 
 @pytest.fixture
-def service(notification_repo, warehouse_service, prediction_service, cartera360_service):
-    return NotificationService(notification_repo, warehouse_service, prediction_service, cartera360_service)
+def commission_simulation_service():
+    css = MagicMock()
+    css.simular.return_value = MagicMock(costo_total_plana=0.0, costo_total_variable=0.0)
+    return css
+
+
+@pytest.fixture
+def service(notification_repo, warehouse_service, prediction_service, cartera360_service, commission_simulation_service):
+    return NotificationService(
+        notification_repo, warehouse_service, prediction_service, cartera360_service, commission_simulation_service,
+    )
 
 
 # ── Generador calculado: bodega ──────────────────────────────────────────────
@@ -126,6 +135,33 @@ def test_get_notificaciones_gerencia_reporta_caida(service, prediction_service):
     resultado = service.get_notificaciones(_user("gerencia"))
     assert len(resultado) == 1
     assert "por debajo" in resultado[0].mensaje
+
+
+# ── Generador calculado: divergencia plano vs variable (piloto en sombra) ────
+def test_divergencia_comisiones_sin_alerta_fuera_de_modo_sombra(service, commission_simulation_service, monkeypatch):
+    import app.services.notification_service as ns
+    monkeypatch.setattr(ns.settings, "COMISION_MODO", "plana")
+    commission_simulation_service.simular.return_value = MagicMock(costo_total_plana=1000.0, costo_total_variable=1500.0)
+    resultado = service.get_notificaciones(_user("gerencia"))
+    assert all(r.tipo_evento != "divergencia_comision_variable" for r in resultado)
+
+
+def test_divergencia_comisiones_alerta_en_sombra_sobre_umbral(service, commission_simulation_service, monkeypatch):
+    import app.services.notification_service as ns
+    monkeypatch.setattr(ns.settings, "COMISION_MODO", "sombra")
+    commission_simulation_service.simular.return_value = MagicMock(costo_total_plana=1000.0, costo_total_variable=1300.0)
+    resultado = service.get_notificaciones(_user("gerencia"))
+    divergencia = [r for r in resultado if r.tipo_evento == "divergencia_comision_variable"]
+    assert len(divergencia) == 1
+    assert "más caro" in divergencia[0].mensaje
+
+
+def test_divergencia_comisiones_sin_alerta_bajo_umbral(service, commission_simulation_service, monkeypatch):
+    import app.services.notification_service as ns
+    monkeypatch.setattr(ns.settings, "COMISION_MODO", "sombra")
+    commission_simulation_service.simular.return_value = MagicMock(costo_total_plana=1000.0, costo_total_variable=1050.0)
+    resultado = service.get_notificaciones(_user("gerencia"))
+    assert all(r.tipo_evento != "divergencia_comision_variable" for r in resultado)
 
 
 # ── Generador calculado: ventas (churn alto, RLS por vendedor) ───────────────

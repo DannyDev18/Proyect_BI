@@ -30,9 +30,9 @@
 
 ## 3. Fase 2 — Mejoras de valor
 
-1. **Churn accionable:** lista de clientes en riesgo de la cartera propia ordenada por (probabilidad × venta histórica), no consulta uno-a-uno por ID — hoy el vendedor tiene que adivinar a quién consultar.
-2. Integrar la señal de churn en la lista de trabajo de Cartera 360 (cliente moroso + riesgo de fuga = prioridad máxima) — cruce de datos que ya existen, sin ML nuevo.
-3. Telemetría de venta cruzada: panel de KPIs RN-CS2 para gerencia (hoy solo lo ve ventas).
+1. ~~**Churn accionable:**~~ **Resuelto.** `Cartera360Service.get_lista_trabajo` ya ordena por `prioridad = valor_histórico × (1 + probabilidad_abandono)` (sin consulta uno-a-uno). Único cabo suelto encontrado en la revisión de 2026-07-16: la lista no exponía `riesgo_alto` (solo el número crudo `probabilidad_abandono`) y la UI no tenía forma de filtrar -- se agregó el campo al schema/tipo y un checkbox "Solo riesgo alto" en `VentasCartera360.tsx`.
+2. ~~Integrar la señal de churn en la lista de trabajo de Cartera 360~~ **Resuelto** (mismo mecanismo que el ítem 1 -- el cruce ya existe en `get_lista_trabajo`).
+3. ~~Telemetría de venta cruzada: panel de KPIs RN-CS2 para gerencia~~ **Resuelto (2026-07-16).** `CrossSellKpiPanel` ya existía (usado en Ventas) y el endpoint `/cross-selling/kpis` ya estaba abierto a `gerencia` por RBAC, pero nunca se había montado en ningún panel de Gerencia -- se agregó a `DashboardGerencia.tsx`.
 
 ## 4. Validación
 

@@ -1,5 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getGoalPeriods, getGoalsTracking, generateGoals, reviewGoal, getGoalsAISummary, getCommissionTracking } from '../services/goals';
+import {
+  getGoalPeriods, getGoalsTracking, generateGoals, reviewGoal, getGoalsAISummary, getCommissionTracking,
+  getMetaSugeridaGerencia,
+} from '../services/goals';
 import { qk } from '../constants/queryKeys';
 import type { GoalPeriod, GoalProposal, GoalsAISummary, VendorCommissionRow } from '../types/goals';
 
@@ -64,4 +67,15 @@ export const useReviewGoal = () => {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['goals', 'tracking'] }),
   });
   return { review: mutation.mutateAsync, pendingId: mutation.isPending ? mutation.variables?.id ?? null : null };
+};
+
+/** Desglose IQR de una propuesta puntual, para el drawer de revisión de gerencia --
+ * solo se pide cuando el drawer está abierto (`enabled`), nunca precargado por fila. */
+export const useMetaSugeridaGerencia = (vendedorOrigen: string | null) => {
+  const query = useQuery({
+    queryKey: qk.goals.metaSugeridaGerencia(vendedorOrigen ?? ''),
+    queryFn: () => getMetaSugeridaGerencia(vendedorOrigen as string).then((r) => r.data),
+    enabled: !!vendedorOrigen,
+  });
+  return { data: query.data, loading: query.isLoading, error: errorMessage(query.error) };
 };

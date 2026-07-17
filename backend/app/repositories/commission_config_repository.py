@@ -10,8 +10,10 @@ import datetime
 from sqlalchemy.orm import Session
 
 from app.models.commission_config import (
-    ComisionConfigVendedor, ComisionFactorCredito, ComisionLiquidacion, ComisionMatrizCategoria,
+    ComisionConfigAuditoria, ComisionConfigVendedor, ComisionFactorCredito, ComisionLiquidacion,
+    ComisionMatrizCategoria,
 )
+from app.models.user import User
 from app.services.commission_engine import RangoCredito, ReglaCategoria
 
 
@@ -109,30 +111,55 @@ class CommissionConfigRepository:
         return nuevas
 
     # ── Configuración por vendedor (tipo externo/interno, brecha B1) ───────────
-    def get_config_vendedor(self, vendedor_origen: str) -> ComisionConfigVendedor | None:
+    def get_config_vendedor(
+        self, vendedor_origen: str, fecha: datetime.date | None = None,
+    ) -> ComisionConfigVendedor | None:
+        """Resuelve por vigencia (C-3, docs/features/plan_correcciones_pendientes.md;
+        auditoría 35 H4): sin `fecha` devuelve la configuración vigente hoy; pasando la
+        fecha de cierre de un período (`fecha_referencia_periodo`) devuelve el tipo/
+        factor con el que ese período se calculó, sin importar cambios posteriores."""
+        fecha = fecha or datetime.date.today()
         return (
             self.db.query(ComisionConfigVendedor)
-            .filter(ComisionConfigVendedor.id_vendedor_origen == vendedor_origen)
+            .filter(
+                ComisionConfigVendedor.id_vendedor_origen == vendedor_origen,
+                ComisionConfigVendedor.vigente_desde <= fecha,
+                (ComisionConfigVendedor.vigente_hasta.is_(None)) | (ComisionConfigVendedor.vigente_hasta >= fecha),
+            )
             .first()
         )
 
     def get_all_config_vendedores(self) -> list[ComisionConfigVendedor]:
-        return self.db.query(ComisionConfigVendedor).order_by(ComisionConfigVendedor.id_vendedor_origen).all()
+        """Solo las configuraciones vigentes hoy (`vigente_hasta IS NULL`) -- el listado
+        de gerencia no debe mostrar historial cerrado."""
+        return (
+            self.db.query(ComisionConfigVendedor)
+            .filter(ComisionConfigVendedor.vigente_hasta.is_(None))
+            .order_by(ComisionConfigVendedor.id_vendedor_origen)
+            .all()
+        )
 
     def upsert_config_vendedor(
         self, vendedor_origen: str, tipo: str, factor_tipo: float, fecha_ingreso: datetime.date | None,
     ) -> ComisionConfigVendedor:
-        existente = self.get_config_vendedor(vendedor_origen)
-        if existente:
-            existente.tipo = tipo
-            existente.factor_tipo = factor_tipo
-            existente.fecha_ingreso = fecha_ingreso
-            self.db.commit()
-            self.db.refresh(existente)
-            return existente
+        """Cierra la vigencia activa del vendedor si existe, e inserta la nueva -- nunca
+        hace UPDATE de una fila vigente (mismo patrón que `upsert_regla_categoria`),
+        para preservar lo que las liquidaciones ya congeladas usaron al calcularse."""
+        hoy = datetime.date.today()
+        activa = (
+            self.db.query(ComisionConfigVendedor)
+            .filter(
+                ComisionConfigVendedor.id_vendedor_origen == vendedor_origen,
+                ComisionConfigVendedor.vigente_hasta.is_(None),
+            )
+            .first()
+        )
+        if activa:
+            activa.vigente_hasta = hoy - datetime.timedelta(days=1)
 
         nuevo = ComisionConfigVendedor(
-            id_vendedor_origen=vendedor_origen, tipo=tipo, factor_tipo=factor_tipo, fecha_ingreso=fecha_ingreso,
+            id_vendedor_origen=vendedor_origen, tipo=tipo, factor_tipo=factor_tipo,
+            fecha_ingreso=fecha_ingreso, vigente_desde=hoy,
         )
         self.db.add(nuevo)
         self.db.commit()
@@ -184,3 +211,26 @@ class CommissionConfigRepository:
         self.db.commit()
         self.db.refresh(nuevo)
         return nuevo
+
+    # ── Bitácora de cambios de configuración (Fase 2 ítem 2, plan_actualizacion_
+    # modulo_metas_comisiones.md §3) ─────────────────────────────────────────────
+    def log_cambio_config(self, usuario_id: int | None, tabla: str, accion: str, detalle: dict) -> None:
+        """Append-only: se llama DESPUÉS de cada upsert/replace exitoso de matriz de
+        categorías, factores de crédito o config de vendedor -- nunca se actualiza ni
+        se borra una fila de esta tabla."""
+        self.db.add(ComisionConfigAuditoria(
+            usuario_id=usuario_id, tabla=tabla, accion=accion, detalle_json=detalle,
+        ))
+        self.db.commit()
+
+    def get_auditoria(self, limit: int = 100) -> list[tuple[ComisionConfigAuditoria, str | None]]:
+        """Devuelve cada entrada junto al nombre del usuario que hizo el cambio (LEFT
+        JOIN: un usuario luego eliminado no debe tumbar la lectura del historial)."""
+        rows = (
+            self.db.query(ComisionConfigAuditoria, User.nombre)
+            .outerjoin(User, ComisionConfigAuditoria.usuario_id == User.id)
+            .order_by(ComisionConfigAuditoria.fecha_creacion.desc())
+            .limit(limit)
+            .all()
+        )
+        return [(entrada, nombre) for entrada, nombre in rows]

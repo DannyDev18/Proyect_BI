@@ -1,9 +1,26 @@
 export interface GoalProposal {
   id: number;
   vendedor: string;
+  vendedor_origen: string;
   monto_meta: number;
   comision_base_pct: number;
   estado: string;
+}
+
+// Desglose del motor estadístico IQR para un vendedor -- transparencia del cálculo
+// (plan_actualizacion_modulo_metas_comisiones.md Fase 2 ítem 1). Espejo de
+// backend/app/schemas/analytics.py::MetaSugeridaResponse.
+export interface MetaSugeridaDesglose {
+  vendedor_origen: string;
+  meta_sugerida_estadistica: number;
+  metodo_estadistico: string;
+  meses_historico_usados: number;
+  valores_atipicos_excluidos: number;
+  meses_atipicos_ml_detectados: number;
+  componente_estacional: number | null;
+  componente_tendencia: number;
+  factor_tendencia_aplicado: number;
+  coeficiente_variacion: number;
 }
 
 export interface GoalPeriod {

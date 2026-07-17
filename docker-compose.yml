@@ -4,7 +4,12 @@ services:
   #   - public.* → tablas de la app: roles, usuarios (autenticación RBAC)
   #   - edw.*    → Data Warehouse: dimensiones, hechos, KPIs, analytics
   postgres_edw:
-    image: postgres:16-alpine
+    # Versión menor fijada (M-24, docs/features/plan_mejoras_proyecto.md): un `pull`
+    # futuro con solo "16-alpine" puede traer una versión distinta a la que ya corre
+    # el volumen existente (hoy 16.13). Al subir de versión menor deliberadamente,
+    # documentar el procedimiento de upgrade (pg_upgrade o dump/restore) antes de tocar
+    # este tag en un entorno con datos reales.
+    image: postgres:16.13-alpine
     container_name: bi_postgres_edw
     restart: unless-stopped
     environment:

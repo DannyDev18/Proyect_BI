@@ -100,6 +100,26 @@ class CommissionService:
             ))
         return resultado
 
+    # ── Fase 2 Gerencia: KPI de cumplimiento vs metas del dashboard principal ──────
+    # (docs/features/plan_correcciones_pendientes.md §3) -- agregado company-wide,
+    # sin el cálculo de comisión (irrelevante para esta tarjeta), a diferencia de
+    # get_commission_tracking (panel de Metas y Comisiones, por vendedor).
+    def get_cumplimiento_meta_periodo(self, anio: int, mes: int) -> dict:
+        """Solo metas `APROBADA`: una `PROPUESTA` sin aprobar todavía no es un
+        compromiso real de gerencia, y una `RECHAZADA` no debe contar como meta."""
+        rows = self.goal_repo.get_commission_tracking_rows(anio, mes)
+        aprobadas = [r for r in rows if r["estado"] == "APROBADA"]
+        monto_meta_total = sum(r["monto_meta"] for r in aprobadas)
+        venta_real_total = sum(r["venta_neta"] for r in aprobadas)
+        pct_cumplimiento = (venta_real_total / monto_meta_total * 100.0) if monto_meta_total > 0 else 0.0
+        return {
+            "anio": anio, "mes": mes,
+            "monto_meta_total": round(monto_meta_total, 2),
+            "venta_real_total": round(venta_real_total, 2),
+            "pct_cumplimiento": round(pct_cumplimiento, 2),
+            "vendedores_con_meta_aprobada": len(aprobadas),
+        }
+
     # ── Panel del vendedor: su propia comisión del mes en curso ───────────────────
     def get_my_commission(self, vendedor_origen: str, anio: int, mes: int) -> MiComision:
         goal = self.goal_repo.get_goal_for_period(vendedor_origen, anio, mes)
@@ -191,7 +211,7 @@ class CommissionService:
         fecha_periodo = fecha_referencia_periodo(anio, mes)
         matriz = self.commission_config_repo.get_matriz_as_reglas(fecha_periodo)
         rangos_credito = self.commission_config_repo.get_factores_credito_as_rangos(fecha_periodo)
-        config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor_origen)
+        config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor_origen, fecha_periodo)
         factor_tipo = (
             float(config_vendedor.factor_tipo) if config_vendedor else settings.COMISION_FACTOR_EXTERNO_DEFAULT
         )

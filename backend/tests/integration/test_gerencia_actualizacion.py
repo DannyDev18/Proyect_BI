@@ -22,6 +22,55 @@ def test_kpis_gerencia_rechaza_roles_no_autorizados(client, auth_headers):
     assert r.status_code == 403
 
 
+# ── Fase 2 Gerencia: comparativa vs. período anterior (docs/features/plan_correcciones_pendientes.md §3) ──
+def test_kpis_gerencia_sin_fechas_no_calcula_tendencia(client, auth_headers):
+    """Sin start_date/end_date la vista es 'todo el histórico' -- no hay período
+    anterior significativo, así que las tendencias deben venir en None (no romper el
+    comportamiento por defecto ya existente de este KPI)."""
+    r = client.get("/api/v1/analytics/gerencia/kpis", headers=auth_headers("gerencia"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ingresos_totales_tendencia_pct"] is None
+    assert body["margen_utilidad_neta_tendencia_pct"] is None
+
+
+def test_kpis_gerencia_con_fechas_explicitas_calcula_tendencia(client, auth_headers):
+    r = client.get(
+        "/api/v1/analytics/gerencia/kpis",
+        params={"start_date": "2026-03-01", "end_date": "2026-03-31"},
+        headers=auth_headers("gerencia"),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body.keys()) >= {
+        "ingresos_totales_tendencia_pct", "margen_utilidad_neta_tendencia_pct",
+        "ticket_promedio_tendencia_pct", "roi_estimado_tendencia_pct",
+    }
+
+
+# ── Fase 2 Gerencia: export Excel/PDF del dashboard (docs/features/plan_correcciones_pendientes.md §3) ──
+def test_reporte_dashboard_devuelve_contrato_tipado(client, auth_headers):
+    r = client.get("/api/v1/analytics/gerencia/reportes/dashboard", headers=auth_headers("gerencia"))
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body.keys()) >= {"tipo", "titulo", "generado_en", "resumen_ejecutivo", "interpretacion", "secciones"}
+    assert len(body["resumen_ejecutivo"]) >= 4
+    assert len(body["secciones"]) == 2
+
+
+def test_reporte_dashboard_rechaza_roles_no_autorizados(client, auth_headers):
+    r = client.get("/api/v1/analytics/gerencia/reportes/dashboard", headers=auth_headers("ventas"))
+    assert r.status_code == 403
+
+
+def test_reporte_dashboard_excel_devuelve_xlsx_descargable(client, auth_headers):
+    r = client.get("/api/v1/analytics/gerencia/reportes/dashboard/excel", headers=auth_headers("gerencia"))
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "attachment" in r.headers["content-disposition"]
+    assert len(r.content) > 0
+
+
 # ── H4: GET /system/provenance ───────────────────────────────────────────────
 def test_provenance_devuelve_estado_de_modelos_para_cualquier_rol_autenticado(client, auth_headers):
     for rol in ("administrador", "gerencia", "ventas", "bodega"):

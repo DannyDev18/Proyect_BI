@@ -10,6 +10,11 @@ class GoalReviewPayload(BaseModel):
 class GoalCommissionReportItem(BaseModel):
     id: int
     vendedor: str
+    # Código SAP del vendedor (dim_vendedor.codven) -- necesario para que el drawer de
+    # revisión de gerencia pida el desglose IQR de esta fila vía
+    # GET /gerencia/goals/meta-sugerida?vendedor_origen=... (plan_actualizacion_modulo_metas_comisiones.md
+    # Fase 2 ítem 1: transparencia del cálculo).
+    vendedor_origen: str
     monto_meta: float
     comision_base_pct: float
     estado: str

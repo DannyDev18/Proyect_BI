@@ -93,6 +93,10 @@ backend/ml_models/
 data/raw/
 data/processed/
 
+# Residuos de entrenamiento de CatBoost (se regeneran en cada corrida de ml/main.py,
+# no son artefactos publicados -- M-13, docs/features/plan_mejoras_proyecto.md)
+catboost_info/
+
 # ==========================================
 # DOCKER Y CONTENEDORES
 # ==========================================

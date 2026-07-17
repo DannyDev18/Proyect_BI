@@ -1,18 +1,22 @@
 # backend/app/api/routes/auth.py
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.dependencies import UserServiceDep
 from app.core import security
+from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.schemas.token import Token
 
 router = APIRouter()
 
 
 @router.post("/login", response_model=Token, summary="Iniciar sesión (OAuth2 Password Flow)")
+@limiter.limit(settings.AUTH_LOGIN_RATE_LIMIT)
 def login_for_access_token(
+    request: Request,
     user_service: UserServiceDep,
     form_data: OAuth2PasswordRequestForm = Depends(),
 ) -> Token:
@@ -29,6 +33,10 @@ def login_for_access_token(
     """
     user = user_service.authenticate(form_data.username, form_data.password)
     if not user:
+        # Fase 2 Admin, panel de salud (docs/features/plan_correcciones_pendientes.md
+        # §3): antes no se registraba ningún intento fallido. Best-effort, no bloquea
+        # la respuesta 401 si falla.
+        user_service.registrar_intento_fallido(form_data.username, request.client.host if request.client else None)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Correo o contraseña incorrectos.",

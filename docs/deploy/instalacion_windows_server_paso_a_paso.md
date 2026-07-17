@@ -150,6 +150,11 @@ PG_PASSWORD=<generado arriba>
 PII_SALT=<generado arriba — NO CAMBIAR NUNCA>
 JWT_SECRET=<generado arriba>
 
+# Admin inicial del backend (sembrado por la migración Alembic 0002_seed_roles la
+# primera vez que arranca el contenedor `backend`, ver §6.1 más abajo) — obligatoria,
+# las migraciones fallan sin ella. Generar una contraseña real, no reusar la de dev.
+ADMIN_INITIAL_PASSWORD=<contraseña segura, distinta de la de desarrollo>
+
 # Zona horaria (alineación de fechas del snapshot — plan §3.1)
 TZ=America/Guayaquil
 
@@ -177,6 +182,36 @@ docker exec bi_postgres_edw psql -U etl_user -d edw -c "SELECT nombre FROM publi
 > Si los DDL no corrieron (tablas ausentes), el volumen ya existía de un intento
 > anterior: `docker compose down -v` (⚠️ borra datos — solo válido AHORA que está
 > vacío, nunca después) y repetir `up -d`.
+
+## 6.1 Levantar el backend (aplica las migraciones del esquema `public` solo)
+
+El esquema `edw.*`/`ml.*` (paso 6) lo crea el `initdb` de Postgres; el esquema
+`public.*` (auth, metas, comisiones, notificaciones) lo gestiona **Alembic**
+(`backend/alembic/`, docs/features/plan_migraciones_esquema_public.md) — se aplica
+automáticamente al arrancar el contenedor `backend`, sin ningún paso manual de SQL:
+
+```bash
+cd /opt/proyect_bi
+docker compose build backend
+docker compose up -d backend
+
+# Verificar que las migraciones corrieron (busca la traza de apply_migrations.py)
+docker compose logs backend | grep -i "migracion\|alembic"
+
+docker exec bi_postgres_edw psql -U etl_user -d edw -c \
+  "SELECT version_num FROM public.alembic_version;"   # debe mostrar 0002_seed_roles
+docker exec bi_postgres_edw psql -U etl_user -d edw -c \
+  "SELECT email FROM public.usuarios WHERE email = 'admin@empresa.com';"
+
+curl -s http://localhost:8000/health   # {"status":"ok", ...}
+```
+
+> Si el paso 6 ya inicializó `public.*` vía `edw/07`/`edw/08` (caso normal en un
+> volumen nuevo), el backend detecta esa BD "pre-Alembic" (existe `public.usuarios`,
+> no existe `public.alembic_version`) y la sella con `alembic stamp
+> 0001_baseline_public` antes de aplicar lo pendiente — no re-ejecuta ningún DDL.
+> Si las migraciones fallan, el contenedor **no arranca** (falla rápido, revisar
+> `ADMIN_INITIAL_PASSWORD` en `.env` primero — es la causa más común).
 
 ## 7. Probar conexión a SAP desde el contenedor ETL
 

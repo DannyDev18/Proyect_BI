@@ -2,6 +2,14 @@
 -- SEED INICIAL — Roles y Usuario Administrador
 -- Motor: PostgreSQL 16 | Esquema: public
 -- ON CONFLICT DO NOTHING → idempotente, safe para re-runs
+--
+-- REFERENCIA -- solo para bootstrap de un volumen Docker NUEVO (initdb). En
+-- producción, el seed de catálogo (roles) + admin inicial lo aplica la migración
+-- Alembic `backend/alembic/versions/0002_seed_roles.py`
+-- (docs/features/plan_migraciones_esquema_public.md), que además NO usa el hash
+-- bcrypt fijo de abajo -- toma la contraseña de `ADMIN_INITIAL_PASSWORD` (env var) y
+-- la hashea en el momento. El hash fijo aquí es solo para el dataset de desarrollo/
+-- demo (los 3 usuarios de negocio de ejemplo: gerencia/bodega/ventas).
 -- ============================================================
 
 -- ── 1. Insertar los 4 Roles del Negocio ──────────────────────

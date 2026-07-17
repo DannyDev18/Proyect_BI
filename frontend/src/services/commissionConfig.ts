@@ -1,7 +1,8 @@
 import { api } from './http';
 import type {
-  ConfigVendedor, ConfigVendedorPayload, FactorCredito, FactorCreditoPayload, LineaSinCosto,
-  MatrizCategoria, MatrizCategoriaPayload, PerfilCategoria, SimulacionResumen,
+  ClaseBusqueda, ComisionConfigAuditoriaEntrada, ConfigVendedor, ConfigVendedorPayload, FactorCredito,
+  FactorCreditoPayload, LineaSinCosto, MatrizCategoria, MatrizCategoriaPayload, PerfilCategoria, SimulacionResumen,
+  VendedorBusqueda,
 } from '../types/commissionConfig';
 
 // Configuración del sistema de Comisiones Variables
@@ -39,3 +40,19 @@ export const getLineasSinCosto = (anio?: number, mes?: number) =>
   api.get<{ lineas: LineaSinCosto[] }>('/api/v1/gerencia/goals/lineas-sin-costo', {
     params: { anio, mes },
   });
+
+/** Bitácora de cambios de configuración (plan_actualizacion_modulo_metas_comisiones.md
+ * Fase 2 ítem 2): quién cambió qué factor y cuándo, sin importar la tabla. */
+export const getComisionConfigAuditoria = (limit = 100) =>
+  api.get<{ entradas: ComisionConfigAuditoriaEntrada[] }>('/api/v1/gerencia/goals/commission-config/auditoria', {
+    params: { limit },
+  });
+
+/** Búsqueda inteligente (autocomplete) para los formularios de configuración -- una
+ * sola consulta por letra con `q`, nunca el catálogo completo, para no sobrecargar
+ * el backend con cada tecla escrita. */
+export const searchClasesProducto = (q: string) =>
+  api.get<ClaseBusqueda[]>('/api/v1/gerencia/goals/commission-config/search/clases', { params: { q } });
+
+export const searchVendedoresComision = (q: string) =>
+  api.get<VendedorBusqueda[]>('/api/v1/gerencia/goals/commission-config/search/vendedores', { params: { q } });

@@ -45,10 +45,21 @@ export interface FactorCreditoPayload {
 
 export interface ConfigVendedor {
   id_vendedor_origen: string;
+  nombre_vendedor: string | null;
   tipo: TipoVendedor;
   factor_tipo: number;
   fecha_ingreso: string | null;
   activo: boolean;
+}
+
+export interface VendedorBusqueda {
+  codven: string;
+  nombre_vendedor: string | null;
+}
+
+export interface ClaseBusqueda {
+  clase: string;
+  productos: number;
 }
 
 export interface ConfigVendedorPayload {
@@ -95,4 +106,14 @@ export interface LineaSinCosto {
   vendedor_origen: string;
   venta_afectada: number;
   num_lineas: number;
+}
+
+export interface ComisionConfigAuditoriaEntrada {
+  id: number;
+  usuario_id: number | null;
+  usuario_nombre: string | null;
+  tabla: string;
+  accion: string;
+  detalle_json: Record<string, unknown>;
+  fecha_creacion: string;
 }

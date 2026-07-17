@@ -4,15 +4,18 @@ import { Settings, Plus, CreditCard, Users, Pencil, X } from 'lucide-react';
 import {
   useMatrizCategorias, useUpsertMatrizCategoria, useFactoresCredito, useReplaceFactoresCredito,
   useConfigVendedores, useUpsertConfigVendedor, useComisionConfigAuditoria,
+  useSearchClasesProducto, useSearchVendedoresComision,
 } from '../../hooks/commissionConfig';
 import type {
-  ComisionConfigAuditoriaEntrada, ConfigVendedor, FactorCreditoPayload, GrupoComision, MatrizCategoria, TipoVendedor,
+  ClaseBusqueda, ComisionConfigAuditoriaEntrada, ConfigVendedor, FactorCreditoPayload, GrupoComision,
+  MatrizCategoria, TipoVendedor, VendedorBusqueda,
 } from '../../types/commissionConfig';
 import { Tabs } from '../ui/Tabs';
 import { Button } from '../ui/Button';
 import { Select } from '../ui/Select';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
 import { Badge } from '../ui/Badge';
+import { Autocomplete } from '../ui/Autocomplete';
 import { useToast } from '../../store/toastStore';
 
 const GRUPOS: GrupoComision[] = ['A', 'B', 'C', 'S', 'X'];
@@ -83,6 +86,8 @@ function MatrizTab() {
   const emptyForm = { clase: '', subclase: '', grupo: 'B' as GrupoComision, tasa_pct: 8, base: 'margen' as 'margen' | 'valor', factor_estrategico: 1.0 };
   const [form, setForm] = useState(emptyForm);
   const [editing, setEditing] = useState<MatrizCategoria | null>(null);
+  const [claseQuery, setClaseQuery] = useState('');
+  const claseSearch = useSearchClasesProducto(claseQuery);
 
   const handleEdit = (r: MatrizCategoria) => {
     setEditing(r);
@@ -157,8 +162,26 @@ function MatrizTab() {
           </div>
         )}
         <Field label="Clase (código)" help="Código de dim_producto.clase, ej. BAT (baterías). '*' = regla comodín que aplica cuando ningún otro código coincide.">
-          <input value={form.clase} onChange={(e) => setForm({ ...form, clase: e.target.value })}
-            placeholder="Ej. BAT / *" className="input-field w-28" disabled={!!editing} />
+          <div className="w-52 flex flex-col gap-1.5">
+            {!editing && (
+              <Autocomplete<ClaseBusqueda>
+                placeholder="Buscar clase existente…"
+                loading={claseSearch.loading}
+                options={claseSearch.data}
+                getKey={(c) => c.clase}
+                renderOption={(c) => (
+                  <span className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-slate-200">{c.clase}</span>
+                    <span className="text-slate-500 text-xs">{c.productos} producto{c.productos === 1 ? '' : 's'}</span>
+                  </span>
+                )}
+                onQueryChange={setClaseQuery}
+                onSelect={(c) => setForm({ ...form, clase: c.clase })}
+              />
+            )}
+            <input value={form.clase} onChange={(e) => setForm({ ...form, clase: e.target.value })}
+              placeholder="Ej. BAT / *" className="input-field w-28" disabled={!!editing} />
+          </div>
         </Field>
         <Field label="Subclase (opcional)" help="Código de dim_producto.subclase. Déjalo vacío para que la regla aplique a toda la clase, sin distinguir subclase.">
           <input value={form.subclase} onChange={(e) => setForm({ ...form, subclase: e.target.value })}
@@ -296,6 +319,9 @@ function VendedoresTab() {
   const upsertMut = useUpsertConfigVendedor();
   const toast = useToast();
   const [nuevo, setNuevo] = useState({ vendedor: '', tipo: 'externo' as TipoVendedor, factor: 1.0 });
+  const [nuevoNombre, setNuevoNombre] = useState<string | null>(null);
+  const [vendedorQuery, setVendedorQuery] = useState('');
+  const vendedorSearch = useSearchVendedoresComision(vendedorQuery);
 
   const handleAdd = async () => {
     if (!nuevo.vendedor.trim()) {
@@ -306,6 +332,7 @@ function VendedoresTab() {
       await upsertMut.upsert({ vendedorOrigen: nuevo.vendedor.trim(), tipo: nuevo.tipo, factor_tipo: nuevo.factor });
       toast('Configuración de vendedor guardada.', 'success');
       setNuevo({ vendedor: '', tipo: 'externo', factor: 1.0 });
+      setNuevoNombre(null);
     } catch {
       toast('No se pudo guardar la configuración del vendedor.', 'error');
     }
@@ -322,6 +349,7 @@ function VendedoresTab() {
 
   const columns: DataTableColumn<ConfigVendedor>[] = [
     { key: 'id_vendedor_origen', header: 'Vendedor (código SAP)', render: (v) => <span className="font-mono text-slate-200">{v.id_vendedor_origen}</span> },
+    { key: 'nombre_vendedor', header: 'Nombre', render: (v) => <span className="text-slate-300">{v.nombre_vendedor ?? '—'}</span> },
     {
       key: 'tipo', header: 'Tipo',
       render: (v) => (
@@ -359,9 +387,29 @@ function VendedoresTab() {
         explícita se asume externo (factor 1.0) -- nunca se penaliza por omisión.
       </p>
       <div className="p-5 bg-slate-800/50 rounded-lg border border-slate-700/50 flex flex-wrap gap-4 items-end">
-        <Field label="Código de vendedor" help="id_vendedor_origen tal como aparece en el ERP (dim_vendedor), no el nombre de la persona.">
-          <input value={nuevo.vendedor} onChange={(e) => setNuevo({ ...nuevo, vendedor: e.target.value })}
-            placeholder="Ej. VEN01" className="input-field w-28" />
+        <Field label="Código de vendedor" help="id_vendedor_origen tal como aparece en el ERP (dim_vendedor). Busca por código o nombre para identificar a quién pertenece.">
+          <div className="w-56 flex flex-col gap-1.5">
+            <Autocomplete<VendedorBusqueda>
+              placeholder="Buscar por código o nombre…"
+              loading={vendedorSearch.loading}
+              options={vendedorSearch.data}
+              getKey={(v) => v.codven}
+              renderOption={(v) => (
+                <span className="flex items-center justify-between gap-3">
+                  <span className="font-mono text-slate-200">{v.codven}</span>
+                  <span className="text-slate-500 text-xs truncate">{v.nombre_vendedor ?? 'Sin nombre'}</span>
+                </span>
+              )}
+              onQueryChange={setVendedorQuery}
+              onSelect={(v) => { setNuevo({ ...nuevo, vendedor: v.codven }); setNuevoNombre(v.nombre_vendedor); }}
+            />
+            <input
+              value={nuevo.vendedor}
+              onChange={(e) => { setNuevo({ ...nuevo, vendedor: e.target.value }); setNuevoNombre(null); }}
+              placeholder="Ej. VEN01" className="input-field w-28"
+            />
+            {nuevoNombre && <span className="text-xs text-info">{nuevoNombre}</span>}
+          </div>
         </Field>
         <Field label="Tipo" help="Externo = vendedor de campo/distribuidor (factor típico 1.0x); Interno = vendedor de mostrador/oficina (factor típico 0.70x, suele tener menor riesgo/esfuerzo comercial).">
           <Select

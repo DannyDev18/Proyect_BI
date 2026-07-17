@@ -7,6 +7,7 @@ export const qk = {
     vendedores: () => ['gerencia', 'vendedores'] as const,
     almacenes: () => ['gerencia', 'almacenes'] as const,
     salesPrediction: (filters: unknown) => ['gerencia', 'sales-prediction', filters] as const,
+    cumplimientoMeta: (anio: number, mes: number) => ['gerencia', 'cumplimiento-meta', anio, mes] as const,
   },
   bodega: {
     kpis: () => ['bodega', 'kpis'] as const,
@@ -42,6 +43,7 @@ export const qk = {
     tracking: (anio: number, mes: number) => ['goals', 'tracking', anio, mes] as const,
     aiSummary: () => ['goals', 'ai-summary'] as const,
     commissionTracking: (anio: number, mes: number) => ['goals', 'commission-tracking', anio, mes] as const,
+    metaSugeridaGerencia: (vendedorOrigen: string) => ['goals', 'meta-sugerida', vendedorOrigen] as const,
   },
   commissionConfig: {
     matriz: () => ['commission-config', 'matriz'] as const,
@@ -50,6 +52,9 @@ export const qk = {
     perfilCategorias: (meses: number) => ['commission-config', 'perfil-categorias', meses] as const,
     lineasSinCosto: (anio: number | undefined, mes: number | undefined) =>
       ['commission-config', 'lineas-sin-costo', anio, mes] as const,
+    auditoria: () => ['commission-config', 'auditoria'] as const,
+    searchClases: (q: string) => ['commission-config', 'search-clases', q] as const,
+    searchVendedores: (q: string) => ['commission-config', 'search-vendedores', q] as const,
   },
   cartera360: {
     listaTrabajo: () => ['cartera360', 'lista-trabajo'] as const,

@@ -4,10 +4,9 @@ import {
   BarChart, Bar,
   PieChart, Pie, Cell, Legend, Brush
 } from 'recharts';
-import { DollarSign, TrendingUp, ShoppingBag, Target, Filter, CheckCircle2, FileSpreadsheet, Printer } from 'lucide-react';
+import { DollarSign, TrendingUp, ShoppingBag, Target, Filter, FileSpreadsheet, Printer } from 'lucide-react';
 import {
   useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores, useAlmacenes,
-  useCumplimientoMeta,
 } from '../hooks/gerencia';
 import { descargarReporteDashboardExcel } from '../services/gerencia';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
@@ -36,11 +35,6 @@ export const DashboardGerencia = () => {
   const toast = useToast();
 
   const kpi  = useGerenciaKPIs(filters);
-  // Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): KPI de
-  // cumplimiento vs metas -- período actual (mes calendario en curso), reutiliza
-  // public.metas_comerciales_operativas, sin ML (regla de negocio 10).
-  const hoy = new Date();
-  const cumplimiento = useCumplimientoMeta(hoy.getFullYear(), hoy.getMonth() + 1);
   const pred = useSalesPrediction({ granularidad, vendedor: filters.vendedor, almacen: filters.almacen });
   const revCat = useRevenueByCategory(filters);
   const { data: categoriasLista } = useCategories();
@@ -183,17 +177,16 @@ export const DashboardGerencia = () => {
       </FilterBar>
 
       {/* KPI Row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 stagger-children">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children">
         {kpi.loading ? (
           <>
             <KpiCardSkeleton />
             <KpiCardSkeleton />
             <KpiCardSkeleton />
             <KpiCardSkeleton />
-            <KpiCardSkeleton />
           </>
         ) : kpi.error ? (
-          <div className="col-span-5">
+          <div className="col-span-4">
             <ErrorState message={`Error al cargar KPIs: ${kpi.error}`} onRetry={kpi.refetch} />
           </div>
         ) : (
@@ -233,31 +226,9 @@ export const DashboardGerencia = () => {
               }
               subValue={tendencia(kpi.data?.roi_estimado_tendencia_pct).subValue}
             />
-            <KpiCard
-              title="Cumplimiento vs Meta (mes actual)"
-              value={cumplimiento.data ? pct(cumplimiento.data.pct_cumplimiento) : '—'}
-              icon={CheckCircle2}
-              trend={
-                cumplimiento.data
-                  ? cumplimiento.data.pct_cumplimiento >= 100 ? 'up'
-                    : cumplimiento.data.pct_cumplimiento >= 70 ? 'neutral' : 'down'
-                  : 'neutral'
-              }
-              state={
-                cumplimiento.data
-                  ? cumplimiento.data.pct_cumplimiento >= 100 ? 'success'
-                    : cumplimiento.data.pct_cumplimiento >= 70 ? 'warning' : 'danger'
-                  : undefined
-              }
-            />
           </>
         )}
       </div>
-      {cumplimiento.data && cumplimiento.data.vendedores_con_meta_aprobada === 0 && (
-        <p className="text-xs text-slate-500 -mt-3">
-          Sin metas aprobadas para el mes en curso -- el % de cumplimiento no tiene base de comparación todavía.
-        </p>
-      )}
 
       {/* Panel Ejecutivo de Predicción */}
       {pred.data && !pred.loading && (

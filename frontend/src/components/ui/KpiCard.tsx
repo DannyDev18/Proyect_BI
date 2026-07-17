@@ -39,8 +39,8 @@ export const KpiCard = ({
   const sparkData = sparkline?.map((v, i) => ({ i, v }));
   const sparkGradientId = `kpiSpark-${title.replace(/[^a-zA-Z0-9]/g, '')}`;
   return (
-    <div className="card card-hover p-6 group relative overflow-hidden">
-      {state && <span className={`absolute inset-x-0 top-0 h-[2px] ${stateBorder[state]}`} aria-hidden="true" />}
+    <div className="card card-hover p-6 group relative">
+      {state && <span className={`absolute inset-x-0 top-0 h-[2px] rounded-t-xl ${stateBorder[state]}`} aria-hidden="true" />}
       <div className="flex justify-between items-start mb-4 relative z-10">
         {tooltip ? (
           <Tooltip label={tooltip} side="top">
@@ -55,7 +55,7 @@ export const KpiCard = ({
       </div>
 
       <div className="relative z-10">
-        <p className="font-mono text-3xl font-semibold text-slate-100 tracking-tight">
+        <p className="font-mono text-2xl font-semibold text-slate-100 tracking-tight break-words leading-snug">
           {typeof value === 'number' ? <CountUp value={value} /> : value}
         </p>
         {subValue && (
@@ -67,7 +67,7 @@ export const KpiCard = ({
       </div>
 
       {sparkData && sparkData.length > 1 && (
-        <div className="h-10 -mx-1 mt-3 relative z-10">
+        <div className="h-10 -mx-1 mt-3 relative z-10 overflow-hidden">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={sparkData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
               <defs>

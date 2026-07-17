@@ -17,7 +17,6 @@ import { FilterBar, FilterField } from '../components/ui/FilterBar';
 import { Button } from '../components/ui/Button';
 import { ChartTooltip } from '../components/ui/ChartTooltip';
 import { ErrorState } from '../components/ui/ErrorState';
-import { CrossSellKpiPanel } from '../components/crossSelling/CrossSellKpiPanel';
 import { useToast } from '../store/toastStore';
 import { fmt, fmtMoney, formatEjeFecha, pct } from '../utils/format';
 import { chartTheme, colorByIndex, axisTick } from '../utils/chartTheme';
@@ -505,12 +504,6 @@ export const DashboardGerencia = () => {
             </PieChart>
           </ResponsiveContainer>
         </ChartCard>
-      </div>
-
-      {/* Impacto del módulo de Venta Cruzada (RN-CS2) -- reutiliza el mismo panel que Ventas,
-          nunca montado antes en Gerencia pese a que el endpoint ya está abierto a este rol. */}
-      <div className="card p-6">
-        <CrossSellKpiPanel />
       </div>
     </div>
   );

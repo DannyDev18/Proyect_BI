@@ -21,13 +21,23 @@ def test_commissions_no_lanza_con_periodo_historico(client, auth_headers):
 def test_commission_simulation_no_lanza(client, auth_headers):
     r = client.post(
         "/api/v1/gerencia/goals/commission-simulation",
-        json={"meses": 1, "anio_desde": 2026, "mes_desde": 3},
+        json={"meses_historico": 3},
         headers=auth_headers("gerencia"),
     )
     assert r.status_code == 200
     body = r.json()
-    assert "costo_total_variable" in body
-    assert "costo_total_plana" in body
+    assert "comision_variable_total_proyectada" in body
+    assert "periodo_proyectado" in body
+    assert body["meses_historico"] == 3
+
+
+def test_commission_simulation_rechaza_ventana_fuera_de_3_o_6_meses(client, auth_headers):
+    r = client.post(
+        "/api/v1/gerencia/goals/commission-simulation",
+        json={"meses_historico": 12},
+        headers=auth_headers("gerencia"),
+    )
+    assert r.status_code == 400
 
 
 def test_commissions_rechaza_roles_no_autorizados(client, auth_headers):

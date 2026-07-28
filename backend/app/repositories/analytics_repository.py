@@ -7,7 +7,16 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.services.metricas.venta_neta import FILTRO_ESTADO_VALIDO, SQL_VENTA_BRUTA
 from app.utils.validators import sanitize_date_str
+
+
+def _clases_excluidas_margen() -> list[str]:
+    """Clases de `dim_producto` que no participan del cálculo de margen/ROI
+    (docs/auditoria/39_madurez_bi_toma_decisiones.md, H-01). Lista separada por comas en
+    `ANALYTICS_CLASES_EXCLUIDAS_MARGEN`; vacía = no excluir nada."""
+    return [c.strip() for c in settings.ANALYTICS_CLASES_EXCLUIDAS_MARGEN.split(",") if c.strip()]
 
 
 class AnalyticsRepository:
@@ -27,11 +36,23 @@ class AnalyticsRepository:
         # Combinar parámetros
         params.update(params_d)
 
+        # docs/auditoria/39_madurez_bi_toma_decisiones.md, H-01: las clases excluidas salen
+        # del universo de MARGEN/ROI pero NO del de ingresos -- vender chatarra es ingreso
+        # real; lo que no es real es su costo derivado de `ultcos` en otra unidad de medida.
+        clases_excl = _clases_excluidas_margen()
+        if clases_excl:
+            params["clases_excl_margen"] = clases_excl
+            aplica_margen = "AND (p.clase IS NULL OR p.clase <> ALL(:clases_excl_margen))"
+        else:
+            aplica_margen = ""
+
         query_ventas = f"""
             WITH ventas_agg AS (
                 SELECT
-                    SUM(CASE WHEN f.subtotal_neto > 0 THEN f.subtotal_neto ELSE 0 END) as net_sales,
-                    SUM(CASE WHEN f.subtotal_neto > 0 THEN f.costo_total ELSE 0 END) as net_cost,
+                    -- G-02: definición canónica en `app/services/metricas/venta_neta.py`.
+                    {SQL_VENTA_BRUTA} as net_sales,
+                    SUM(CASE WHEN f.subtotal_neto > 0 {aplica_margen} THEN f.subtotal_neto ELSE 0 END) as margen_sales,
+                    SUM(CASE WHEN f.subtotal_neto > 0 {aplica_margen} THEN f.costo_total ELSE 0 END) as net_cost,
                     COUNT(DISTINCT CASE WHEN f.subtotal_neto > 0 THEN f.num_factura ELSE NULL END) as cnt_facturas
                 FROM edw.fact_ventas_detalle f
                 JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
@@ -55,10 +76,21 @@ class AnalyticsRepository:
             SELECT
                 COALESCE(v.net_sales, 0.0) - d.total_devoluciones as total_ventas_netas,
                 (COALESCE(v.net_sales, 0.0) - d.total_devoluciones) / NULLIF(v.cnt_facturas, 0) as ticket_promedio,
-                CASE 
-                    WHEN COALESCE(v.net_sales, 0.0) - d.total_devoluciones = 0 THEN 0
-                    ELSE ((COALESCE(v.net_sales, 0.0) - d.total_devoluciones) - COALESCE(v.net_cost, 0.0)) / (COALESCE(v.net_sales, 0.0) - d.total_devoluciones) * 100.0
-                END as margen_promedio
+                -- Margen sobre el universo costeable (H-01). Las devoluciones no son
+                -- atribuibles a una clase de producto en `fact_devoluciones`, así que se
+                -- restan completas, igual que en la consulta validada en la auditoría 39.
+                CASE
+                    WHEN COALESCE(v.margen_sales, 0.0) - d.total_devoluciones = 0 THEN 0
+                    ELSE ((COALESCE(v.margen_sales, 0.0) - d.total_devoluciones) - COALESCE(v.net_cost, 0.0)) / (COALESCE(v.margen_sales, 0.0) - d.total_devoluciones) * 100.0
+                END as margen_promedio,
+                -- RN-BI2: retorno sobre costo de mercadería vendida (reemplaza el
+                -- `margen * 1.15` de H-02). NULL cuando no hay costo con el que comparar,
+                -- para poder comunicarlo como "sin base" en vez de mostrar 0%.
+                CASE
+                    WHEN COALESCE(v.net_cost, 0.0) <= 0 THEN NULL
+                    ELSE ((COALESCE(v.margen_sales, 0.0) - d.total_devoluciones) - v.net_cost) / v.net_cost * 100.0
+                END as roi_real,
+                COALESCE(v.net_cost, 0.0) as costo_mercaderia
             FROM ventas_agg v
             CROSS JOIN devoluciones_agg d
         """
@@ -136,6 +168,10 @@ class AnalyticsRepository:
             "total_sales": float(res_v[0]) if res_v and res_v[0] is not None else 0.0,
             "ticket": float(res_v[1]) if res_v and res_v[1] is not None else 0.0,
             "margen": float(res_v[2]) if res_v and res_v[2] is not None else 0.0,
+            # None (no 0.0) cuando no hay costo con el que comparar -- se comunica como
+            # "sin base de cálculo", criterio de aceptación de G-04 del plan de madurez BI.
+            "roi_real": float(res_v[3]) if res_v and res_v[3] is not None else None,
+            "costo_mercaderia": float(res_v[4]) if res_v and res_v[4] is not None else 0.0,
             "branch_map": {row[0]: float(row[1]) for row in res_s} if res_s else {},
             "vend_map": {row[0]: float(row[1]) for row in res_vend} if res_vend else {},
         }
@@ -253,8 +289,14 @@ class AnalyticsRepository:
         start_date = sanitize_date_str(start_date)
         end_date = sanitize_date_str(end_date)
 
-        filtros = ["ed.estado_documento_sk <> -1"]
-        params: dict[str, Any] = {}
+        # docs/auditoria/39_madurez_bi_toma_decisiones.md, H-05: excluir la centinela NO es
+        # lo mismo que aplicar la regla de negocio 1 (`estado='P'`). Hoy coinciden porque
+        # `dim_estado_documento` tiene solo 2 filas y la centinela es justamente la única
+        # con estado_factura='A', pero es una equivalencia frágil: al cargar un estado
+        # nuevo el filtro dejaría de significar lo que su nombre supone, en silencio.
+        # Se explicita la regla 1 conservando la exclusión de la centinela.
+        filtros = [FILTRO_ESTADO_VALIDO]
+        params: dict[str, Any] = {"estado_valido": settings.ESTADO_DOCUMENTO_VALIDO}
         if require_clase:
             filtros.append("p.clase IS NOT NULL")
         if sucursal:

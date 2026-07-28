@@ -16,7 +16,7 @@ from app.schemas.commission_config import (
     ConfigVendedorPayload, ConfigVendedoresResponse, ConfigVendedorResponse, FactorCreditoResponse,
     FactoresCreditoPayload, FactoresCreditoResponse, LineasSinCostoResponse, LineaSinCostoResponse,
     MatrizCategoriaPayload, MatrizCategoriaResponse, MatrizCategoriasResponse, PerfilCategoriaResponse,
-    PerfilCategoriasResponse, SimulacionRequest, SimulacionResponse, SimulacionVendedorMesResponse,
+    PerfilCategoriasResponse, ProyeccionComisionRequest, ProyeccionComisionResponse, ProyeccionVendedorResponse,
     VendedorBusqueda,
 )
 from app.schemas.analytics import MetaSugeridaResponse
@@ -179,6 +179,17 @@ def upsert_matriz_categoria(
     return MatrizCategoriaResponse(**r)
 
 
+@router.delete(
+    "/commission-config/matriz/{regla_id}", response_model=MatrizCategoriaResponse, dependencies=[Depends(only_management)],
+    summary="Elimina una regla de categoría (cierra su vigencia, no borra el historial)",
+)
+def eliminar_matriz_categoria(
+    regla_id: int, commission_config_service: CommissionConfigServiceDep, current_user: CurrentUserDep,
+) -> MatrizCategoriaResponse:
+    r = commission_config_service.eliminar_regla_categoria(regla_id, usuario_id=current_user.id)
+    return MatrizCategoriaResponse(**r)
+
+
 @router.get(
     "/commission-config/credito", response_model=FactoresCreditoResponse, dependencies=[Depends(only_management)],
     summary="Factores de ajuste por plazo de crédito vigentes",
@@ -265,20 +276,25 @@ def get_commission_config_auditoria(
 
 
 @router.post(
-    "/commission-simulation", response_model=SimulacionResponse, dependencies=[Depends(only_management)],
-    summary="Simulación retroactiva N meses: esquema plano vs. variable (Fase 2 del plan)",
+    "/commission-simulation", response_model=ProyeccionComisionResponse, dependencies=[Depends(only_management)],
+    summary="Proyección de comisión variable del próximo mes, con base en 3 o 6 meses de historial reciente",
 )
 def post_commission_simulation(
-    payload: SimulacionRequest, commission_simulation_service: CommissionSimulationServiceDep,
-) -> SimulacionResponse:
-    r = commission_simulation_service.simular(meses=payload.meses, anio_desde=payload.anio_desde, mes_desde=payload.mes_desde)
-    return SimulacionResponse(
-        meses_simulados=r.meses_simulados, vendedores_simulados=r.vendedores_simulados,
-        costo_total_plana=r.costo_total_plana, costo_total_variable=r.costo_total_variable,
-        margen_bruto_total=r.margen_bruto_total,
-        pct_comision_sobre_margen_plana=r.pct_comision_sobre_margen_plana,
-        pct_comision_sobre_margen_variable=r.pct_comision_sobre_margen_variable,
-        detalle=[SimulacionVendedorMesResponse(**d.__dict__) for d in r.detalle],
+    payload: ProyeccionComisionRequest, commission_simulation_service: CommissionSimulationServiceDep,
+) -> ProyeccionComisionResponse:
+    """Exclusivamente esquema variable (sin comparar contra el plano) -- ver
+    `CommissionSimulationService.proyectar_comision_variable` para el porqué de cada
+    decisión de diseño. La comparación retroactiva plano vs. variable (`simular()`)
+    sigue existiendo internamente para la alerta de divergencia del piloto en sombra,
+    pero ya no se expone por este endpoint."""
+    r = commission_simulation_service.proyectar_comision_variable(payload.meses_historico)
+    return ProyeccionComisionResponse(
+        meses_historico=r.meses_historico, periodo_proyectado=r.periodo_proyectado,
+        vendedores_proyectados=r.vendedores_proyectados,
+        comision_variable_total_proyectada=r.comision_variable_total_proyectada,
+        margen_bruto_total_promedio=r.margen_bruto_total_promedio,
+        tasa_efectiva_pct_global=r.tasa_efectiva_pct_global,
+        detalle=[ProyeccionVendedorResponse(**d.__dict__) for d in r.detalle],
     )
 
 

@@ -23,3 +23,9 @@ sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 python-dotenv>=1.0.0
 joblib==1.5.3
+
+# Fase 4 (docs/features/plan_mejora_pipeline_ml.md §6): baseline estadístico OLS/GLM de
+# referencia para ventas y demanda (statsmodels.formula.api), reportando p-values, R²
+# ajustado, F-test y VIF -- solo dependencia de ENTRENAMIENTO, nunca se sirve desde el
+# backend ni se serializa en los .pkl.
+statsmodels>=0.14.0

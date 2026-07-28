@@ -68,7 +68,7 @@ def test_get_churn_risk_batch_respeta_umbral_configurable(service, monkeypatch):
 
     import pandas as pd
     df = pd.DataFrame({
-        "cliente_id": ["CLI-001"], "frequency": [1], "monetary_value": [100.0], "average_ticket": [100.0],
+        "cliente_id": ["CLI-001"], "recency": [10], "frequency": [1], "monetary_value": [100.0], "average_ticket": [100.0],
     })
     service.prediction_repo.get_churn_features_batch.return_value = df
 

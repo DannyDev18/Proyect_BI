@@ -195,3 +195,45 @@ Reglas de la actualización del módulo Gerencia (`docs/features/plan_actualizac
 - **RN-N3 (estado de lectura por rol destino):** cuando `usuario_id IS NULL` (notificación a todo el rol), `leida_por` acumula los ids de cada usuario que la marcó leída; la notificación deja de considerarse "no leída" para ese usuario específico sin afectar a los demás miembros del rol.
 - **RN-N4 (degradación con gracia):** cada generador (calculado o disparador de emisión persistida) se ejecuta envuelto en `try/except Exception as e: logger.error(...)`, devolviendo lista vacía en caso de fallo — un generador caído nunca debe tumbar el resto de la campana ni el request completo, siguiendo el mismo patrón ya validado en `prediction_service.py`.
 
+
+## 23. Madurez BI: universo costeable, margen y ROI (RN-BI1..RN-BI3)
+
+Reglas de la Etapa 1 de `docs/features/plan_madurez_bi_toma_decisiones.md` (auditoría 39 —
+`docs/auditoria/39_madurez_bi_toma_decisiones.md`, hallazgos H-01/H-02/H-05). Validadas con
+`SELECT` contra el EDW; **no hubo escrituras a Producción**.
+
+- **RN-BI1 (universo costeable del margen):** el costo de línea de `edw.fact_ventas_detalle`
+  se deriva en el ETL como `cantidad × articulos.ultcos` (`etl/transformers/fact_transformer.py`),
+  donde `ultcos` es un costo **por artículo en unidad de compra** y `cantidad` está en la unidad
+  de **venta**. Cuando ambas unidades difieren, el costo resultante no tiene sentido económico.
+  Caso confirmado: `Z-9001` (BATERIAS CHATARRAS, clase `Z-999`, `dim_producto.unidad='KL'`) se
+  compra por batería y se vende por kilo — ratio costo/precio de **308×**; sus 95 líneas
+  concentran el **94,9%** del costo de mercadería de todo el EDW y llevaban el margen publicado
+  en Gerencia a **−1.563%**. Por eso las clases listadas en `ANALYTICS_CLASES_EXCLUIDAS_MARGEN`
+  (default `Z-999`) quedan fuera del universo de **margen y ROI**, pero **no** del de
+  **ingresos** — vender chatarra es ingreso real; lo que no es real es su costo derivado.
+  Es el mismo criterio de negocio ya aplicado en el pipeline ML de demanda ("chatarra, no es un
+  artículo de reposición", Fase 2 de `docs/features/plan_mejora_pipeline_ml.md`).
+  **Alcance de la corrección:** capa de presentación (KPIs de Gerencia). El campo
+  `fact_ventas_detalle.margen_bruto` conserva el valor derivado y lo consume Comisiones
+  Variables (regla 13) — **pendiente de validar** la unidad de `ultcos` contra Producción antes
+  de corregir el ETL (auditoría 39, H-01 recomendación 2). Exposición medida: 24 líneas de
+  clase `Z-999` en 2025-2026 arrastran −$115 millones de `margen_bruto` sobre un solo código de
+  vendedor; con `COMISION_MODO=plana` (default) no hay pago incorrecto, pero
+  `POST /commission-simulation` sí lee ese campo.
+- **RN-BI2 (ROI = retorno sobre costo de mercadería vendida):** sustituye al antiguo
+  `roi_estimado = margen × 1,15` (una constante sin regla de negocio, aplicada además sobre un
+  valor que ya era un porcentaje). Definición vigente, calculada en SQL sobre el EDW:
+
+  > `ROI = (venta_neta − costo_mercaderia_vendida) / costo_mercaderia_vendida × 100`
+
+  sobre el universo costeable de RN-BI1. Valor de referencia medido en el histórico completo:
+  **10,61%** (margen **9,59%**). Es `NULL` — y se comunica como *"sin base de cálculo"*, nunca
+  como `0%` — cuando el período no tiene costo de mercadería con el que comparar. El umbral del
+  semáforo es `ANALYTICS_ROI_UMBRAL_SANO` (default 10,0), antes un `>= 10` literal.
+- **RN-BI3 (regla 1 aplicada por su semántica, no por la centinela):** los filtros de analytics
+  aplican `dim_estado_documento.estado_factura = ESTADO_DOCUMENTO_VALIDO` ('P', regla 1) además
+  de excluir la fila centinela `-1`. Hoy ambos filtros son equivalentes porque
+  `dim_estado_documento` tiene solo 2 filas y la centinela es justamente la única con
+  `estado_factura='A'`; la equivalencia es una coincidencia del catálogo actual y se romperá en
+  silencio en cuanto el ETL cargue un estado adicional.

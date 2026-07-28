@@ -19,7 +19,17 @@ def evaluate_reg(y_true, y_pred, is_log_transformed=False):
     rmse = np.sqrt(mse)
     mae = mean_absolute_error(y_true, y_pred)
     r2 = r2_score(y_true, y_pred)
-    return {"RMSE": rmse, "MAE": mae, "R2": r2}
+    # WAPE (Fase 4, docs/features/plan_mejora_pipeline_ml.md §6): MAE/R2 penalizan igual a
+    # todas las magnitudes, pero ventas/demanda mezclan escalas muy distintas entre
+    # días/combinaciones (un día de USD 200 vs. USD 200.000). WAPE = suma de errores
+    # absolutos / suma de valores reales -- resume el error como % del volumen total, la
+    # métrica estándar de forecasting de demanda para comparar series de distinta escala.
+    suma_real = np.sum(np.abs(y_true))
+    wape = float(np.sum(np.abs(np.asarray(y_true) - np.asarray(y_pred))) / suma_real) if suma_real > 0 else None
+    metrics = {"RMSE": rmse, "MAE": mae, "R2": r2}
+    if wape is not None:
+        metrics["WAPE"] = wape
+    return metrics
 
 def find_best_regression_model(X_train, y_train, is_log_transformed=False, cv_splits=3):
     logger.info("Iniciando competencia de Modelos de Regresión...")

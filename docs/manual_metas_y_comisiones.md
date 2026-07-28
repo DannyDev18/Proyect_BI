@@ -46,6 +46,98 @@ Ruta: `/gerencia/metas` (o el menú "Metas y Comisiones"). Tiene **3 pestañas**
 - **Comisiones devengadas:** tabla con la Venta Neta real, meta, % de cumplimiento, tramo y comisión de cada vendedor en el período elegido. Si el piloto en sombra está activo, aparece una columna adicional "Comisión (variable · piloto)" con el monto que pagaría el esquema nuevo.
 - **Vendedores en riesgo / Alta probabilidad / Recomendaciones por categoría:** paneles de IA que resaltan quién va mal encaminado, quién va a superar la meta, y qué categorías conviene empujar.
 
+#### 1.3.1 Consola de Metas — detalle absoluto de cada input
+
+Componente: `frontend/src/components/goals/GoalsConsole.tsx`. Esta sección describe **cada campo que puede tocarse** en la pantalla, qué significa, qué formato acepta, qué validación tiene en el backend y qué efecto real produce en el sistema.
+
+**No existe filtro de sucursal ni de vendedor individual en esta pantalla.** La tabla siempre lista a todos los vendedores del período elegido, porque la meta se calcula a grano vendedor, no vendedor×sucursal (regla de negocio 10 — un vendedor puede transaccionar en varias sucursales, ver `docs/auditoria/19_grano_vendedor_metas_y_meta_futura_razonable.md`).
+
+---
+
+**1. Select "Año / Mes de Planificación"**
+
+- **Qué es:** el período (año, mes) sobre el que se va a generar, revisar o editar metas.
+- **Campo técnico:** `period.anio`, `period.mes` (estado local del componente).
+- **De dónde salen las opciones:** `GET /gerencia/goals/periods` — solo devuelve períodos donde existen datos (no un rango arbitrario infinito).
+- **Efecto:** cambia qué se consulta en `useGoalsTracking(anio, mes)` — es decir, toda la tabla de abajo (metas, comisiones, estados) se recarga para el período elegido. No dispara ningún cálculo por sí solo, solo cambia el "de qué mes estoy hablando".
+- **Nota práctica:** normalmente se usa para planificar el **mes siguiente** al actual (generar la meta de agosto durante julio), pero técnicamente permite navegar a cualquier período con datos, incluyendo meses ya cerrados (para revisión histórica).
+
+---
+
+**2. Slider "Factor de Presión Comercial (+X%)"**
+
+- **Qué es:** un ajuste manual y discrecional de gerencia sobre el resultado que ya calculó el motor estadístico (IQR) — permite "empujar" todas las metas propuestas al alza (nunca a la baja: el rango es 0–25%, no admite negativos).
+- **Campo técnico:** `pressure` (estado del slider, entero) → se traduce a `factor = 1 + pressure/100` → se envía como el query param `pressure_factor` (tipo `float`) a `POST /gerencia/goals/generate`.
+- **Rango en la UI:** `<input type="range" min="0" max="25">` — de 0% a 25%, en pasos de 1.
+- **Validación en el servidor:** **no tiene límite explícito en el backend** (`goals.py:75`) — el límite de 0–25 es solo una restricción visual del slider en el frontend. Si se llamara al endpoint directamente con un valor fuera de ese rango, el backend lo aceptaría igual.
+- **Efecto real:** al presionar "Generar", cada meta calculada por el motor IQR (ver Parte 2, fórmula) se multiplica por este factor **antes** de guardarse como propuesta. Ej.: si el motor calculó $10,000 para un vendedor y el slider está en +10%, la propuesta sale en $11,000.
+- **Efecto visual adicional:** mientras una propuesta esté en estado `PROPUESTA` (no aprobada ni rechazada todavía), mover el slider recalcula en vivo el monto mostrado en pantalla, para que gerencia vea el impacto antes de confiar el cambio al servidor.
+- **Cuándo usarlo:** típicamente en campañas, fin de año fiscal, o cuando gerencia tiene información cualitativa (ej. una promoción agresiva) que el histórico de ventas todavía no refleja y que el motor estadístico no puede anticipar por sí solo.
+
+---
+
+**3. Botón "Generar Plan con Inteligencia ML"**
+
+- **Qué es:** dispara el cálculo real de propuestas de meta para **todos** los vendedores con actividad reciente en el período elegido.
+- **Acción técnica:** `generateGoals(anio, mes, factor)` → `POST /gerencia/goals/generate?pressure_factor=...`.
+- **Qué pasa del lado del servidor** (ver Parte 2, §2.3 de la fórmula IQR y §1.3.1 más abajo de este documento): por cada vendedor, se corre el motor IQR sobre 24 meses de histórico, se aplica el ajuste por tipo de vendedor (externo/interno/nuevo), y **por último** se aplica este `pressure_factor`. El resultado se guarda (o actualiza si ya existía) en `public.metas_comerciales_operativas` con estado `PROPUESTA`.
+- **Idempotencia:** volver a presionar "Generar" para el mismo período **recalcula y sobrescribe** las propuestas que sigan en estado `PROPUESTA` — no crea duplicados. Las que ya fueron `APROBADA` o `RECHAZADA` no se ven afectadas por una nueva generación (se preservan las decisiones ya tomadas).
+- **Efecto secundario:** al terminar, se dispara una notificación interna a gerencia (ver módulo de Notificaciones) avisando que las metas del período quedaron generadas.
+
+---
+
+**4. Input de texto "Meta Propuesta ($)" (por fila de la tabla)**
+
+- **Qué es:** permite a gerencia sobrescribir manualmente el monto de meta calculado por el sistema para un vendedor específico, antes de aprobarlo.
+- **Campo técnico:** `proposals[i].monto_meta`.
+- **Formato de entrada:** texto libre formateado como moneda en pantalla; se limpia con una expresión regular (`[^0-9.-]+`) y se convierte con `parseFloat` antes de enviarse — es decir, puedes escribir `$12,500.00` y el sistema lo interpreta como `12500.00`.
+- **Persistencia:** el cambio es **solo local** (en memoria del navegador) hasta que se presiona "Aprobar" o "Rechazar" en esa fila — en ese momento se envía como `monto_meta` dentro del payload `PUT /gerencia/goals/{goal_id}/review`.
+- **Validación del backend:** `GoalReviewPayload.monto_meta` — tipo `float`, `ge=0.0` (no admite montos negativos; sí admite $0, por ejemplo para anular efectivamente una meta sin borrarla).
+- **Cuándo se usa:** cuando gerencia tiene contexto puntual sobre un vendedor (ej. licencia médica programada, cambio reciente de cartera) que el motor estadístico no puede conocer, y el "Factor de Presión Comercial" (que es global, afecta a todos) no es la herramienta correcta para un caso individual.
+
+---
+
+**5. Input numérico "Comisión (%)" (por fila de la tabla)**
+
+- **Qué es:** el porcentaje base de comisión que se le asignará a ese vendedor sobre el cumplimiento de su meta (esquema plano, regla de negocio 10 — no confundir con las tasas del esquema variable por margen, que se configuran en la pestaña "Comisiones Variables · Config").
+- **Campo técnico:** `proposals[i].comision_base_pct`.
+- **Formato:** `<input type="number">` sin `min`/`max` fijados en el HTML del componente.
+- **Validación del backend:** `GoalReviewPayload.comision_base_pct` — `ge=0.0, le=100.0` (el servidor sí rechaza valores fuera de 0–100% aunque el input del navegador no lo impida visualmente).
+- **Persistencia:** igual que el monto de meta, viaja en el mismo `PUT /gerencia/goals/{goal_id}/review` al aprobar o rechazar.
+- **Efecto:** esta tasa es la que después usa `commission_engine.calcular_comision` (esquema plano) para liquidar la comisión real del vendedor una vez que se conoce su Venta Neta del mes.
+
+---
+
+**6. Botones "Aprobar" / "Rechazar" (por fila)**
+
+- **Qué son:** la decisión final de gerencia sobre cada propuesta de meta individual.
+- **Campo técnico:** ambos llaman a `PUT /gerencia/goals/{goal_id}/review`, cambiando el campo `estado` a `APROBADA` o `RECHAZADA` respectivamente. El backend valida `estado` contra el patrón `^(APROBADA|RECHAZADA)$` — ningún otro valor es aceptado desde este endpoint.
+- **Efecto de "Aprobar":** la meta queda oficial para ese vendedor y ese período — es la que se usará para calcular su % de cumplimiento y su comisión real durante el mes.
+- **Efecto de "Rechazar":** la meta queda descartada; el vendedor no tiene una meta oficial vigente para ese período hasta que se genere/apruebe una nueva propuesta.
+- **Nota:** aprobar o rechazar envía en el mismo request lo que esté escrito en ese momento en los inputs de monto y comisión (puntos 4 y 5) — es decir, "Aprobar" no solo cambia el estado, también persiste cualquier edición manual pendiente en esa fila.
+
+---
+
+**7. Botón "Info" junto al nombre del vendedor → Drawer "Cómo se calculó la meta sugerida"**
+
+- **Qué es:** una ventana de detalle, **solo lectura** (ningún campo aquí es editable), que explica de forma transparente el cálculo estadístico detrás de la cifra propuesta para ese vendedor.
+- **Campo técnico:** dispara `GET /gerencia/goals/meta-sugerida?vendedor_origen=...`.
+- **Campos que muestra, uno por uno:**
+
+  | Campo | Qué significa |
+  |---|---|
+  | `meta_sugerida_estadistica` | El monto que el motor IQR calculó **antes** de aplicar el ajuste por tipo de vendedor y el Factor de Presión Comercial — es decir, la cifra "pura" del histórico. |
+  | `metodo_estadistico` | Nombre del método usado (identifica el motor IQR, para trazabilidad si en el futuro convive con otro método). |
+  | `meses_historico_usados` | Cuántos meses de venta real del vendedor entraron al cálculo (hasta 24, mínimo 12 para que el sistema considere el histórico suficiente). |
+  | `valores_atipicos_excluidos` | Cuántos meses fueron recortados por el filtro IQR (Tukey, banda `[Q1-1.5·IQR, Q3+1.5·IQR]`) por ser meses anormalmente altos o bajos frente al resto. |
+  | `meses_atipicos_ml_detectados` | Cuántos meses fueron marcados como estadísticamente raros por el detector de anomalías (`IsolationForest`) — a diferencia del punto anterior, estos **no se excluyen**, solo pesan menos (50%) en el promedio. |
+  | `componente_estacional` | El promedio de lo que este vendedor vendió en el **mismo mes calendario** de años anteriores (ej. si se está calculando julio, el promedio de julios pasados). `null` si no hay suficiente historial para calcularlo. |
+  | `componente_tendencia` | El promedio ponderado de los últimos 4 meses reales de venta — captura hacia dónde va el vendedor **ahora**, no su patrón estacional. |
+  | `factor_tendencia_aplicado` | El multiplicador de crecimiento/caída aplicado (acotado siempre entre 0.85 y 1.20) — mayor a 1.0 significa que la tendencia reciente es de crecimiento, menor a 1.0 que está cayendo. |
+  | `coeficiente_variacion` | Qué tan volátil/errático es el histórico de venta del vendedor (desviación estándar ÷ promedio). Un valor alto explica por qué el `factor_tendencia_aplicado` puede estar cerca de 1.0 aunque la tendencia cruda sea más pronunciada (el sistema se vuelve conservador cuando el vendedor es errático). |
+
+- **Por qué importa este drawer:** es la herramienta de transparencia para que un vendedor o gerencia entienda **por qué** salió ese número y no otro — evita que la meta se perciba como una "caja negra". Nota: lo que muestra es la meta *antes* del ajuste por tipo de vendedor (externo/interno/nuevo) y *antes* del Factor de Presión Comercial del slider — esos dos ajustes se aplican después, solo al presionar "Generar".
+
 #### Pestaña "Comisiones Variables · Config" (nueva)
 
 Aquí gerencia configura el esquema de comisión por margen **sin necesidad de programar**. Tiene 3 sub-pestañas:
@@ -56,15 +148,89 @@ Aquí gerencia configura el esquema de comisión por margen **sin necesidad de p
 
 > ⚠️ Nota de datos reales (ver auditoría 30): el catálogo de productos no tiene nombres de categoría cargados desde SAP, así que las categorías se identifican por **código** (ej. `BAT` = baterías), no por nombre. Y el ajuste por plazo de crédito hoy solo tiene información real para **contado** y **30 días** — los demás tramos (45/60/90 días) están disponibles para configurar pero sin historial de ventas real que los respalde todavía.
 
-#### Pestaña "Comisiones Variables · Simulación" (nueva)
+#### 1.3.2 Comisiones Variables · Config — detalle absoluto de cada input
 
-Antes de activar nada, gerencia puede simular: elige cuántos meses hacia atrás (3/6/12/24) y presiona **Simular**. El sistema recalcula, con datos reales del EDW, cuánto se habría pagado con el esquema plano vs. con el esquema variable configurado, mes a mes y vendedor por vendedor. Muestra:
+Componente: `frontend/src/components/goals/CommissionConfigPanel.tsx`. Todo lo que se guarda aquí alimenta al motor puro `commission_engine.calcular_comision_variable` (ver Parte 2, §2.3, la fórmula completa) — **nada de esto paga dinero real mientras `COMISION_MODO=plana`** (el modo por defecto); solo entra en vigor real en `sombra` (se calcula pero no se paga) o `variable` (pasa a ser lo oficial).
 
-- Costo total de comisiones en cada esquema.
-- % que representa la comisión sobre el margen bruto total generado (el indicador de salud: idealmente entre 15–20%).
-- El detalle línea por línea: quién gana más, quién gana menos, y por cuánto.
+**Sub-pestaña "Matriz de categorías"** — define cuánto se comisiona por tipo de producto. Payload: `MatrizCategoriaPayload`.
 
-Esto es lo que permite decidir, con números reales de la propia empresa, si conviene activar el esquema nuevo y con qué tasas.
+| Input | Campo técnico | Tipo / rango | Qué significa | Validación backend |
+|---|---|---|---|---|
+| Autocomplete "Clase (código)" | `clase` | string, 1–5 caracteres, se normaliza a mayúsculas; admite `*` como comodín | El código de clase de producto tal como existe en `dim_producto.clase` (ej. `BAT` = baterías). El comodín `*` crea una regla "para todo lo que no tenga una regla más específica" — es el fallback universal. | `min_length=1, max_length=5` |
+| Input "Subclase (opcional)" | `subclase` | string, ≤5 caracteres; se deshabilita al editar una regla existente | Refina la clase a un nivel más específico (ej. clase `BAT`, subclase `BAT-AUTO`). Dejarlo vacío hace que la regla aplique a toda la clase sin distinguir subclase. | `max_length=5` |
+| Select "Grupo" | `grupo` | enum: `A` \| `B` \| `C` \| `S` \| `X` | La categoría comercial a la que se asigna esta clase/subclase — determina cómo se trata la línea en el motor (`S`=servicio, tasa sobre valor; `X`=línea excluida/cortesía, tasa 0%; `A/B/C` son categorías normales de margen, cada una con su propia tasa). | Pattern regex del enum |
+| Input número "Tasa (%)" | `tasa_pct` | `step=0.1`, `min=0`, `max=100` | El porcentaje de comisión que se paga sobre la base elegida (margen o valor) para esta clase/subclase. Ej.: `tasa_pct=8` sobre una línea con `margen_bruto=$1,000` en base `margen` da `$80` de comisión antes de los demás factores. | `ge=0, le=100` |
+| Select "Base" | `base` | `margen` \| `valor` | Sobre qué monto de la línea se aplica la tasa: `margen` = utilidad bruta real (precio de venta − costo), `valor` = el monto total de venta de la línea, sin descontar costo. Los servicios (grupo `S`) casi siempre usan `valor` porque no tienen costo de inventario que produzca un margen calculable. | — |
+| Input número "Factor estratégico" | `factor_estrategico` | `step=0.05`, `min=0.5`, `max=1.5` | Un multiplicador temporal que gerencia puede subir (ej. `1.3`) para incentivar más la venta de una categoría específica (ej. liquidar inventario de temporada), o bajar (ej. `0.8`) para desincentivarla sin tocar la tasa base. Se multiplica directo en la fórmula del motor. | `ge=0.5, le=1.5` |
+| Botón "Guardar regla" / "Guardar cambios" | — | acción → `POST commission-config/matriz` | Crea o actualiza la regla. **Nunca sobrescribe una fila vigente en el sitio:** cierra la vigencia de la regla anterior (`vigente_hasta`) e inserta una nueva con `vigente_desde=hoy` — así el historial de qué tasa aplicaba en qué fecha queda íntegro para auditoría y para que la simulación retroactiva use la tasa correcta de cada período pasado. | — |
+| Botón "Editar" (por fila) | — | acción, UI | Carga los valores de una regla existente en el formulario para modificarla (bloquea `subclase` para no partir accidentalmente el histórico de una regla activa). | — |
+
+**Orden de resolución de reglas** (importante para entender qué gana): el motor busca primero `(clase, subclase)` exacto → si no hay, `(clase, NULL)` → si no hay, el comodín `('*', NULL)`. Una regla más específica siempre gana sobre una genérica.
+
+---
+
+**Sub-pestaña "Factores de crédito"** — cuánto se penaliza la comisión según el plazo de pago otorgado al cliente. Es una tabla editable en bloque (todos los tramos se guardan juntos). Payload: `FactorCreditoPayload[]`.
+
+| Input | Campo técnico | Tipo / rango | Qué significa | Validación backend |
+|---|---|---|---|---|
+| Input número "Desde (días)" | `dias_desde` | int, `min=0` | El inicio del tramo de plazo de crédito (ej. `0` para contado, `31` para el tramo que empieza después de 30 días). | `ge=0` |
+| Input número "Hasta (días)" | `dias_hasta` | int, nullable, `min=0` | El fin del tramo. Dejarlo vacío significa "sin tope" — el último tramo abierto (ej. 90+ días) normalmente se deja así. | `ge=0` (si se informa) |
+| Input número "Factor" | `factor` | `step=0.01`, `min=0`, `max=1.5` | El multiplicador que reduce (o en teoría podría aumentar) la comisión de esa línea según el plazo de crédito. Ej. contado = `1.0` (sin penalización), 30 días = `0.85` (15% menos de comisión) — refleja que vender a crédito le cuesta más financieramente a la empresa que vender de contado. | `ge=0, le=1.5` |
+| Input número "% al facturar" | `pct_al_facturar` | `step=1`, `min=0`, `max=100` | **Campo reservado, aún no usado por el motor real.** Pensado para una fase futura donde la comisión se reparta entre el momento de facturar y el momento de cobrar (ej. 70% al facturar, 30% al cobrar) — hoy el motor aplica el `factor` completo de una sola vez al facturar, sin split. Ver limitación en §2.9. | `ge=0, le=100` |
+| Botón "Agregar tramo" | — | acción, UI | Añade una fila vacía a la tabla para definir un nuevo rango de días. | — |
+| Botón "Quitar" (por fila) | — | acción, UI | Elimina un tramo de la tabla **en memoria** — no se persiste hasta "Guardar matriz de crédito". | — |
+| Botón "Guardar matriz de crédito" | — | acción → `PUT commission-config/credito` | Envía el arreglo completo de tramos y **reemplaza toda la configuración de crédito de una sola vez** (a diferencia de la matriz de categorías, aquí no se guarda tramo por tramo — es un PUT de todo el conjunto). | — |
+
+> ⚠️ Cobertura real de datos: solo hay tráfico histórico real para los tramos de **0 días** (contado) y **30 días**. Los tramos de 45/60/90 días se pueden configurar pero no tienen historial de ventas que los respalde en el EDW actual (auditoría 30, H4).
+
+---
+
+**Sub-pestaña "Tipo de vendedor"** — clasifica a cada vendedor como externo o interno, con su propio factor de comisión. Payload: `ConfigVendedorPayload`.
+
+| Input | Campo técnico | Tipo / rango | Qué significa | Validación backend |
+|---|---|---|---|---|
+| Autocomplete "Código de vendedor" | `vendedorOrigen` / `id_vendedor_origen` | obligatorio, string (código SAP del vendedor) | Identifica a qué vendedor aplica esta configuración. | Requerido |
+| Select "Tipo" | `tipo` | `externo` \| `interno` | **Externo:** vendedor de campo/comisionista tradicional — factor de referencia `1.0`. **Interno:** vendedor de mostrador/oficina, típicamente con salario base más alto y menor costo variable esperado — factor sugerido `0.70`. Al cambiar este select, la UI **autosugiere** el factor típico (1.0 o 0.70) en el campo siguiente, pero sigue siendo editable. | Enum |
+| Input número "Factor de comisión" | `factor_tipo` | `step=0.05`, `min=0`, `max=1.5` | El multiplicador final que se aplica sobre TODA la comisión variable calculada del vendedor (después de sumar todas sus líneas), reflejando su costo de estructura para la empresa. Es editable manualmente incluso después de la autosugerencia — por ejemplo, un vendedor interno con desempeño excepcional podría configurarse con `0.85` en vez del `0.70` por defecto. | `ge=0, le=1.5` |
+| Columna "Fecha de ingreso" (`fecha_ingreso`) | `fecha_ingreso` | fecha, **no editable en esta UI** | Solo se muestra en la tabla, no tiene input propio en el formulario — se usa internamente para la regla de "vendedor nuevo" (ver Parte 2, §2.4: `COMISION_VENDEDOR_NUEVO_MESES`/`_FACTOR`, que afecta el cálculo de **metas**, no de comisión variable). Al guardar tipo/factor desde este formulario, el valor existente de `fecha_ingreso` se reenvía tal cual, sin poder cambiarlo aquí. | — |
+| Botón "Guardar vendedor" | — | acción → `PUT commission-config/vendedores/{vendedor_origen}` | Crea o actualiza la fila de configuración de ese vendedor específico. | — |
+
+> Vendedor sin fila configurada aquí: el sistema lo trata automáticamente como **externo** con factor `1.0` (`COMISION_FACTOR_EXTERNO_DEFAULT`) — nunca se le penaliza por omisión, es un default neutral, no punitivo.
+
+---
+
+**Sub-pestaña "Bitácora de cambios"** — solo lectura, sin inputs. Muestra el historial de auditoría de todo lo configurado en las tres sub-pestañas anteriores: quién cambió qué, cuándo, y el detalle del cambio (tabla `public.comision_config_auditoria`, append-only — nunca se edita ni se borra un registro de esta bitácora).
+
+#### 1.3.3 Comisiones Variables · Simulación (Proyección) — detalle absoluto de cada input
+
+> **Rediseño 2026-07-27:** este panel dejó de ser una comparación retroactiva "esquema plano vs. variable" de meses ya cerrados. Ahora es una **proyección hacia adelante**, exclusivamente del esquema variable: toma los últimos 3 o 6 meses YA CERRADOS de cada vendedor como base histórica y estima cuánto pagaría la matriz **configurada hoy** el próximo mes calendario. La comparación retroactiva contra el esquema plano sigue existiendo, pero solo internamente — la usa la alerta de divergencia del piloto en sombra (`NotificationService._generar_divergencia_comisiones`), no este panel.
+
+Componente: `frontend/src/components/goals/CommissionSimulationPanel.tsx`. Este panel **no escribe nada en la configuración** — es de solo consulta, corre el motor sobre datos históricos reales del EDW para estimar el próximo mes, sin comprometerse a nada.
+
+| Input | Campo técnico | Tipo / rango | Qué significa | Efecto |
+|---|---|---|---|---|
+| Selector "Meses de historial" | `meses_historico` | opciones fijas: `3` / `6` (el backend rechaza cualquier otro valor con 400) | Cuántos meses YA CERRADOS (excluye el mes en curso, incompleto) se usan como base de la proyección — el mismo tipo de ventana de tendencia que usa el motor IQR de metas, no un rango arbitrario. | Determina cuántos meses hacia atrás consulta `CommissionSimulationService.proyectar_comision_variable`. |
+| Botón "Proyectar" | — | acción → `POST /gerencia/goals/commission-simulation` con `{"meses_historico": 3\|6}` | Para cada vendedor con ventas en la ventana, calcula la comisión variable de cada uno de esos meses históricos con la matriz/crédito/tipo de vendedor **vigentes HOY** (no los vigentes en cada mes histórico — a propósito: la pregunta que responde es "si mantengo la config actual, ¿cuánto pagaría con el patrón de venta reciente de cada vendedor?"), y promedia esos meses para proyectar el mes siguiente al actual. | No persiste nada — es un cálculo transitorio, se recalcula cada vez que se presiona el botón. |
+
+**Supuestos explícitos de la proyección** (para que gerencia no la lea como una promesa exacta):
+- **Cumplimiento neutro:** cada mes histórico se calcula con `venta_real == monto_meta`, es decir, tramo **Meta** (multiplicador 1.0×, ni bono de Excelente ni castigo de Cerca/Lejos) — porque la meta real del período proyectado todavía no existe (la genera la Consola de Metas, un motor distinto). La proyección aísla la fórmula de margen/categoría/crédito/tipo de vendedor, no intenta adivinar si el vendedor cumplirá una meta futura.
+- **Sin bonos ni devoluciones estimadas:** son eventos puntuales del mes ya cerrado (venta cruzada aceptada, cliente nuevo, cobranza sana, devoluciones reales), no un patrón proyectable con la misma base estadística que la venta — se omiten del cálculo proyectado a propósito, en vez de inventar un promedio poco confiable.
+
+**Qué muestra la tabla de resultado** (solo lectura, sin inputs):
+
+| Columna | Campo técnico | Qué significa |
+|---|---|---|
+| Código vendedor | `vendedor_origen` | El código SAP del vendedor (`codven`). |
+| Vendedor | `nombre_vendedor` | Nombre real, resuelto en lote desde el catálogo (`CatalogRepository.get_vendedores_info`) — nunca una consulta por fila. |
+| Período proyectado | `periodo_proyectado` | El mes calendario siguiente al actual, formato `YYYY-MM` (ej. si hoy es julio 2026, `2026-08`). Igual para todas las filas de una misma corrida. |
+| Venta neta promedio | `venta_neta_promedio` | Promedio mensual de Venta Neta del vendedor en la ventana histórica elegida — la base de comparación, no entra directo en la fórmula de comisión (que trabaja a nivel de línea). |
+| Margen bruto promedio | `margen_bruto_promedio` | Promedio mensual del margen bruto real de las líneas de venta del vendedor en la ventana — la base "margen" que usa la mayoría de las reglas de la matriz (§1.3.2). **Excluye las líneas de clases marcadas como grupo `X`** (ej. `Z-999` "chatarra", ver `docs/features/matriz_categorias_comision_variable.md` §4): esas líneas ya no aportan nada a la comisión, y su costo suele venir mal registrado en el ERP (márgenes negativos absurdos que antes distorsionaban esta columna y podían volver negativo el denominador de "% comisión/margen"). |
+| Comisión variable proyectada | `comision_variable_proyectada` | El resultado: promedio de la comisión variable que esos mismos meses históricos habrían generado con la matriz de HOY. Es la estimación de lo que pagaría el próximo mes si el patrón de venta se mantiene. |
+| % comisión / margen | `tasa_efectiva_pct` | `comisión proyectada ÷ margen bruto promedio × 100` — la tasa **efectiva** real (mezcla de todas las categorías que vende ese vendedor), distinta de cualquier tasa nominal individual de la matriz. |
+
+El resumen (tarjetas KPI arriba de la tabla) agrega estos mismos valores a nivel de todos los vendedores: comisión variable total proyectada, margen bruto promedio total, % comisión/margen global y cantidad de vendedores proyectados.
+
+**Por qué existe este panel:** le permite a gerencia ver, con datos reales del EDW y la configuración ya cargada en 1.3.2, cuánto costaría el esquema variable el próximo mes — sin tener que esperar a que ese mes cierre para saberlo, y sin mezclar esa proyección con el esquema plano (que es una decisión de negocio distinta, ya cubierta por la alerta de divergencia del piloto en sombra).
 
 ### 1.4 ¿Cómo se activa el esquema nuevo de verdad?
 
@@ -113,7 +279,7 @@ Ambas conviven porque `settings.COMISION_MODO` decide cuál(es) se ejecuta(n) en
 | Repositorio de datos | `backend/app/repositories/goal_repository.py` | Consultas SQL sobre `edw.*` — venta neta, líneas de venta a grano de línea (`get_commission_lines`), perfil de margen por categoría, líneas sin costo, bonos (cliente nuevo, venta cruzada aceptada), devoluciones. |
 | Repositorio de configuración | `backend/app/repositories/commission_config_repository.py` | CRUD de las tablas `public.comision_*` (matriz, crédito, tipo de vendedor) y snapshots de liquidación. Todo con vigencias — nunca se sobreescribe una fila vigente, se cierra y se inserta una nueva. |
 | Servicio de liquidación | `backend/app/services/commission_service.py` | `get_commission_tracking` (panel gerencial) y `get_my_commission` (panel vendedor). Según `COMISION_MODO`, calcula uno o ambos esquemas y persiste snapshots. |
-| Simulación retroactiva | `backend/app/services/commission_simulation_service.py` | Solo lectura del EDW — recorre N meses, calcula ambos esquemas por vendedor y agrega costos/porcentajes. No persiste nada. |
+| Simulación / proyección | `backend/app/services/commission_simulation_service.py` | Solo lectura del EDW — dos métodos: `simular()` (retroactivo, plano vs. variable, uso interno de la alerta de divergencia del piloto en sombra) y `proyectar_comision_variable()` (hacia adelante, solo variable, el que consume el panel "Simulación" — §1.3.3). Ninguno persiste nada. |
 | Configuración expuesta a gerencia | `backend/app/services/commission_config_service.py` | Envuelve `CommissionConfigRepository` para los endpoints CRUD y los reportes de solo lectura (perfil de categorías, líneas sin costo). |
 | Ajuste de metas por tipo de vendedor | `backend/app/services/goal_ml_service.py` (`generate_proposals`, `_ajustar_meta_por_tipo`) | Si hay configuración de tipo de vendedor, multiplica la meta base por `COMISION_META_FACTOR_EXTERNO`/`_INTERNO`, o aplica la regla de vendedor nuevo (60% del promedio del equipo durante los primeros meses). |
 | Modelos SQLAlchemy | `backend/app/models/commission_config.py` | `ComisionMatrizCategoria`, `ComisionFactorCredito`, `ComisionConfigVendedor`, `ComisionLiquidacion`. Registrados en `backend/app/database/base.py` para que `Base.metadata.create_all` los cree. |
@@ -182,7 +348,7 @@ Todos bajo `/api/v1`, con `PermissionChecker` de gerencia/administrador salvo do
 | `/gerencia/goals/commission-config/credito` | GET, PUT | gerencia | Leer / reemplazar la matriz completa de factores de crédito. |
 | `/gerencia/goals/commission-config/vendedores` | GET | gerencia | Listar configuración de tipo de vendedor. |
 | `/gerencia/goals/commission-config/vendedores/{vendedor_origen}` | PUT | gerencia | Crear/actualizar tipo y factor de un vendedor. |
-| `/gerencia/goals/commission-simulation` | POST | gerencia | Simulación retroactiva N meses, plano vs. variable. |
+| `/gerencia/goals/commission-simulation` | POST | gerencia | Proyección de comisión variable del próximo mes, con base en 3 o 6 meses de historial (§1.3.3) — solo esquema variable, sin comparar contra el plano. |
 | `/gerencia/goals/commission-analysis/categorias` | GET | gerencia | Perfil de margen agregado por categoría (Fase 1 del plan). |
 | `/gerencia/goals/lineas-sin-costo` | GET | gerencia | Reporte de líneas sin costo registrado (salvaguarda 2). |
 | `/analytics/ventas/goals/mi-comision` | GET | ventas | Comisión del vendedor autenticado en el mes en curso; incluye `comision_variable`/`desglose_variable` cuando corresponde. |

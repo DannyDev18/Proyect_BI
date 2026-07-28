@@ -57,6 +57,9 @@ MODEL_DISPLAY_NAMES: dict[str, str] = {
 }
 
 
+REGISTRY_FILENAME = "registry.json"
+
+
 class ModelLoader:
     """Cachea en memoria los modelos `.pkl` disponibles en `models_dir` junto con el
     contenido de su sidecar `.meta.json` (features, métricas, cluster_to_segment, etc.)."""
@@ -67,12 +70,36 @@ class ModelLoader:
         self._models: dict[str, Any] = {}
         self._meta: dict[str, dict[str, Any]] = {}
         self._contracts: dict[str, ModelContractLite] = {}
+        self._model_files: dict[str, str] = self._resolve_model_files()
+
+    def _resolve_model_files(self) -> dict[str, str]:
+        """Resuelve el archivo campeón de cada clave desde `registry.json` (Fase 1,
+        `docs/features/plan_mejora_pipeline_ml.md`), con fallback a `_MODEL_FILES`
+        (nombres fijos) si el registro no existe o está incompleto -- así una
+        instalación sin `registry.json` (p.ej. un volumen viejo) sigue funcionando
+        exactamente como antes (cambio 100% aditivo, sin romper instalaciones)."""
+        registry_path = os.path.join(self.models_dir, REGISTRY_FILENAME)
+        resolved = dict(_MODEL_FILES)
+        if not os.path.exists(registry_path):
+            return resolved
+        try:
+            with open(registry_path, "r", encoding="utf-8") as f:
+                registry = json.load(f)
+        except Exception as e:
+            logger.warning(f"No se pudo leer {registry_path}, usando nombres fijos: {e}")
+            return resolved
+        for key, entry in registry.items():
+            champion = entry.get("champion") if isinstance(entry, dict) else None
+            if champion:
+                resolved[key] = champion
+        return resolved
 
     def load_all(self) -> None:
-        """Carga todos los modelos declarados en `_MODEL_FILES`. Tolera archivos
-        faltantes (logea WARNING) -- útil en dev sin todos los .pkl disponibles;
-        cada llamada a `get()` fallará explícitamente para el modelo faltante."""
-        for key, filename in _MODEL_FILES.items():
+        """Carga todos los modelos declarados en el registro (o en `_MODEL_FILES` si no
+        hay `registry.json`). Tolera archivos faltantes (logea WARNING) -- útil en dev
+        sin todos los .pkl disponibles; cada llamada a `get()` fallará explícitamente
+        para el modelo faltante."""
+        for key, filename in self._model_files.items():
             path = os.path.join(self.models_dir, filename)
             if not os.path.exists(path):
                 logger.warning(f"Modelo '{filename}' no encontrado en {path}. No se carga.")
@@ -117,9 +144,10 @@ class ModelLoader:
         return len(self._models) > 0
 
     def keys(self) -> list[str]:
-        """Claves internas declaradas en `_MODEL_FILES` (M-02: panel MLOps de
-        Administrador itera esto para reportar el estado de cada modelo, cargado o no)."""
-        return list(_MODEL_FILES.keys())
+        """Claves internas declaradas en el registro (o `_MODEL_FILES` sin registro):
+        M-02: panel MLOps de Administrador itera esto para reportar el estado de cada
+        modelo, cargado o no)."""
+        return list(self._model_files.keys())
 
     def get_meta(self, key: str) -> dict[str, Any]:
         """Sidecar `.meta.json` completo del modelo (features, metrics, cluster_to_segment,
@@ -169,12 +197,52 @@ class ModelLoader:
                         f"silenciosamente del modelo entrenado (ver M-01, plan_mejoras_proyecto.md)."
                     )
 
+    def get_versions(self, key: str) -> list[dict[str, Any]]:
+        """Versiones archivadas de `key` en `models_dir/versions/<key>/` (Fase 1/3,
+        docs/features/plan_mejora_pipeline_ml.md) -- lee el volumen `:ro` montado, no
+        requiere escritura. Usado por el panel MLOps para listar a qué versión se puede
+        hacer rollback/promoción manual. Lista vacía si el modelo nunca se reentrenó con
+        `registry_key` (aún no versionado) o el directorio no existe."""
+        versions_dir = os.path.join(self.models_dir, "versions", key)
+        if not os.path.isdir(versions_dir):
+            return []
+        version_actual = self._registry_version(key)
+        resultado = []
+        for filename in sorted(os.listdir(versions_dir), reverse=True):
+            if not filename.endswith(".meta.json"):
+                continue
+            version = filename[: -len(".meta.json")]
+            try:
+                with open(os.path.join(versions_dir, filename), "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                continue
+            resultado.append({
+                "version": version,
+                "metrics": meta.get("metrics", {}),
+                "trained_at": meta.get("trained_at"),
+                "algorithm": meta.get("algorithm"),
+                "es_campeon_actual": version == version_actual,
+            })
+        return resultado
+
+    def _registry_version(self, key: str) -> str | None:
+        registry_path = os.path.join(self.models_dir, REGISTRY_FILENAME)
+        if not os.path.exists(registry_path):
+            return None
+        try:
+            with open(registry_path, "r", encoding="utf-8") as f:
+                registry = json.load(f)
+            return registry.get(key, {}).get("version")
+        except Exception:
+            return None
+
     def get_training_date(self, key: str) -> str:
         """Fecha de modificación del archivo .pkl (proxy de 'fecha de entrenamiento').
         Corrige un bug previo: el código viejo buscaba el nombre de archivo hardcodeado
         `sales_rf_model.pkl` (obsoleto) en vez del nombre real cargado (`sales_best_model.pkl`),
         por lo que siempre caía al valor por defecto "Reciente"."""
-        filename = _MODEL_FILES.get(key)
+        filename = self._model_files.get(key)
         if not filename:
             return "Desconocida"
         path = os.path.join(self.models_dir, filename)

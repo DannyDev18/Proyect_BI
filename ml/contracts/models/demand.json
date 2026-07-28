@@ -1,85 +1,92 @@
 {
   "name": "demand",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "task": "regression",
   "status": "active",
   "features": [
+    {
+      "name": "almacen_sk",
+      "dtype": "int",
+      "required": true,
+      "nullable": false,
+      "description": "Fase 2 (docs/features/plan_mejora_pipeline_ml.md §4.1): identidad numérica del almacén (surrogate key de edw.dim_almacen). El grano pasó de serie global apilada por producto a (fecha, codart, almacén) -- decisión de negocio 'la reposición se decide por bodega'. Sin esta feature el modelo no distingue en qué bodega ocurre la demanda."
+    },
     {
       "name": "lag_1_y_quantity",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Unidades vendidas del día anterior (mismo producto)"
+      "description": "Unidades de salida del día anterior (misma combinación producto+almacén)"
     },
     {
       "name": "lag_7_y_quantity",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Unidades vendidas hace 7 días (mismo producto)"
+      "description": "Unidades de salida hace 7 días (misma combinación producto+almacén)"
     },
     {
       "name": "lag_14_y_quantity",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Unidades vendidas hace 14 días (mismo producto)"
+      "description": "Unidades de salida hace 14 días (misma combinación producto+almacén)"
     },
     {
       "name": "lag_30_y_quantity",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Unidades vendidas hace 30 días (mismo producto)"
+      "description": "Unidades de salida hace 30 días (misma combinación producto+almacén)"
     },
     {
       "name": "lag_90_y_quantity",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Unidades vendidas hace 90 días (mismo producto)"
+      "description": "Unidades de salida hace 90 días (misma combinación producto+almacén)"
     },
     {
       "name": "rolling_mean_7d",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Media móvil 7 días por producto (shift 1)"
+      "description": "Media móvil 7 días por combinación producto+almacén (shift 1)"
     },
     {
       "name": "rolling_mean_30d",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Media móvil 30 días por producto (shift 1)"
+      "description": "Media móvil 30 días por combinación producto+almacén (shift 1)"
     },
     {
       "name": "rolling_std_7d",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Desviación estándar móvil 7 días por producto (shift 1)"
+      "description": "Desviación estándar móvil 7 días por combinación producto+almacén (shift 1)"
     },
     {
       "name": "rolling_min_7d",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Mínimo móvil 7 días por producto (shift 1)"
+      "description": "Mínimo móvil 7 días por combinación producto+almacén (shift 1)"
     },
     {
       "name": "rolling_max_7d",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Máximo móvil 7 días por producto (shift 1)"
+      "description": "Máximo móvil 7 días por combinación producto+almacén (shift 1)"
     },
     {
       "name": "expanding_mean",
       "dtype": "float",
       "required": true,
       "nullable": false,
-      "description": "Media expandida histórica por producto (shift 1)"
+      "description": "Media expandida histórica por combinación producto+almacén (shift 1) -- funciona además como codificación histórica ('target encoding') de la combinación, sin fuga de datos (solo usa datos < T de esa misma combinación, mismo principio que los cortes temporales de churn H-05)."
     },
     {
       "name": "is_weekend",
@@ -135,19 +142,19 @@
     "name": "y_quantity",
     "transform": "log1p",
     "inverse_transform": "expm1",
-    "description": "Unidades vendidas por producto/día (llave de negocio codart, no nombre_articulo — H-21 cerrado). El artefacto es un sklearn.compose.TransformedTargetRegressor(func=log1p, inverse_func=expm1) autocontenido: predict() devuelve unidades directamente (H-01, cerrado)."
+    "description": "Unidades de salida física de bodega por (producto, almacén, día) -- llave de negocio codart (no nombre_articulo, H-21 cerrado) + nombre_almacen (mismo criterio de filtro que warehouse_repository.py/dataset_repository.py). El artefacto es un sklearn.compose.TransformedTargetRegressor(func=log1p, inverse_func=expm1) autocontenido: predict() devuelve unidades directamente (H-01, cerrado)."
   },
   "output": {
     "type": "float",
     "unit": "units",
     "plausible_range": [
       0,
-      100000
+      5000
     ]
   },
   "population_filter": {
-    "description": "Mismo filtro de estado/devolución que ventas, vía dim_estado_documento (C-1). Agrupado por codart (llave de negocio), no por nombre_articulo, para no partir series de productos renombrados en dim_producto SCD2 (H-21, cerrado). Implementado en Fase 2/3 (docs/auditoria/13_impacto_dim_estado_documento.md): ml/src/data/make_dataset.py::fetch_sales_by_dimension ya usa este JOIN + codart.",
-    "sql_condition": "JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1 -- GROUP BY ... p.codart"
+    "description": "Fase 2 (docs/features/plan_mejora_pipeline_ml.md §4.1, docs/auditoria/38_mejora_pipeline_ml.md): dataset rediseñado de serie global apilada (fetch_sales_by_dimension) a grano (fecha, codart, almacén) vía fetch_demand_by_product_warehouse, sobre fact_movimientos_inventario (salidas físicas de bodega, columna es_salida ya calculada -- NUNCA el signo de cantidad_movimiento, regla de negocio 3) en vez de fact_ventas_detalle (demanda comercial/facturación). Excluye centinelas producto_sk<>-1/almacen_sk<>-1 (regla 12) y la clase 'Z-999' (chatarra/desecho -- el único SKU de esa clase, Z-9001, era el de mayor error absoluto del backtest de la auditoría 38, no es un artículo de reposición normal). Además, solo entran al entrenamiento las combinaciones (producto, almacén) con >= ML_DEMANDA_MIN_MESES_VENTA (default 6) meses con actividad en la ventana de 3 años -- el 66.5% de las 12.654 combinaciones detectadas tienen actividad en <=3 de 36 meses (auditoría 38 §3), series demasiado ralas para que lags/rolling aporten señal; esas combinaciones caen al pronóstico estadístico existente en producción (WarehouseService._forecast_estadistico), no al modelo.",
+    "sql_condition": "WHERE m.es_salida AND p.producto_sk <> -1 AND al.almacen_sk <> -1 AND p.clase <> 'Z-999' -- GROUP BY df.fecha_completa, p.codart, al.nombre_almacen, al.almacen_sk -- filtro adicional de historia mínima aplicado en pandas tras el fetch (ver ml/main.py::train_demand_forecasting)"
   },
   "library_versions": {
     "scikit-learn": "1.9.0",
@@ -156,12 +163,13 @@
     "catboost": "1.2.10"
   },
   "data_range": {
-    "desde": "2023-07-10",
-    "hasta": "2026-07-09"
+    "desde": "2023-07-17",
+    "hasta": "2026-07-16"
   },
   "known_serving_mismatch": [
     "H-01/H-07 cerrados en Fase 4: model_loader.py apunta a demand.pkl y predict_demand ya no depende de model.feature_names_in_ (el ganador es CatBoost, que no lo expone) -- usa loader.get_features('demand_rf') del sidecar.",
-    "H-08b (sin cerrar, decisión consciente): el modelo sigue siendo 'global' (columna 'producto'/codart se descarta en select_features_and_target antes de entrenar) — funciona como perfil de serie compartido entre productos vía sus lags/rolling, no distingue SKUs explícitamente. Evaluar target encoding o features estáticas del SKU en una iteración futura si la precisión por producto resulta insuficiente en producción"
+    "H-08b CERRADO en Fase 2 (2026-07-20, docs/features/plan_mejora_pipeline_ml.md): el modelo ya no es una serie global -- entrena por combinación (producto, almacén) con almacen_sk como feature y lags/rolling/expanding agrupados por ambas claves. Backtest comparativo (ml/scripts/backtest_demand_producto_almacen.py vs. backtest_demand_por_sku.py, docs/auditoria/38_mejora_pipeline_ml.md): MAE del decil de mayor volumen bajó de 40.15 a 11.98 y RMSE de 561.14 a 40.46 unidades.",
+    "PENDIENTE (Fase 2, serving): get_product_sales_history (backend/app/repositories/dataset_repository.py) todavía agrega TODOS los almacenes de un producto -- no filtra ni expone almacen_sk. Hasta que se sincronice, la inferencia en producción sigue usando el modelo anterior/una aproximación agregada; ver TODO en preprocessing.py y warehouse_service.py."
   ],
-  "notes": "Reconstruido en Fase 3 (2026-07-09), reentrenado tras cerrar una segunda fuga descubierta durante la reconstrucción de recomendación: fetch_sales_by_dimension no excluía el centinela producto_sk=-1 (58.121 filas, 11.2% del hecho, sin producto real resuelto), que entraba como un pseudo-producto contaminando la serie. Tras excluirlo (regla de negocio 12, CLAUDE.md): ganador CatBoostRegressor (learning_rate=0.05, iterations=200, depth=6), RMSE=172.97 unidades, MAE=5.56 unidades, R2=0.899 (mejoró desde R2=0.866 de la primera corrida con el centinela incluido). Verificado manualmente que predict() devuelve unidades en rango plausible, no log1p. Nota operativa: se detectó y corrigió un deadlock de paralelismo anidado en model_selector.py (LightGBM/CatBoost con n_jobs=-1 propio + RandomizedSearchCV con n_jobs=-1 se colgaban indefinidamente dentro de Docker); el fix (n_jobs=1 en el nivel del search para esos dos algoritmos) aplica a los 7 modelos, no solo a demanda."
+  "notes": "Fase 2 (2026-07-20, docs/features/plan_mejora_pipeline_ml.md, docs/auditoria/38_mejora_pipeline_ml.md): rediseño de grano global→producto×almacén. Tras excluir combinaciones con <6 meses de actividad (3.183 de 12.653 combinaciones elegibles) y el SKU de chatarra Z-9001: ganador CatBoostRegressor (learning_rate=0.05, iterations=200, depth=6, hyperparameter_search=True -- revierte D-2, antes demanda entrenaba sin búsqueda de hiperparámetros), RMSE=13.95 unidades, MAE=2.59 unidades, R2=0.133 sobre el hold-out cronológico del 20% más reciente. El R2 más bajo que la versión anterior (0.899) es ESPERADO y no una regresión: el R2 global anterior estaba inflado por unos pocos SKU de volumen enorme (encabezados por Z-9001, ahora excluido) donde acertar la escala explica la mayoría de la varianza aunque el error absoluto fuera gigantesco (RMSE=191, MAE=6.2 en la versión anterior); el backtest por decil de volumen (mismo método que la auditoría 38) es la comparación correcta y muestra mejora en TODOS los deciles, incluido el de mayor volumen (MAE 40.15->11.98, RMSE 561.14->40.46). Histórico previo (Fase 3, 2026-07-09): ganador CatBoostRegressor sobre la serie global apilada tras cerrar la fuga del centinela producto_sk=-1 (58.121 filas, 11.2% del hecho): RMSE=172.97, MAE=5.56, R2=0.899. Nota operativa heredada: fix de deadlock de paralelismo anidado en model_selector.py (n_jobs=1 en el nivel del search para LightGBM/CatBoost) aplica a los 7 modelos."
 }

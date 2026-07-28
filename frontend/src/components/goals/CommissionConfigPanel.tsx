@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { Settings, Plus, CreditCard, Users, Pencil, X } from 'lucide-react';
+import { Settings, Plus, CreditCard, Users, Pencil, Trash2, X } from 'lucide-react';
 
 import {
-  useMatrizCategorias, useUpsertMatrizCategoria, useFactoresCredito, useReplaceFactoresCredito,
+  useMatrizCategorias, useUpsertMatrizCategoria, useDeleteMatrizCategoria, useFactoresCredito, useReplaceFactoresCredito,
   useConfigVendedores, useUpsertConfigVendedor, useComisionConfigAuditoria,
   useSearchClasesProducto, useSearchVendedoresComision,
 } from '../../hooks/commissionConfig';
@@ -16,6 +16,7 @@ import { Select } from '../ui/Select';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
 import { Badge } from '../ui/Badge';
 import { Autocomplete } from '../ui/Autocomplete';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { useToast } from '../../store/toastStore';
 
 const GRUPOS: GrupoComision[] = ['A', 'B', 'C', 'S', 'X'];
@@ -81,6 +82,7 @@ export function CommissionConfigPanel() {
 function MatrizTab() {
   const matriz = useMatrizCategorias();
   const upsertMut = useUpsertMatrizCategoria();
+  const deleteMut = useDeleteMatrizCategoria();
   const toast = useToast();
 
   const emptyForm = { clase: '', subclase: '', grupo: 'B' as GrupoComision, tasa_pct: 8, base: 'margen' as 'margen' | 'valor', factor_estrategico: 1.0 };
@@ -88,6 +90,7 @@ function MatrizTab() {
   const [editing, setEditing] = useState<MatrizCategoria | null>(null);
   const [claseQuery, setClaseQuery] = useState('');
   const claseSearch = useSearchClasesProducto(claseQuery);
+  const [pendingDelete, setPendingDelete] = useState<MatrizCategoria | null>(null);
 
   const handleEdit = (r: MatrizCategoria) => {
     setEditing(r);
@@ -124,6 +127,18 @@ function MatrizTab() {
     }
   };
 
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete) return;
+    try {
+      await deleteMut.remove(pendingDelete.id);
+      toast(`Regla de ${pendingDelete.clase}${pendingDelete.subclase ? ` / ${pendingDelete.subclase}` : ''} eliminada.`, 'success');
+      if (editing?.id === pendingDelete.id) handleCancelEdit();
+      setPendingDelete(null);
+    } catch {
+      toast('No se pudo eliminar la regla de categoría.', 'error');
+    }
+  };
+
   const columns: DataTableColumn<MatrizCategoria>[] = [
     { key: 'clase', header: 'Clase', headerTitle: 'Código de producto (dim_producto.clase). * = comodín default.', render: (r) => <span className="font-mono text-slate-200">{r.clase}</span> },
     { key: 'subclase', header: 'Subclase', headerTitle: 'Código de subclase; vacío = aplica a toda la clase.', render: (r) => <span className="font-mono text-slate-500">{r.subclase ?? 'Toda la clase'}</span> },
@@ -134,9 +149,18 @@ function MatrizTab() {
     { key: 'vigente_desde', header: 'Vigente desde', headerTitle: 'Fecha desde la que rige esta regla; la anterior queda cerrada, nunca se sobreescribe.', render: (r) => <span className="text-slate-500">{r.vigente_desde}</span> },
     {
       key: 'acciones', header: '', render: (r) => (
-        <Button variant="ghost" size="sm" onClick={() => handleEdit(r)} icon={<Pencil className="w-3.5 h-3.5" aria-hidden="true" />}>
-          Editar
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <Button variant="ghost" size="sm" onClick={() => handleEdit(r)} icon={<Pencil className="w-3.5 h-3.5" aria-hidden="true" />}>
+            Editar
+          </Button>
+          <Button
+            variant="ghost" size="sm" onClick={() => setPendingDelete(r)}
+            icon={<Trash2 className="w-3.5 h-3.5" aria-hidden="true" />}
+            className="text-danger hover:text-danger"
+          >
+            Eliminar
+          </Button>
+        </div>
       ),
     },
   ];
@@ -226,6 +250,25 @@ function MatrizTab() {
         onRetry={matriz.refetch}
         emptyTitle="Sin reglas de categoría configuradas"
         emptyDescription="Agrega la primera regla arriba (ej. clase '*' como default)."
+      />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Eliminar regla de categoría"
+        message={
+          pendingDelete && (
+            <>
+              Se cerrará la vigencia de <span className="font-mono text-slate-200">{pendingDelete.clase}{pendingDelete.subclase ? ` / ${pendingDelete.subclase}` : ''}</span> a
+              partir de hoy. Las liquidaciones ya calculadas con esta regla no se ven afectadas (siguen consultándola
+              por su fecha histórica); desde ahora esa clase caerá al comodín <code className="font-mono">*</code> si
+              existe, o quedará sin regla propia.
+            </>
+          )
+        }
+        confirmLabel="Eliminar regla"
+        loading={deleteMut.loading}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setPendingDelete(null)}
       />
     </div>
   );

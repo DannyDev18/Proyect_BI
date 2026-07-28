@@ -1,7 +1,7 @@
 import { api } from './http';
 import type {
   ClaseBusqueda, ComisionConfigAuditoriaEntrada, ConfigVendedor, ConfigVendedorPayload, FactorCredito,
-  FactorCreditoPayload, LineaSinCosto, MatrizCategoria, MatrizCategoriaPayload, PerfilCategoria, SimulacionResumen,
+  FactorCreditoPayload, LineaSinCosto, MatrizCategoria, MatrizCategoriaPayload, PerfilCategoria, ProyeccionComision,
   VendedorBusqueda,
 } from '../types/commissionConfig';
 
@@ -13,6 +13,9 @@ export const getMatrizCategorias = () =>
 
 export const upsertMatrizCategoria = (payload: MatrizCategoriaPayload) =>
   api.post<MatrizCategoria>('/api/v1/gerencia/goals/commission-config/matriz', payload);
+
+export const deleteMatrizCategoria = (id: number) =>
+  api.delete<MatrizCategoria>(`/api/v1/gerencia/goals/commission-config/matriz/${id}`);
 
 export const getFactoresCredito = () =>
   api.get<{ factores: FactorCredito[] }>('/api/v1/gerencia/goals/commission-config/credito');
@@ -26,9 +29,11 @@ export const getConfigVendedores = () =>
 export const upsertConfigVendedor = (vendedorOrigen: string, payload: ConfigVendedorPayload) =>
   api.put<ConfigVendedor>(`/api/v1/gerencia/goals/commission-config/vendedores/${vendedorOrigen}`, payload);
 
-export const postCommissionSimulation = (meses: number, anioDesde?: number, mesDesde?: number) =>
-  api.post<SimulacionResumen>('/api/v1/gerencia/goals/commission-simulation', {
-    meses, anio_desde: anioDesde, mes_desde: mesDesde,
+/** Proyección de comisión variable del próximo mes, con base en 3 o 6 meses de
+ * historial reciente -- no compara contra el esquema plano (ver types/commissionConfig.ts). */
+export const postCommissionSimulation = (mesesHistorico: 3 | 6) =>
+  api.post<ProyeccionComision>('/api/v1/gerencia/goals/commission-simulation', {
+    meses_historico: mesesHistorico,
   });
 
 export const getPerfilCategorias = (meses = 24) =>

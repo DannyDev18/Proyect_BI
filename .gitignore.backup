@@ -1,9 +1,0 @@
-# variables secretas
-.env
-.env.*
-
-# agentes
-.agent/
-
-# docs de desarrollo
-docs/

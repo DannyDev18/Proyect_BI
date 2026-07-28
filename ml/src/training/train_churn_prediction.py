@@ -1,5 +1,9 @@
 import logging
-from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
+import numpy as np
+from sklearn.metrics import (
+    accuracy_score, average_precision_score, classification_report, confusion_matrix,
+    f1_score, precision_recall_curve, precision_score, recall_score, roc_auc_score,
+)
 from src.training.model_selector import find_best_classification_model
 from src.utils.model_export import library_versions, save_artifact
 
@@ -7,16 +11,55 @@ logger = logging.getLogger("ML.ChurnPrediction")
 
 def evaluate_churn_classifier(y_true, y_pred, y_proba):
     """Devuelve las métricas como dict (antes solo se logueaban, H-18: el sidecar quedaba
-    con metrics: {})."""
-    logger.info("\n--- Classification Report (CHURN) ---")
+    con metrics: {}).
+
+    Fase 4 (docs/features/plan_mejora_pipeline_ml.md §6, D-7, petición explícita del
+    usuario): antes solo se guardaban accuracy+roc_auc. Se agregan matriz de confusión,
+    precision/recall/F1 (umbral por defecto 0.5, el que usa `model.predict()`), PR-AUC
+    (más informativa que ROC-AUC bajo desbalance de clases) y una calibración de umbral
+    -- el umbral que maximiza F1 sobre este mismo holdout, reportado solo como
+    DIAGNÓSTICO para la model card. El serving real NO usa este umbral: el backend
+    filtra `churn_probability` contra `settings.CHURN_UMBRAL_RIESGO_ALTO`, un umbral de
+    NEGOCIO ("¿a quién priorizo en la lista de trabajo?"), no el óptimo estadístico de
+    F1 -- ambos criterios responden preguntas distintas y no deben confundirse."""
+    logger.info("\n--- Classification Report (CHURN, umbral=0.5) ---")
     logger.info("\n" + classification_report(y_true, y_pred))
-    metrics = {"accuracy": accuracy_score(y_true, y_pred)}
+
+    matriz = confusion_matrix(y_true, y_pred)
+    tn, fp, fn, tp = matriz.ravel()
+    metrics = {
+        "accuracy": accuracy_score(y_true, y_pred),
+        "precision": precision_score(y_true, y_pred, zero_division=0),
+        "recall": recall_score(y_true, y_pred, zero_division=0),
+        "f1": f1_score(y_true, y_pred, zero_division=0),
+        "confusion_matrix_tn": int(tn),
+        "confusion_matrix_fp": int(fp),
+        "confusion_matrix_fn": int(fn),
+        "confusion_matrix_tp": int(tp),
+    }
     if y_proba is not None:
         try:
-            metrics["roc_auc"] = roc_auc_score(y_true, y_proba[:, 1])
-            logger.info(f"ROC AUC Score: {metrics['roc_auc']:.4f}")
+            proba_positiva = y_proba[:, 1]
+            metrics["roc_auc"] = roc_auc_score(y_true, proba_positiva)
+            metrics["pr_auc"] = average_precision_score(y_true, proba_positiva)
+            logger.info(f"ROC AUC Score: {metrics['roc_auc']:.4f} | PR-AUC: {metrics['pr_auc']:.4f}")
+
+            precisions, recalls, umbrales = precision_recall_curve(y_true, proba_positiva)
+            f1_por_umbral = np.divide(
+                2 * precisions * recalls, precisions + recalls,
+                out=np.zeros_like(precisions), where=(precisions + recalls) > 0,
+            )
+            idx_mejor = int(np.argmax(f1_por_umbral[:-1])) if len(umbrales) else None
+            if idx_mejor is not None:
+                metrics["umbral_optimo_f1"] = float(umbrales[idx_mejor])
+                metrics["f1_en_umbral_optimo"] = float(f1_por_umbral[idx_mejor])
+                logger.info(
+                    f"Calibración de umbral (solo diagnóstico): F1 óptimo={metrics['f1_en_umbral_optimo']:.4f} "
+                    f"en umbral={metrics['umbral_optimo_f1']:.4f} (serving usa CHURN_UMBRAL_RIESGO_ALTO, no este valor)."
+                )
         except ValueError as exc:
-            logger.warning(f"No se pudo calcular ROC AUC: {exc}")
+            logger.warning(f"No se pudo calcular métricas de probabilidad: {exc}")
+    logger.info(f"Matriz de confusión [[TN={tn}, FP={fp}], [FN={fn}, TP={tp}]]")
     return metrics
 
 def train_churn_model(X_train, y_train):
@@ -29,6 +72,7 @@ def save_churn_model(model, filepath=None, metrics=None, features=None, data_ran
         model, "churn.pkl", filepath=filepath, metrics=metrics,
         algorithm=type(model).__name__,
         features=features,
+        registry_key="churn_rf",
         contract_name="churn",
         contract_version="0.1.0",
         library_versions_used=library_versions("scikit-learn", "xgboost", "lightgbm", "catboost"),

@@ -26,6 +26,16 @@ CHURN_ESPACIADO_DIAS = int(os.getenv("ML_CHURN_ESPACIADO_DIAS", "90"))
 MUESTRA_MARKET_BASKET = int(os.getenv("ML_MUESTRA_MARKET_BASKET", "50000"))
 MUESTRA_ANOMALIAS = int(os.getenv("ML_MUESTRA_ANOMALIAS", "20000"))
 
+# Umbral mínimo de meses con salida real para que una combinación (producto, almacén)
+# entre al modelo de demanda (Fase 2, docs/features/plan_mejora_pipeline_ml.md §4.1).
+# La auditoría 38 midió con SELECT contra el EDW que el 66.5% de las 12.654
+# combinaciones tienen actividad en <=3 de los últimos 36 meses (mediana=2) -- series
+# demasiado ralas para que lags/rolling/expanding aporten señal real. Las combinaciones
+# bajo el umbral se excluyen del entrenamiento; en producción, `WarehouseService` ya
+# degrada al pronóstico estadístico (media móvil) cuando el histórico es insuficiente
+# (mismo patrón que `_forecast_ml_producto` usa hoy para historial vacío).
+DEMANDA_MIN_MESES_VENTA = int(os.getenv("ML_DEMANDA_MIN_MESES_VENTA", "6"))
+
 
 class SalesTimeSerieExtractor:
     def __init__(self):
@@ -97,6 +107,61 @@ class SalesTimeSerieExtractor:
             """
         else:
             return pd.DataFrame()
+        df = pd.read_sql(sql, self.engine)
+        if not df.empty:
+            df['ds'] = pd.to_datetime(df['ds'])
+            df.set_index('ds', inplace=True)
+        return df
+
+    def fetch_demand_by_product_warehouse(self) -> pd.DataFrame:
+        """Grano `(fecha, codart, almacén)` para la reposición de Bodega (Fase 2,
+        docs/features/plan_mejora_pipeline_ml.md §4.1 -- decisión de negocio: "la
+        reposición se decide por bodega"). Reemplaza `fetch_sales_by_dimension('producto')`
+        para el modelo de demanda: ese dataset entrena una serie GLOBAL apilada de todos
+        los SKU sin distinguir producto (D-1, docs/auditoria/38_mejora_pipeline_ml.md) --
+        el backtest por SKU de esa auditoría confirmó que el decil de mayor volumen tiene
+        un MAE 40x y RMSE 150x peor que los deciles bajos.
+
+        Usa `fact_movimientos_inventario.es_salida` (columna booleana ya calculada por el
+        ETL) para la dirección del kardex, NUNCA el signo de `cantidad_movimiento` (siempre
+        magnitud positiva, regla de negocio 3, CLAUDE.md) -- a diferencia de
+        `fetch_sales_by_dimension`, que mide DEMANDA COMERCIAL (facturación,
+        `fact_ventas_detalle`), este dataset mide SALIDAS FÍSICAS DE BODEGA (todo
+        `tipo_movimiento` que reduce existencias: FAC, TRA-salida, DEV, etc.), que es la
+        cantidad que Bodega realmente necesita reponer.
+
+        Se agrupa por `p.codart` (llave de negocio, SCD2 -- H-21) y por
+        `al.nombre_almacen` (mismo criterio que ya usan los filtros de Bodega en
+        `warehouse_repository.py`/`dataset_repository.py`, para que el serving pueda
+        reconstruir el mismo grupo sin una tabla de mapeo nueva); `almacen_sk` se conserva
+        además como feature numérica cruda (identidad del almacén para el modelo).
+
+        Exclusiones de negocio:
+        - Centinelas `producto_sk <> -1` / `almacen_sk <> -1` (regla 12, CLAUDE.md).
+        - `p.clase <> 'Z-999'`: clase dedicada a chatarra/desecho (hallazgo de la
+          auditoría 38 -- el único código con esa clase, `Z-9001` "BATERIAS CHATARRAS",
+          era el SKU con el error absoluto medio más alto del backtest por decil, ~6.469
+          unidades vs. 1-3 del resto; no es un artículo de reposición de inventario
+          normal, es un subproducto de desecho que Bodega no repone/compra).
+        """
+        sql = """
+            SELECT
+                df.fecha_completa AS ds,
+                p.codart AS producto,
+                al.nombre_almacen AS almacen,
+                al.almacen_sk AS almacen_sk,
+                SUM(m.cantidad_movimiento) AS y_quantity
+            FROM edw.fact_movimientos_inventario m
+            JOIN edw.dim_fecha df ON m.fecha_sk = df.fecha_sk
+            JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
+            JOIN edw.dim_almacen al ON m.almacen_sk = al.almacen_sk
+            WHERE m.es_salida
+              AND p.producto_sk <> -1
+              AND al.almacen_sk <> -1
+              AND p.clase <> 'Z-999'
+            GROUP BY df.fecha_completa, p.codart, al.nombre_almacen, al.almacen_sk
+            ORDER BY df.fecha_completa;
+        """
         df = pd.read_sql(sql, self.engine)
         if not df.empty:
             df['ds'] = pd.to_datetime(df['ds'])

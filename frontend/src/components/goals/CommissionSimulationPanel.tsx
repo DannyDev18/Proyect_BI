@@ -1,40 +1,36 @@
 import { useState } from 'react';
-import { DollarSign, FlaskConical, Percent, Play, TrendingDown, TrendingUp } from 'lucide-react';
+import { CalendarClock, DollarSign, FlaskConical, Percent, Play, Users } from 'lucide-react';
 
 import { useCommissionSimulation } from '../../hooks/commissionConfig';
-import type { SimulacionVendedorMes } from '../../types/commissionConfig';
+import type { ProyeccionVendedor } from '../../types/commissionConfig';
 import { Button } from '../ui/Button';
 import { Select } from '../ui/Select';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
 import { KpiCard } from '../ui/KpiCard';
 import { fmtMoney, pct } from '../../utils/format';
 
-const OPCIONES_MESES = [3, 6, 12, 24];
+const OPCIONES_MESES = [3, 6] as const;
 
-/** Simulación retroactiva plano vs. variable (docs/features/plan_integracion_
- * comisiones_variables.md §3.4, Fase 2: "el argumento decisivo" para gerencia). Se
- * dispara bajo demanda -- consulta pesada sobre el EDW a grano de línea de venta. */
+/** Proyección de Comisiones Variables (docs/manual_metas_y_comisiones.md §1.3.3): toma
+ * los últimos 3 o 6 meses YA CERRADOS de cada vendedor como base histórica y proyecta
+ * cuánto pagaría el esquema variable configurado (matriz de categorías, factores de
+ * crédito, tipo de vendedor -- todos vigentes HOY) el próximo mes calendario. No
+ * compara contra el esquema plano -- para esa comparación retroactiva existe la alerta
+ * de divergencia del piloto en sombra, no este panel. */
 export function CommissionSimulationPanel() {
-  const [meses, setMeses] = useState(12);
+  const [meses, setMeses] = useState<3 | 6>(3);
   const simulation = useCommissionSimulation();
 
   const handleSimular = () => simulation.simulate(meses);
 
-  const columns: DataTableColumn<SimulacionVendedorMes>[] = [
-    { key: 'vendedor', header: 'Vendedor', render: (r) => <span className="font-mono text-slate-200">{r.vendedor_origen}</span> },
-    { key: 'periodo', header: 'Período', render: (r) => <span className="text-slate-400">{r.mes}/{r.anio}</span> },
-    { key: 'venta_neta', header: 'Venta Neta', numeric: true, render: (r) => <span className="text-slate-300">{fmtMoney(r.venta_neta)}</span> },
-    { key: 'comision_plana', header: 'Comisión plana', numeric: true, render: (r) => <span className="text-primary">{fmtMoney(r.comision_plana)}</span> },
-    { key: 'comision_variable', header: 'Comisión variable', numeric: true, render: (r) => <span className="text-warning">{fmtMoney(r.comision_variable)}</span> },
-    {
-      key: 'diferencia', header: 'Diferencia', numeric: true,
-      render: (r) => (
-        <span className={`inline-flex items-center gap-1 font-semibold ${r.diferencia >= 0 ? 'text-success' : 'text-danger'}`}>
-          {r.diferencia >= 0 ? <TrendingUp size={13} aria-hidden="true" /> : <TrendingDown size={13} aria-hidden="true" />}
-          {fmtMoney(r.diferencia)}{r.diferencia_pct != null && ` (${r.diferencia_pct >= 0 ? '+' : ''}${r.diferencia_pct.toFixed(1)}%)`}
-        </span>
-      ),
-    },
+  const columns: DataTableColumn<ProyeccionVendedor>[] = [
+    { key: 'vendedor_origen', header: 'Código vendedor', render: (r) => <span className="font-mono text-slate-200">{r.vendedor_origen}</span> },
+    { key: 'nombre_vendedor', header: 'Vendedor', render: (r) => <span className="text-slate-300">{r.nombre_vendedor ?? '—'}</span> },
+    { key: 'periodo_proyectado', header: 'Período proyectado', render: (r) => <span className="text-slate-400">{r.periodo_proyectado}</span> },
+    { key: 'venta_neta_promedio', header: 'Venta neta promedio', headerTitle: `Promedio mensual de los últimos ${meses} meses cerrados.`, numeric: true, render: (r) => <span className="text-slate-400">{fmtMoney(r.venta_neta_promedio)}</span> },
+    { key: 'margen_bruto_promedio', header: 'Margen bruto promedio', headerTitle: `Promedio mensual de los últimos ${meses} meses cerrados. Excluye líneas de clases marcadas como grupo X en la matriz (ej. chatarra) -- no aportan a la comisión y su costo suele estar mal registrado.`, numeric: true, render: (r) => <span className="text-slate-400">{fmtMoney(r.margen_bruto_promedio)}</span> },
+    { key: 'comision_variable_proyectada', header: 'Comisión variable proyectada', numeric: true, render: (r) => <span className="text-warning font-semibold">{fmtMoney(r.comision_variable_proyectada)}</span> },
+    { key: 'tasa_efectiva_pct', header: '% comisión / margen', headerTitle: 'Comisión proyectada como % del margen bruto promedio -- la tasa efectiva real, no la tasa nominal de la matriz.', numeric: true, render: (r) => <span className="font-mono text-slate-300">{r.tasa_efectiva_pct.toFixed(2)}%</span> },
   ];
 
   return (
@@ -43,21 +39,22 @@ export function CommissionSimulationPanel() {
         <div className="flex items-center gap-3">
           <FlaskConical className="w-8 h-8 text-warning" aria-hidden="true" />
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">Simulación: esquema plano vs. variable</h2>
+            <h2 className="text-2xl font-bold tracking-tight">Proyección de comisión variable</h2>
             <p className="text-sm text-slate-500 mt-0.5">
-              "Qué habría pasado" -- elimina el miedo al costo desconocido antes de activar el piloto.
+              Con las ventas recientes de cada vendedor y la configuración de la matriz vigente, ¿cuánto pagaría el
+              esquema variable el próximo mes?
             </p>
           </div>
         </div>
         <div className="flex items-end gap-3">
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-slate-400" htmlFor="simulation-meses">Meses a simular</label>
-            <Select id="simulation-meses" value={meses} onChange={(e) => setMeses(parseInt(e.target.value))}>
+            <label className="text-xs font-semibold text-slate-400" htmlFor="simulation-meses">Meses de historial</label>
+            <Select id="simulation-meses" value={meses} onChange={(e) => setMeses(parseInt(e.target.value) as 3 | 6)}>
               {OPCIONES_MESES.map((m) => <option key={m} value={m}>{m} meses</option>)}
             </Select>
           </div>
           <Button variant="primary" onClick={handleSimular} loading={simulation.loading} icon={<Play className="w-4 h-4" aria-hidden="true" />}>
-            Simular
+            Proyectar
           </Button>
         </div>
       </div>
@@ -67,33 +64,38 @@ export function CommissionSimulationPanel() {
       {simulation.data && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-            <KpiCard title="Costo total (plana)" value={fmtMoney(simulation.data.costo_total_plana)} icon={DollarSign} trend="neutral" />
-            <KpiCard title="Costo total (variable)" value={fmtMoney(simulation.data.costo_total_variable)} icon={DollarSign} trend={simulation.data.costo_total_variable <= simulation.data.costo_total_plana ? 'up' : 'down'} />
-            <KpiCard title="% comisión / margen (plana)" value={pct(simulation.data.pct_comision_sobre_margen_plana)} icon={Percent} trend="neutral" />
-            <KpiCard title="% comisión / margen (variable)" value={pct(simulation.data.pct_comision_sobre_margen_variable)} icon={Percent} trend={simulation.data.pct_comision_sobre_margen_variable <= 20 ? 'up' : 'down'} />
+            <KpiCard title="Comisión variable proyectada" value={fmtMoney(simulation.data.comision_variable_total_proyectada)} icon={DollarSign} trend="neutral" />
+            <KpiCard title="Margen bruto promedio mensual" value={fmtMoney(simulation.data.margen_bruto_total_promedio)} icon={DollarSign} trend="neutral" />
+            <KpiCard title="% comisión / margen" value={pct(simulation.data.tasa_efectiva_pct_global)} icon={Percent} trend={simulation.data.tasa_efectiva_pct_global <= 20 ? 'up' : 'down'} />
+            <KpiCard title="Vendedores proyectados" value={String(simulation.data.vendedores_proyectados)} icon={Users} trend="neutral" />
           </div>
-          <p className="text-xs text-slate-500 mb-1">
-            {simulation.data.meses_simulados} meses · {simulation.data.vendedores_simulados} vendedores ·
-            margen bruto total del período: {fmtMoney(simulation.data.margen_bruto_total)}
+          <p className="text-xs text-slate-500 mb-1 flex items-center gap-1.5">
+            <CalendarClock className="w-3.5 h-3.5" aria-hidden="true" />
+            Proyección para <span className="text-slate-300 font-medium">{simulation.data.periodo_proyectado}</span>, con base
+            en los últimos {simulation.data.meses_historico} meses cerrados de cada vendedor.
           </p>
           <p className="text-xs text-slate-600 mb-4 italic">
-            Cada mes se calcula con la matriz de categorías y los factores de crédito vigentes al cierre de ese mes
-            (no con la configuración actual), para que un cambio reciente no reescriba lo que el esquema nuevo
-            habría pagado en meses ya simulados.
+            Usa la matriz de categorías, los factores de crédito y el tipo de vendedor vigentes HOY -- no la
+            configuración histórica de cada mes -- porque el objetivo es responder "si mantengo la config actual,
+            ¿cuánto pagaría con el patrón de venta reciente de cada vendedor?". Asume cumplimiento neutro de la meta
+            (tramo Meta, sin bono ni penalización) porque la meta del período proyectado todavía no existe; no
+            incluye bonos ni devoluciones estimadas, que son eventos puntuales del mes ya cerrado, no un patrón
+            proyectable.
           </p>
 
           <DataTable
             columns={columns}
             data={simulation.data.detalle}
-            rowKey={(r) => `${r.vendedor_origen}-${r.anio}-${r.mes}`}
-            emptyTitle="Sin resultados"
+            rowKey={(r) => r.vendedor_origen}
+            emptyTitle="Sin vendedores con ventas en la ventana elegida"
           />
         </>
       )}
 
       {!simulation.data && !simulation.loading && (
         <p className="text-slate-500 text-sm text-center py-10">
-          Elige el número de meses y presiona "Simular" para comparar el esquema plano contra el variable con datos reales del EDW.
+          Elige la ventana de historial y presiona "Proyectar" para estimar la comisión variable del próximo mes con
+          datos reales del EDW.
         </p>
       )}
     </div>

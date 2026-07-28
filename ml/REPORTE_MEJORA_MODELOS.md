@@ -253,3 +253,25 @@ support, confidence`) documentado en `ml/contracts/models/recommendation.json` �
 **Pendiente explícito para la Fase 4 (backend, fuera de `ml/`):** `inference.py` /
 `prediction_service.py` deben leer `score`/`fuente` en vez de `lift` (v0.1.0). Documentado
 como `known_serving_mismatch` en el contrato.
+
+- **2026-07-20T16:40:29.941263+00:00** -- gating de `segmentation` (versión candidata `20260720.164029`): PROMOVIDO. PROMUEVE (silhouette: candidato=0.6081 vs. campeón=0.6081, direction=maximize, min_delta=-0.02)
+
+- **2026-07-20T16:41:10.925383+00:00** -- gating de `segmentation` (versión candidata `20260720.164110`): RECHAZADO. RECHAZA (silhouette: candidato=0.6081 vs. campeón=0.6081, direction=maximize, min_delta=0.5)
+
+- **2026-07-20T16:44:07.092046+00:00** -- Promoción manual/rollback: 'segmentation' -> versión '20260720.164110' (disparado por cli_test_promote)
+
+- **2026-07-20T16:53:25.718389+00:00** -- gating de `segmentation` (versión candidata `20260720.165325`): PROMOVIDO. PROMUEVE (silhouette: candidato=0.6081 vs. campeón=0.6081, direction=maximize, min_delta=-0.02)
+
+- **2026-07-20T17:17:41.089621+00:00** -- gating de `sales_rf` (versión candidata `20260720.171740`): PROMOVIDO. sin campeón anterior comparable -- se promueve el candidato por defecto
+
+- **2026-07-20T17:19:12.106488+00:00** -- gating de `demand_rf` (versión candidata `20260720.171911`): PROMOVIDO. PROMUEVE (MAE: candidato=2.5870 vs. campeón=2.5870, direction=minimize, min_delta=0.0)
+
+- **2026-07-20T17:19:45.294949+00:00** -- gating de `churn_rf` (versión candidata `20260720.171945`): PROMOVIDO. sin campeón anterior comparable -- se promueve el candidato por defecto
+
+- **2026-07-20T17:23:55.849481+00:00** -- gating de `segmentation` (versión candidata `20260720.172355`): PROMOVIDO. PROMUEVE (silhouette: candidato=0.6081 vs. campeón=0.6081, direction=maximize, min_delta=-0.02)
+
+- **2026-07-20T17:24:04.962981+00:00** -- gating de `association` (versión candidata `20260720.172404`): PROMOVIDO. sin campeón anterior comparable -- se promueve el candidato por defecto
+
+- **2026-07-20T17:24:06.471347+00:00** -- gating de `anomaly` (versión candidata `20260720.172406`): PROMOVIDO. sin campeón anterior comparable -- se promueve el candidato por defecto
+
+- **2026-07-20T17:24:35.502182+00:00** -- gating de `sales_rf` (versión candidata `20260720.172434`): PROMOVIDO. PROMUEVE (R2: candidato=0.2907 vs. campeón=0.2907, direction=maximize, min_delta=-0.01)

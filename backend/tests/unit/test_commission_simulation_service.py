@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.core.exceptions import ValidationError
 from app.services.commission_engine import ultimo_dia_mes as _ultimo_dia_mes
 from app.services.commission_simulation_service import CommissionSimulationService
 
@@ -41,8 +42,15 @@ def commission_config_repo():
 
 
 @pytest.fixture
-def service(goal_repo, commission_config_repo):
-    return CommissionSimulationService(goal_repo, commission_config_repo)
+def catalog_repo():
+    repo = MagicMock()
+    repo.get_vendedores_info.return_value = {"VEN01": "Vendedor Uno"}
+    return repo
+
+
+@pytest.fixture
+def service(goal_repo, commission_config_repo, catalog_repo):
+    return CommissionSimulationService(goal_repo, commission_config_repo, catalog_repo)
 
 
 def test_ultimo_dia_mes():
@@ -92,3 +100,51 @@ def test_simulacion_sin_bonos_coincide_con_bonos_total_cero(service, commission_
     ser idéntico al de antes del fix (bonos_total=0.0), sin regresión."""
     resumen = service.simular(meses=1, anio_desde=2026, mes_desde=6)
     assert resumen.detalle[0].comision_variable == 0.0  # sin líneas ni bonos -> comisión variable nula
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# `proyectar_comision_variable`: proyección hacia adelante que consume el panel
+# "Simulación" de gerencia -- distinta de `simular()` en alcance (solo esquema
+# variable, config vigente HOY, ventana fija de 3 o 6 meses hacia atrás).
+# ══════════════════════════════════════════════════════════════════════════════
+def test_proyeccion_rechaza_ventanas_fuera_de_3_o_6_meses(service):
+    with pytest.raises(ValidationError):
+        service.proyectar_comision_variable(meses_historico=12)
+    with pytest.raises(ValidationError):
+        service.proyectar_comision_variable(meses_historico=1)
+
+
+def test_proyeccion_resuelve_config_una_sola_vez_con_la_fecha_de_hoy(service, commission_config_repo):
+    """A diferencia de `simular()` (que resuelve la config vigente en cada período
+    histórico), la proyección usa la config vigente HOY -- una sola resolución, sin
+    importar cuántos meses de historial se pidan."""
+    service.proyectar_comision_variable(meses_historico=6)
+
+    assert commission_config_repo.get_matriz_as_reglas.call_count == 1
+    assert commission_config_repo.get_factores_credito_as_rangos.call_count == 1
+    assert commission_config_repo.get_matriz_as_reglas.call_args.args[0] == datetime.date.today()
+
+
+def test_proyeccion_periodo_es_el_mes_siguiente_al_actual(service):
+    resumen = service.proyectar_comision_variable(meses_historico=3)
+
+    hoy = datetime.date.today()
+    anio_esperado, mes_esperado = hoy.year, hoy.month + 1
+    if mes_esperado == 13:
+        anio_esperado, mes_esperado = anio_esperado + 1, 1
+
+    assert resumen.periodo_proyectado == f"{anio_esperado:04d}-{mes_esperado:02d}"
+    assert resumen.meses_historico == 3
+
+
+def test_proyeccion_no_expone_ningun_dato_del_esquema_plano(service):
+    resumen = service.proyectar_comision_variable(meses_historico=3)
+    assert not hasattr(resumen, "costo_total_plana")
+    assert not hasattr(resumen, "comision_plana")
+    assert all(not hasattr(d, "comision_plana") for d in resumen.detalle)
+
+
+def test_proyeccion_enriquece_el_detalle_con_nombre_de_vendedor(service):
+    resumen = service.proyectar_comision_variable(meses_historico=3)
+    assert resumen.detalle[0].vendedor_origen == "VEN01"
+    assert resumen.detalle[0].nombre_vendedor == "Vendedor Uno"

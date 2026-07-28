@@ -15,10 +15,12 @@ from sqlalchemy.orm import Session
 
 
 class ChurnFeatures(NamedTuple):
-    """Mismas 3 columnas y semántica que ml/contracts/models/churn.json: frequency =
-    días distintos de compra, monetary_value = SUM(subtotal_neto), average_ticket =
-    monetary_value/frequency -- calculadas 'a fecha de hoy' (T=now()), igual que el
-    entrenamiento las calculaba 'a fecha de corte T' (H-03, cerrado)."""
+    """Mismas 4 columnas y semántica que ml/contracts/models/churn.json (v0.2.0, Fase 4):
+    recency = días desde la última compra, frequency = días distintos de compra,
+    monetary_value = SUM(subtotal_neto), average_ticket = monetary_value/frequency --
+    calculadas 'a fecha de hoy' (T=now()), igual que el entrenamiento las calculaba 'a
+    fecha de corte T' (H-03, cerrado)."""
+    recency: float
     frequency: float
     monetary_value: float
     average_ticket: float
@@ -50,6 +52,7 @@ class PredictionRepository:
     def get_churn_features(self, cliente_id: str) -> ChurnFeatures | None:
         query = """
             SELECT
+                COALESCE(EXTRACT(DAY FROM (now() - MAX(f.fecha_completa))), 0) AS recency,
                 COUNT(DISTINCT f.fecha_completa) AS frequency,
                 COALESCE(SUM(v.subtotal_neto), 0) AS monetary_value
             FROM edw.fact_ventas_detalle v
@@ -64,10 +67,13 @@ class PredictionRepository:
         res = self.db.execute(text(query), {"cliente_id": cliente_id}).fetchone()
         if not res:
             return None
-        frequency = float(res[0]) if res[0] else 0.0
-        monetary_value = float(res[1]) if res[1] is not None else 0.0
+        recency = float(res[0]) if res[0] is not None else 0.0
+        frequency = float(res[1]) if res[1] else 0.0
+        monetary_value = float(res[2]) if res[2] is not None else 0.0
         average_ticket = monetary_value / frequency if frequency > 0 else 0.0
-        return ChurnFeatures(frequency=frequency, monetary_value=monetary_value, average_ticket=average_ticket)
+        return ChurnFeatures(
+            recency=recency, frequency=frequency, monetary_value=monetary_value, average_ticket=average_ticket,
+        )
 
     def get_churn_features_batch(self, cliente_ids: list[str]) -> pd.DataFrame:
         """Misma feature de `get_churn_features`, pero para un lote de clientes en UNA
@@ -76,10 +82,11 @@ class PredictionRepository:
         rerankear un conjunto acotado de candidatos con el churn real del modelo, sin
         recorrer la cartera completa con una consulta por cliente (auditoría 32 H1)."""
         if not cliente_ids:
-            return pd.DataFrame(columns=["cliente_id", "frequency", "monetary_value", "average_ticket"])
+            return pd.DataFrame(columns=["cliente_id", "recency", "frequency", "monetary_value", "average_ticket"])
         query = text("""
             SELECT
                 l.id_cliente_transaccional AS cliente_id,
+                COALESCE(EXTRACT(DAY FROM (now() - MAX(f.fecha_completa))), 0) AS recency,
                 COUNT(DISTINCT f.fecha_completa) AS frequency,
                 COALESCE(SUM(v.subtotal_neto), 0) AS monetary_value
             FROM edw.fact_ventas_detalle v
@@ -92,6 +99,7 @@ class PredictionRepository:
             GROUP BY l.id_cliente_transaccional
         """).bindparams(bindparam("cliente_ids", expanding=True))
         df = pd.read_sql(query, self.db.connection(), params={"cliente_ids": cliente_ids})
+        df["recency"] = df["recency"].astype(float)
         df["frequency"] = df["frequency"].astype(float)
         df["monetary_value"] = df["monetary_value"].astype(float)
         df["average_ticket"] = df.apply(

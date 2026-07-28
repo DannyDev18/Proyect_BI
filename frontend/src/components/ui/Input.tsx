@@ -25,11 +25,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
       )}
       <input
         ref={ref}
-        className={`input-field w-full ${iconLeft ? 'pl-10' : ''} ${iconRight ? 'pr-10' : ''} ${stateClasses[state]} ${className}`}
+        className={`input-field w-full ${iconLeft ? '!pl-10' : ''} ${iconRight ? 'pr-10' : ''} ${stateClasses[state]} ${className}`}
         {...rest}
       />
       {iconRight && (
-        <span className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500">
+        <span className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-500">
           {iconRight}
         </span>
       )}

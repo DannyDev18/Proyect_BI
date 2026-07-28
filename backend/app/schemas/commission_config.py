@@ -90,33 +90,33 @@ class ClaseBusqueda(BaseModel):
     productos: int
 
 
-# ── Simulación retroactiva (Fase 2) ─────────────────────────────────────────────
-class SimulacionRequest(BaseModel):
-    meses: int = Field(12, ge=1, le=36)
-    anio_desde: Optional[int] = None
-    mes_desde: Optional[int] = Field(None, ge=1, le=12)
+# ── Proyección de Comisiones Variables (panel "Simulación" de gerencia) ─────────
+# Toma los últimos 3 o 6 meses YA CERRADOS como base histórica y proyecta la comisión
+# variable del próximo mes calendario -- exclusivamente esquema variable, sin comparar
+# contra el plano (ver commission_simulation_service.py::proyectar_comision_variable).
+class ProyeccionComisionRequest(BaseModel):
+    meses_historico: int = Field(3, description="Ventana de historial a usar como base: 3 o 6 meses.")
 
 
-class SimulacionVendedorMesResponse(BaseModel):
+class ProyeccionVendedorResponse(BaseModel):
     vendedor_origen: str
-    anio: int
-    mes: int
-    venta_neta: float
-    comision_plana: float
-    comision_variable: float
-    diferencia: float
-    diferencia_pct: Optional[float] = None
+    nombre_vendedor: Optional[str] = None
+    periodo_proyectado: str
+    meses_historico_usados: int
+    venta_neta_promedio: float
+    margen_bruto_promedio: float
+    comision_variable_proyectada: float
+    tasa_efectiva_pct: float
 
 
-class SimulacionResponse(BaseModel):
-    meses_simulados: int
-    vendedores_simulados: int
-    costo_total_plana: float
-    costo_total_variable: float
-    margen_bruto_total: float
-    pct_comision_sobre_margen_plana: float
-    pct_comision_sobre_margen_variable: float
-    detalle: List[SimulacionVendedorMesResponse]
+class ProyeccionComisionResponse(BaseModel):
+    meses_historico: int
+    periodo_proyectado: str
+    vendedores_proyectados: int
+    comision_variable_total_proyectada: float
+    margen_bruto_total_promedio: float
+    tasa_efectiva_pct_global: float
+    detalle: List[ProyeccionVendedorResponse]
 
 
 # ── Perfil de margen por categoría (Fase 1) ─────────────────────────────────────

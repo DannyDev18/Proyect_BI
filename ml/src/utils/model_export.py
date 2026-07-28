@@ -25,6 +25,9 @@ logger = logging.getLogger("ML.ModelExport")
 MODELS_DIR_ENV = "ML_MODELS_DIR"
 DEFAULT_MODELS_DIR = "./models"
 
+RETENCION_VERSIONES_ENV = "ML_RETENCION_VERSIONES"
+DEFAULT_RETENCION_VERSIONES = 5
+
 
 def resolve_models_dir() -> str:
     return os.getenv(MODELS_DIR_ENV, DEFAULT_MODELS_DIR)
@@ -45,6 +48,7 @@ def save_artifact(
     data_range: dict[str, str] | None = None,
     population_filter: str | None = None,
     target_transform: str | None = None,
+    registry_key: str | None = None,
 ) -> str:
     """Serializa `obj` con joblib y escribe `<stem>.meta.json` al lado.
 
@@ -55,6 +59,17 @@ def save_artifact(
     capa de contratos, ver docs/ml_contracts.md); si se omiten, el sidecar
     queda idéntico al formato legacy — ningún call site existente en
     src/training/ necesita cambiar.
+
+    `registry_key` (Fase 1 de `docs/features/plan_mejora_pipeline_ml.md`, §3.2):
+    si se indica, además del archivo estable de siempre (`models_dir/filename`,
+    el que el volumen Docker `:ro` expone al backend y que `registry.json`
+    apunta como campeón), se guarda una copia versionada en
+    `models_dir/versions/<registry_key>/<version>.{pkl,meta.json}`. El
+    entrenamiento NUNCA sobrescribe el campeón vigente por sí solo más allá de
+    seguir escribiendo el archivo estable (compatibilidad con el flujo manual
+    actual); la promoción real de una versión a campeón la hace `registry.json`
+    (Fase 3, `ml/src/training/promotion.py`), no este export. Retención de las
+    últimas `ML_RETENCION_VERSIONES` (default 5) versiones por clave.
     """
     if filepath is None:
         filepath = os.path.join(resolve_models_dir(), filename)
@@ -91,7 +106,50 @@ def save_artifact(
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
     logger.info(f"Artefacto guardado en {filepath} (metadatos: {os.path.basename(meta_path)})")
+
+    if registry_key:
+        _save_version_snapshot(filepath, meta_path, registry_key, metadata["version"])
+
     return filepath
+
+
+def _save_version_snapshot(filepath: str, meta_path: str, registry_key: str, version: str) -> None:
+    """Copia el par `.pkl`/`.meta.json` recién escrito a `versions/<registry_key>/<version>.*`
+    y aplica retención (`ML_RETENCION_VERSIONES`). No toca `registry.json` -- ese puntero solo
+    lo mueve la promoción (Fase 3), nunca el entrenamiento."""
+    import shutil
+
+    versions_dir = os.path.join(resolve_models_dir(), "versions", registry_key)
+    os.makedirs(versions_dir, exist_ok=True)
+
+    ext = os.path.splitext(filepath)[1]
+    version_pkl = os.path.join(versions_dir, f"{version}{ext}")
+    version_meta = os.path.join(versions_dir, f"{version}.meta.json")
+    shutil.copy2(filepath, version_pkl)
+    shutil.copy2(meta_path, version_meta)
+    logger.info(f"Versión '{version}' de '{registry_key}' archivada en {versions_dir}.")
+
+    retencion = int(os.getenv(RETENCION_VERSIONES_ENV, str(DEFAULT_RETENCION_VERSIONES)))
+    # Bug corregido (encontrado en Fase 3 al probar el gating, docs/features/
+    # plan_mejora_pipeline_ml.md): `os.path.splitext` solo quita la ÚLTIMA extensión, así
+    # que para "<version>.meta.json" el "stem" salía "<version>.meta" -- distinto del
+    # "<version>" que produce el .pkl del MISMO archivo versionado. El set de "stems"
+    # quedaba con el doble de entradas de las reales (una por .pkl, otra por .meta.json),
+    # lo que desalineaba el corte de retención y podía borrar un lado del par dejando el
+    # otro huérfano (visto en vivo: un .meta.json sobrevivió sin su .pkl). Se normaliza
+    # quitando ".meta.json" explícitamente antes de aplicar splitext.
+    def _version_stem(nombre: str) -> str:
+        if nombre.endswith(".meta.json"):
+            return nombre[: -len(".meta.json")]
+        return os.path.splitext(nombre)[0]
+
+    stems = sorted({_version_stem(f) for f in os.listdir(versions_dir) if not f.startswith(".")})
+    obsoletos = stems[:-retencion] if retencion > 0 and len(stems) > retencion else []
+    for stem in obsoletos:
+        for candidate in os.listdir(versions_dir):
+            if _version_stem(candidate) == stem:
+                os.remove(os.path.join(versions_dir, candidate))
+        logger.info(f"Versión obsoleta '{stem}' de '{registry_key}' eliminada (retención={retencion}).")
 
 
 def _infer_features(obj: Any) -> list[str]:

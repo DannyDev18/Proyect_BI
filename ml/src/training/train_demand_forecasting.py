@@ -30,15 +30,19 @@ def train_demand_forecaster(X_train, y_train, hyperparameter_search=True):
     wrapped_model.fit(X_train, y_train)
     return wrapped_model
 
-def save_demand_model(model, filepath=None, metrics=None, features=None, data_range=None):
+def save_demand_model(model, filepath=None, metrics=None, features=None, data_range=None, extra_meta=None):
+    extra = {"problema": "regresion_serie_temporal", "target": "y_quantity (unidades, artefacto autocontenido)"}
+    if extra_meta:
+        extra.update(extra_meta)
     save_artifact(
         model, "demand.pkl", filepath=filepath, metrics=metrics,
         algorithm=type(model.regressor_).__name__,
         features=features,
+        registry_key="demand_rf",
         contract_name="demand",
         contract_version="0.1.0",
         library_versions_used=library_versions("scikit-learn", "xgboost", "lightgbm", "catboost"),
         data_range=data_range,
         target_transform="log1p",
-        extra={"problema": "regresion_serie_temporal", "target": "y_quantity (unidades, artefacto autocontenido)"},
+        extra=extra,
     )

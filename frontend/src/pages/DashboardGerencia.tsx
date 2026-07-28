@@ -9,6 +9,7 @@ import {
   useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores, useAlmacenes,
 } from '../hooks/gerencia';
 import { descargarReporteDashboardExcel } from '../services/gerencia';
+import { MODO_COMPARACION_LABEL, type ModoComparacion } from '../types/gerencia';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { Badge } from '../components/ui/Badge';
@@ -28,6 +29,8 @@ export const DashboardGerencia = () => {
     categoria: '',
     vendedor: '',
     almacen: '',
+    // G-04: período de referencia de las tendencias. Solo aplica con fechas explícitas.
+    modo_comparacion: 'periodo_anterior' as ModoComparacion,
   });
   const [granularidad, setGranularidad] = useState<'semana' | 'mes'>('semana');
   const [descargando, setDescargando] = useState(false);
@@ -73,8 +76,11 @@ export const DashboardGerencia = () => {
     }
   };
 
-  const salud = kpi.data?.roi_estimado;
-  const saludVariant = salud
+  // docs/auditoria/39_madurez_bi_toma_decisiones.md, H-02: `roi_real` (RN-BI2) reemplaza al
+  // antiguo `roi_estimado`. Es nullable a propósito: `null` = no hay costo de mercadería
+  // con el que comparar, y se comunica explícitamente en vez de pintar un 0% falso.
+  const salud = kpi.data?.roi_real ?? null;
+  const saludVariant = salud !== null
     ? salud >= 20 ? 'success' : salud >= 10 ? 'warning' : 'danger'
     : 'neutral';
 
@@ -173,7 +179,46 @@ export const DashboardGerencia = () => {
             ))}
           </Select>
         </FilterField>
+
+        {/* G-04: un número solo no es un indicador; lo es cuando se compara. El modo por
+            defecto conserva el comportamiento histórico (período anterior de igual longitud). */}
+        <FilterField label="Comparar contra">
+          <Select
+            aria-label="Período de referencia de las tendencias"
+            value={filters.modo_comparacion}
+            onChange={(e) => setFilters(f => ({ ...f, modo_comparacion: e.target.value as ModoComparacion }))}
+            className="min-w-[190px]"
+            disabled={!filters.start_date || !filters.end_date}
+          >
+            {(Object.keys(MODO_COMPARACION_LABEL) as ModoComparacion[]).map(modo => (
+              <option key={modo} value={modo}>{MODO_COMPARACION_LABEL[modo]}</option>
+            ))}
+          </Select>
+        </FilterField>
       </FilterBar>
+
+      {/* G-04: decir explícitamente contra qué se compara. Sin esto, una variación de "+14%"
+          no significa nada -- ¿contra el mes pasado o contra el año pasado? */}
+      {kpi.data?.comparacion && (
+        <p className="text-xs text-slate-500">
+          Las variaciones comparan contra{' '}
+          <span className="text-slate-400 font-medium">
+            {MODO_COMPARACION_LABEL[kpi.data.comparacion.modo].toLowerCase()}
+          </span>{' '}
+          ({kpi.data.comparacion.desde_referencia} a {kpi.data.comparacion.hasta_referencia}
+          {kpi.data.comparacion.periodos_promediados > 1
+            ? `, ${kpi.data.comparacion.periodos_promediados} períodos promediados`
+            : ''}).
+          {kpi.data.comparacion.sin_base && (
+            <span className="text-warning"> Algunos indicadores no tienen base comparable.</span>
+          )}
+        </p>
+      )}
+      {!filters.start_date || !filters.end_date ? (
+        <p className="text-xs text-slate-600">
+          Fija un rango de fechas para ver la variación de cada indicador contra un período de referencia.
+        </p>
+      ) : null}
 
       {/* KPI Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children">
@@ -214,16 +259,20 @@ export const DashboardGerencia = () => {
               {...tendencia(kpi.data?.ticket_promedio_tendencia_pct)}
             />
             <KpiCard
-              title="Proyección ROI"
-              value={kpi.data ? pct(kpi.data.roi_estimado) : '—'}
+              title="ROI sobre costo de mercadería"
+              value={kpi.data ? (salud !== null ? pct(salud) : 'Sin base') : '—'}
               icon={Target}
               state={kpi.data ? saludVariant === 'neutral' ? undefined : saludVariant : undefined}
               trend={
-                kpi.data?.roi_estimado_tendencia_pct != null
-                  ? tendencia(kpi.data.roi_estimado_tendencia_pct).trend
+                kpi.data?.roi_real_tendencia_pct != null
+                  ? tendencia(kpi.data.roi_real_tendencia_pct).trend
                   : saludVariant === 'success' ? 'up' : saludVariant === 'danger' ? 'down' : 'neutral'
               }
-              subValue={tendencia(kpi.data?.roi_estimado_tendencia_pct).subValue}
+              subValue={
+                kpi.data && salud === null
+                  ? 'Sin costo de mercadería en el período'
+                  : tendencia(kpi.data?.roi_real_tendencia_pct).subValue
+              }
             />
           </>
         )}

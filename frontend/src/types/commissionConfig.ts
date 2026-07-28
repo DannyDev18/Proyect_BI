@@ -68,26 +68,29 @@ export interface ConfigVendedorPayload {
   fecha_ingreso?: string | null;
 }
 
-export interface SimulacionVendedorMes {
+/** Proyección de Comisiones Variables (panel "Simulación" de gerencia): toma los
+ * últimos 3 o 6 meses YA CERRADOS como base histórica y proyecta la comisión variable
+ * del próximo mes calendario -- solo esquema variable, sin comparar contra el plano
+ * (ver backend/app/services/commission_simulation_service.py::proyectar_comision_variable). */
+export interface ProyeccionVendedor {
   vendedor_origen: string;
-  anio: number;
-  mes: number;
-  venta_neta: number;
-  comision_plana: number;
-  comision_variable: number;
-  diferencia: number;
-  diferencia_pct: number | null;
+  nombre_vendedor: string | null;
+  periodo_proyectado: string;
+  meses_historico_usados: number;
+  venta_neta_promedio: number;
+  margen_bruto_promedio: number;
+  comision_variable_proyectada: number;
+  tasa_efectiva_pct: number;
 }
 
-export interface SimulacionResumen {
-  meses_simulados: number;
-  vendedores_simulados: number;
-  costo_total_plana: number;
-  costo_total_variable: number;
-  margen_bruto_total: number;
-  pct_comision_sobre_margen_plana: number;
-  pct_comision_sobre_margen_variable: number;
-  detalle: SimulacionVendedorMes[];
+export interface ProyeccionComision {
+  meses_historico: number;
+  periodo_proyectado: string;
+  vendedores_proyectados: number;
+  comision_variable_total_proyectada: number;
+  margen_bruto_total_promedio: number;
+  tasa_efectiva_pct_global: number;
+  detalle: ProyeccionVendedor[];
 }
 
 export interface PerfilCategoria {

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getMatrizCategorias, upsertMatrizCategoria, getFactoresCredito, replaceFactoresCredito,
+  getMatrizCategorias, upsertMatrizCategoria, deleteMatrizCategoria, getFactoresCredito, replaceFactoresCredito,
   getConfigVendedores, upsertConfigVendedor, postCommissionSimulation, getPerfilCategorias, getLineasSinCosto,
   getComisionConfigAuditoria, searchClasesProducto, searchVendedoresComision,
 } from '../services/commissionConfig';
@@ -40,6 +40,18 @@ export const useUpsertMatrizCategoria = () => {
     },
   });
   return { upsert: mutation.mutateAsync, loading: mutation.isPending };
+};
+
+export const useDeleteMatrizCategoria = () => {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: deleteMatrizCategoria,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.matriz() });
+      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.auditoria() });
+    },
+  });
+  return { remove: mutation.mutateAsync, loading: mutation.isPending };
 };
 
 export const useFactoresCredito = () => {
@@ -83,19 +95,18 @@ export const useUpsertConfigVendedor = () => {
   return { upsert: mutation.mutateAsync, pendingVendedor: mutation.isPending ? mutation.variables?.vendedorOrigen ?? null : null };
 };
 
-/** Simulación retroactiva plano vs. variable (Fase 2 del plan) -- se dispara bajo
- * demanda (mutation), no como query automática: es una consulta potencialmente pesada
- * sobre el EDW (N meses x M vendedores, grano de línea). */
+/** Proyección de comisión variable del próximo mes (3 o 6 meses de historial reciente
+ * como base) -- se dispara bajo demanda (mutation), no como query automática: es una
+ * consulta potencialmente pesada sobre el EDW (N meses x M vendedores, grano de línea). */
 export const useCommissionSimulation = () => {
   const mutation = useMutation({
-    mutationFn: ({ meses, anioDesde, mesDesde }: { meses: number; anioDesde?: number; mesDesde?: number }) =>
-      postCommissionSimulation(meses, anioDesde, mesDesde).then((r) => r.data),
+    mutationFn: (mesesHistorico: 3 | 6) => postCommissionSimulation(mesesHistorico).then((r) => r.data),
   });
   return {
     data: mutation.data ?? null,
     loading: mutation.isPending,
     error: errorMessage(mutation.error),
-    simulate: (meses: number, anioDesde?: number, mesDesde?: number) => mutation.mutateAsync({ meses, anioDesde, mesDesde }),
+    simulate: (mesesHistorico: 3 | 6) => mutation.mutateAsync(mesesHistorico),
   };
 };
 

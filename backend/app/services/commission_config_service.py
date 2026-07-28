@@ -50,6 +50,19 @@ class CommissionConfigService:
         )
         return resultado
 
+    def eliminar_regla_categoria(self, regla_id: int, usuario_id: int) -> dict:
+        r = self.commission_config_repo.desactivar_regla_categoria(regla_id)
+        resultado = {
+            "id": r.id, "clase": r.clase, "subclase": r.subclase, "grupo": r.grupo,
+            "tasa_pct": float(r.tasa_pct), "base": r.base, "factor_estrategico": float(r.factor_estrategico),
+            "vigente_desde": r.vigente_desde, "vigente_hasta": r.vigente_hasta,
+        }
+        self.commission_config_repo.log_cambio_config(
+            usuario_id=usuario_id, tabla="comision_matriz_categorias", accion="eliminar",
+            detalle={k: str(v) for k, v in resultado.items()},
+        )
+        return resultado
+
     # ── Factores de crédito ─────────────────────────────────────────────────────
     def get_factores_credito(self) -> list[dict]:
         return [

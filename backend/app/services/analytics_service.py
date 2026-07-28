@@ -1,45 +1,45 @@
 # backend/app/services/analytics_service.py
 """KPIs de Gerencia/Bodega/Ventas. Sin ML, sin metas (ver `prediction_service.py` y
 `goals_service.py`). El SQL vive en `AnalyticsRepository`; este service solo aplica
-reglas de negocio de formateo (redondeos, cálculo de ROI simulado, defaults)."""
+reglas de negocio de formateo (redondeos, defaults) y la comparación temporal
+(`app/services/metricas/comparador.py`)."""
 import datetime
 from typing import Any
 
+from app.core.config import settings
 from app.repositories.analytics_repository import AnalyticsRepository
+from app.services.metricas.comparador import (
+    ModoComparacion,
+    N_PERIODOS_DEFAULT,
+    comparar,
+    ventanas_de_referencia,
+)
 
 
 class AnalyticsService:
     def __init__(self, analytics_repo: AnalyticsRepository):
         self.repo = analytics_repo
 
-    @staticmethod
-    def _tendencia_pct(actual: float, previo: float) -> float | None:
-        """Mismo patrón que `WarehouseService._tendencia_pct` (Bodega) -- % de cambio
-        vs. el período previo de igual longitud, o `None` si el previo es 0/negativo
-        (no hay base de comparación significativa)."""
-        if previo <= 0:
-            return None
-        return round((actual - previo) / previo * 100, 1)
-
-    @staticmethod
-    def _periodo_anterior(start_date: str, end_date: str) -> tuple[str, str]:
-        """Ventana previa de igual longitud, inmediatamente anterior a
-        `[start_date, end_date]` -- mismo patrón que `WarehouseService._defaults_rango`."""
-        desde = datetime.date.fromisoformat(start_date)
-        hasta = datetime.date.fromisoformat(end_date)
-        delta = hasta - desde
-        hasta_prev = desde - datetime.timedelta(days=1)
-        desde_prev = hasta_prev - delta
-        return desde_prev.isoformat(), hasta_prev.isoformat()
-
     def get_management_kpis(
         self, sucursal: str | None = None, start_date: str | None = None,
         end_date: str | None = None, categoria: str | None = None, vendedor: str | None = None,
         almacen: str | None = None,
+        modo_comparacion: ModoComparacion = ModoComparacion.PERIODO_ANTERIOR,
+        n_periodos: int = N_PERIODOS_DEFAULT,
     ) -> dict[str, Any]:
-        """Caso de Uso 2 (Gerencia): Índice de Salud Comercial."""
+        """Caso de Uso 2 (Gerencia): Índice de Salud Comercial.
+
+        G-04 (docs/features/plan_madurez_bi_toma_decisiones.md): `modo_comparacion` permite
+        contrastar contra el período anterior (default, comportamiento histórico), el mismo
+        período del **año anterior** (el relevante en un negocio estacional, regla 11) o el
+        promedio de los N períodos previos."""
         data = self.repo.get_management_kpis(sucursal, start_date, end_date, categoria, vendedor, almacen)
-        roi_estimado = round(data["margen"] * 1.15, 2)  # Simulación adaptada de ROI de campaña
+        # docs/auditoria/39_madurez_bi_toma_decisiones.md, H-02 (G-01 del plan de madurez BI):
+        # antes aquí vivía `roi_estimado = round(data["margen"] * 1.15, 2)` -- un porcentaje
+        # de margen multiplicado por una constante sin respaldo, publicado como "Proyección
+        # ROI" con semáforo. Reemplazado por RN-BI2, calculado en SQL sobre el EDW:
+        # (venta_neta - costo_mercaderia_vendida) / costo_mercaderia_vendida * 100.
+        roi_real = round(data["roi_real"], 2) if data["roi_real"] is not None else None
         resultado = {
             # docs/auditoria/33_actualizacion_modulo_gerencia.md, H2: el repositorio ya
             # calculaba `total_sales` en SQL (venta neta - devoluciones), pero antes se
@@ -47,28 +47,54 @@ class AnalyticsService:
             "ingresos_totales": round(data["total_sales"], 2),
             "margen_utilidad_neta": round(data["margen"], 2),
             "ticket_promedio": round(data["ticket"], 2),
-            "roi_estimado": roi_estimado,
+            "roi_real": roi_real,
+            "costo_mercaderia": round(data["costo_mercaderia"], 2),
             "ventas_por_sucursal": data["branch_map"],
             "ventas_por_vendedor": data["vend_map"],
             "ingresos_totales_tendencia_pct": None,
             "margen_utilidad_neta_tendencia_pct": None,
             "ticket_promedio_tendencia_pct": None,
-            "roi_estimado_tendencia_pct": None,
+            "roi_real_tendencia_pct": None,
+            # G-04: contexto de la comparación, para que la UI pueda decir CONTRA QUÉ compara
+            # y por qué no hay base cuando las tendencias vienen en None.
+            "comparacion": None,
         }
 
-        # Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): comparativa
-        # vs. período anterior, mismo patrón `tendencia_pct` de Bodega. Solo cuando el
-        # usuario fija un rango explícito -- sin fechas, la vista es "todo el histórico"
-        # y no existe un "período anterior" con el que compararla sin cambiar el
-        # comportamiento por defecto ya existente de este KPI.
+        # Comparativa temporal (G-04). Solo cuando el usuario fija un rango explícito: sin
+        # fechas la vista es "todo el histórico" y no existe un período de referencia con el
+        # que compararla sin cambiar el comportamiento por defecto ya existente de este KPI.
         if start_date and end_date:
-            desde_prev, hasta_prev = self._periodo_anterior(start_date, end_date)
-            data_prev = self.repo.get_management_kpis(sucursal, desde_prev, hasta_prev, categoria, vendedor, almacen)
-            roi_prev = data_prev["margen"] * 1.15
-            resultado["ingresos_totales_tendencia_pct"] = self._tendencia_pct(data["total_sales"], data_prev["total_sales"])
-            resultado["margen_utilidad_neta_tendencia_pct"] = self._tendencia_pct(data["margen"], data_prev["margen"])
-            resultado["ticket_promedio_tendencia_pct"] = self._tendencia_pct(data["ticket"], data_prev["ticket"])
-            resultado["roi_estimado_tendencia_pct"] = self._tendencia_pct(roi_estimado, roi_prev)
+            ventanas = ventanas_de_referencia(start_date, end_date, modo_comparacion, n_periodos)
+            datos_ref = [
+                self.repo.get_management_kpis(sucursal, v.desde, v.hasta, categoria, vendedor, almacen)
+                for v in ventanas
+            ]
+
+            campos = {
+                "ingresos_totales_tendencia_pct": ("total_sales", data["total_sales"]),
+                "margen_utilidad_neta_tendencia_pct": ("margen", data["margen"]),
+                "ticket_promedio_tendencia_pct": ("ticket", data["ticket"]),
+                # H-02: la tendencia anterior comparaba `margen*1.15` contra `margen_prev*1.15`,
+                # algebraicamente idéntica a la tendencia del margen -- un cuarto KPI que en
+                # realidad repetía el segundo. Ahora compara el ROI real de ambos períodos.
+                "roi_real_tendencia_pct": ("roi_real", roi_real),
+            }
+            motivos: list[str] = []
+            for campo, (clave_repo, valor_actual) in campos.items():
+                c = comparar(valor_actual, [d[clave_repo] for d in datos_ref], modo_comparacion, ventanas)
+                resultado[campo] = c.variacion_pct
+                if c.variacion_pct is None and c.motivo_sin_base:
+                    motivos.append(f"{campo}: {c.motivo_sin_base}")
+
+            resultado["comparacion"] = {
+                "modo": modo_comparacion.value,
+                # `ventanas` viene de la más reciente a la más antigua, así que el rango
+                # cubierto va del inicio de la ÚLTIMA al fin de la PRIMERA.
+                "desde_referencia": ventanas[-1].desde,
+                "hasta_referencia": ventanas[0].hasta,
+                "periodos_promediados": len(ventanas),
+                "sin_base": motivos or None,
+            }
 
         return resultado
 
@@ -124,7 +150,15 @@ class AnalyticsService:
             {"etiqueta": "Ingresos Totales (ventas-devoluciones)", "valor": moneda(kpis["ingresos_totales"]), "tono": "neutral"},
             {"etiqueta": "Margen de Utilidad", "valor": f"{kpis['margen_utilidad_neta']:.1f}%", "tono": "positivo" if kpis["margen_utilidad_neta"] >= 0 else "negativo"},
             {"etiqueta": "Factura Promedio", "valor": moneda(kpis["ticket_promedio"]), "tono": "neutral"},
-            {"etiqueta": "Proyección ROI", "valor": f"{kpis['roi_estimado']:.1f}%", "tono": "positivo" if kpis["roi_estimado"] >= 10 else "negativo"},
+            # H-02: antes "Proyección ROI" con un umbral `>= 10` literal. Ahora el ROI real
+            # (RN-BI2) contra `ANALYTICS_ROI_UMBRAL_SANO`, y "sin base de cálculo" cuando
+            # no hay costo de mercadería con el que comparar (en vez de fingir un 0%).
+            {
+                "etiqueta": "ROI (retorno sobre costo de mercadería)",
+                "valor": f"{kpis['roi_real']:.1f}%" if kpis.get("roi_real") is not None else "sin base de cálculo",
+                "tono": "neutral" if kpis.get("roi_real") is None
+                        else "positivo" if kpis["roi_real"] >= settings.ANALYTICS_ROI_UMBRAL_SANO else "negativo",
+            },
             {
                 "etiqueta": f"Cumplimiento vs Meta ({cumplimiento['mes']:02d}/{cumplimiento['anio']})",
                 "valor": f"{cumplimiento['pct_cumplimiento']:.1f}%",

@@ -9,6 +9,7 @@ import datetime
 
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ConflictError, NotFoundError
 from app.models.commission_config import (
     ComisionConfigAuditoria, ComisionConfigVendedor, ComisionFactorCredito, ComisionLiquidacion,
     ComisionMatrizCategoria,
@@ -69,6 +70,23 @@ class CommissionConfigRepository:
         self.db.commit()
         self.db.refresh(nueva)
         return nueva
+
+    def desactivar_regla_categoria(self, regla_id: int) -> ComisionMatrizCategoria:
+        """Baja real de una regla: cierra su vigencia sin insertar una nueva (a
+        diferencia de `upsert_regla_categoria`, que siempre reemplaza) -- la clase/
+        subclase queda sin regla propia y cae al comodín `('*', NULL)` si existe.
+        Nunca DELETE físico: las liquidaciones ya congeladas que consultaron esta
+        regla por fecha histórica deben seguir viéndola."""
+        regla = self.db.query(ComisionMatrizCategoria).filter(ComisionMatrizCategoria.id == regla_id).first()
+        if regla is None:
+            raise NotFoundError(f"No existe una regla de categoría con id={regla_id}.")
+        if regla.vigente_hasta is not None:
+            raise ConflictError(f"La regla id={regla_id} ya no está vigente (se cerró el {regla.vigente_hasta}).")
+
+        regla.vigente_hasta = datetime.date.today() - datetime.timedelta(days=1)
+        self.db.commit()
+        self.db.refresh(regla)
+        return regla
 
     # ── Factores de crédito ─────────────────────────────────────────────────────
     def get_factores_credito_vigentes(self, fecha: datetime.date | None = None) -> list[ComisionFactorCredito]:

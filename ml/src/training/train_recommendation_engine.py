@@ -321,6 +321,7 @@ def save_recommendation_rules(
         metrics=metrics or {"n_reglas": len(rules_df)},
         contract_name="recommendation",
         contract_version=contract_version,
+        registry_key="association",
         library_versions_used=library_versions("pandas", "scikit-learn", "mlxtend"),
         data_range=data_range or ({"n_transacciones_entrenamiento": n_transactions} if n_transactions else {}),
         extra=extra or {"problema": "venta_cruzada_top_n", "clave_producto": "codart"},

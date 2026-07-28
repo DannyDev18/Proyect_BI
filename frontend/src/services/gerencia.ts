@@ -1,6 +1,7 @@
 import { api } from './http';
 import type {
-  CumplimientoMetaPeriodo, GerenciaKPIs, SalesPredictionGranularidad, SalesPredictionResponse,
+  CumplimientoMetaPeriodo, GerenciaKPIs, ModoComparacion, SalesPredictionGranularidad,
+  SalesPredictionResponse,
 } from '../types/gerencia';
 
 interface DateRangeParams {
@@ -27,7 +28,9 @@ const cleanParams = <T extends object>(params?: T): Partial<T> | undefined => {
   return cleaned as Partial<T>;
 };
 
-export const getGerenciaKPIs = (params?: DateRangeParams & { categoria?: string; sucursal?: string; vendedor?: string; almacen?: string }) =>
+// `modo_comparacion` (G-04): período de referencia de las tendencias. Solo tiene efecto con
+// start_date/end_date explícitos -- sin fechas la vista es "todo el histórico".
+export const getGerenciaKPIs = (params?: DateRangeParams & { categoria?: string; sucursal?: string; vendedor?: string; almacen?: string; modo_comparacion?: ModoComparacion }) =>
   api.get<GerenciaKPIs>('/api/v1/analytics/gerencia/kpis', { params: cleanParams(params) });
 
 export const getCumplimientoMetaPeriodo = (anio: number, mes: number) =>

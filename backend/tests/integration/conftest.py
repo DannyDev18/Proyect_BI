@@ -49,3 +49,17 @@ def auth_headers(tokens):
             pytest.skip(f"No hay token para el rol '{role}' -- ¿está sembrada la BD de prueba?")
         return {"Authorization": f"Bearer {token}"}
     return _headers
+
+
+@pytest.fixture
+def db_session():
+    """Sesión SQLAlchemy contra el EDW real, para los tests que comparan un endpoint contra
+    una consulta canónica sobre la misma BD (G-02, test_venta_neta_consistencia.py).
+    Solo lectura: ningún test de consistencia escribe."""
+    from app.database.session import SessionLocal
+
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()

@@ -164,7 +164,9 @@ class PredictionService:
             if tiene_pred:
                 val = float(bucket_pred[fecha_bucket])
                 n_dias = int(dias_por_bucket[fecha_bucket])
-                margen = (mae * (n_dias ** 0.5)) if mae is not None else val * 0.15
+                # Barrido G-01 (auditoría 39): el `0.15` era un literal. Sigue siendo un
+                # supuesto de ingeniería, no una regla de negocio -- ahora declarado.
+                margen = (mae * (n_dias ** 0.5)) if mae is not None else val * settings.FORECAST_BANDA_FALLBACK_VENTAS_PCT
                 monto_predicho = round(val, 2)
                 intervalo_superior = round(val + margen, 2)
                 intervalo_inferior = round(max(0.0, val - margen), 2)
@@ -256,6 +258,15 @@ class PredictionService:
 
     # ── Caso de uso: Predicción de demanda logística (Bodega) ─────────────────
     def get_demand_forecast(self, producto_cod: str) -> float:
+        """Usada solo por el endpoint legado `/demand-forecasting` (H23-7, sin almacén
+        en su contrato). El modelo `demand_rf` reentrenado en Fase 2
+        (docs/features/plan_mejora_pipeline_ml.md §4.1) predice por combinación
+        (producto, almacén) y requiere `almacen_sk`; sin un almacén conocido aquí, la
+        serie agrega todos los almacenes y `inference.predict_demand` fallará al armar
+        la matriz de features -- el `except` de abajo ya degrada con gracia a 0.0
+        (comportamiento documentado en
+        `ml/contracts/models/demand.json::known_serving_mismatch`, no un descuido). El
+        camino con almacén conocido vive en `WarehouseService._forecast_ml_producto`."""
         df_hist = self.dataset_repo.get_product_sales_history(producto_cod)
         if df_hist.empty:
             return 0.0
@@ -326,7 +337,7 @@ class PredictionService:
         if df_features.empty:
             return {cid: {"probabilidad_abandono": 0.0, "riesgo_alto": False} for cid in cliente_ids}
         try:
-            df_live = df_features[["frequency", "monetary_value", "average_ticket"]]
+            df_live = df_features[["recency", "frequency", "monetary_value", "average_ticket"]]
             preds = inference.predict_churn(self.model_loader, df_live)
             resultado = {
                 str(row["cliente_id"]): {

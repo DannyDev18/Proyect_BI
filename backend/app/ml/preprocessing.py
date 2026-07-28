@@ -72,10 +72,17 @@ class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
     def transform(self, X):
         X_out = X.copy()
 
-        if 'producto' in X_out.columns:
+        # Fase 2 (docs/features/plan_mejora_pipeline_ml.md §4.1): debe coincidir con
+        # ml/src/features/build_features.py -- agrupar por (producto, almacén) cuando
+        # ambas columnas están presentes (demanda reentrenada por combinación), no solo
+        # por 'producto' (que mezclaría las series de un mismo artículo en distintos
+        # almacenes).
+        claves_grupo = [c for c in ('producto', 'almacen') if c in X_out.columns]
+
+        if claves_grupo:
             for lag in self.lags:
-                X_out[f'lag_{lag}_{self.target_col}'] = X_out.groupby('producto')[self.target_col].shift(lag)
-            gb = X_out.groupby('producto')[self.target_col]
+                X_out[f'lag_{lag}_{self.target_col}'] = X_out.groupby(claves_grupo)[self.target_col].shift(lag)
+            gb = X_out.groupby(claves_grupo)[self.target_col]
             X_out['rolling_mean_7d'] = gb.transform(lambda x: x.shift(1).rolling(window=7, min_periods=1).mean())
             X_out['rolling_mean_30d'] = gb.transform(lambda x: x.shift(1).rolling(window=30, min_periods=1).mean())
             X_out['rolling_std_7d'] = gb.transform(lambda x: x.shift(1).rolling(window=7, min_periods=1).std())
@@ -148,8 +155,10 @@ def build_preprocessing_pipeline(target_col='y_sales_net') -> Pipeline:
 
 
 def select_features_and_target(df: pd.DataFrame, target_col='y_sales_net'):
-    """Separa el DataFrame en matriz X (predictoras) y vector Y (objetivo)."""
-    drop_cols = [target_col, 'y_quantity', 'sucursal', 'nombre', 'producto', 'ds']
+    """Separa el DataFrame en matriz X (predictoras) y vector Y (objetivo). 'almacen'
+    (nombre_almacen, string) se descarta igual que 'producto' (codart) -- la identidad
+    del almacén para el modelo es 'almacen_sk' (numérica), que se conserva (Fase 2)."""
+    drop_cols = [target_col, 'y_quantity', 'sucursal', 'nombre', 'producto', 'almacen', 'ds']
     actual_drops = [c for c in drop_cols if c in df.columns]
     Y = df[target_col]
     X = df.drop(columns=actual_drops)

@@ -55,9 +55,52 @@ class Settings(BaseSettings):
     # lee el JSON, nunca importa ml.src.contracts.*.
     ML_CONTRACTS_DIR: str = os.getenv("ML_CONTRACTS_DIR", "/app/ml_contracts")
     # Ruta al código fuente del pipeline de entrenamiento (ml/), solo presente en
-    # entornos de desarrollo (ver docker-compose.override.yml). En producción no
-    # existe, y trigger_retraining_pipeline() debe fallar con un mensaje claro.
+    # entornos de desarrollo (ver docker-compose.override.yml). Ya NO es la vía
+    # principal de reentrenamiento (ver DOCKER_SOCKET_PATH abajo, Fase 3 de
+    # docs/features/plan_mejora_pipeline_ml.md); se conserva solo como diagnóstico/
+    # referencia si algún día se necesita inspeccionar el código montado.
     ML_SOURCE_DIR: str = os.getenv("ML_SOURCE_DIR", "/app/ml_src")
+
+    # ── MLOps: reentrenamiento vía Docker (Fase 3, docs/features/plan_mejora_pipeline_ml.md §5.2.1) ──
+    # El backend dispara `docker compose run --rm ml ...` en el HOST vía el socket
+    # compartido (docker-compose.yml monta /var/run/docker.sock) -- nunca instala el
+    # código de entrenamiento en esta imagen. `HOST_PROJECT_DIR` es la ruta ABSOLUTA del
+    # proyecto en el HOST (no la ruta /app dentro de este contenedor): Docker resuelve los
+    # bind-mounts de docker-compose.yml contra el filesystem del host, no el de quien
+    # invoca el socket.
+    DOCKER_SOCKET_PATH: str = os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+    HOST_PROJECT_DIR: str = os.getenv("HOST_PROJECT_DIR", "")
+
+    # Regla de negocio 1: 'P' (Procesada) es el único estado de documento válido; 'A' es
+    # anulada. Espejo backend de `ESTADO_VALIDO` de `etl/config/settings.py` -- antes el
+    # backend nunca la aplicaba por su semántica (docs/auditoria/39_..., H-05).
+    ESTADO_DOCUMENTO_VALIDO: str = os.getenv("ESTADO_DOCUMENTO_VALIDO", "P")
+
+    # ── Analytics de Gerencia: margen y ROI (RN-BI1/RN-BI2) ──────────────────
+    # docs/auditoria/39_madurez_bi_toma_decisiones.md, H-01: `articulos.ultcos` es un costo
+    # por artículo en unidad de COMPRA, y `fact_transformer` lo multiplica por la cantidad
+    # vendida, que puede estar en otra unidad. En el artículo Z-9001 (BATERIAS CHATARRAS,
+    # unidad 'KL': se compra por batería, se vende por kilo) el ratio costo/precio es 308x,
+    # y esas 95 líneas concentran el 94.9% del costo de mercadería de TODO el EDW --
+    # llevando el margen publicado en Gerencia a -1563%. Se excluye la clase de los KPIs
+    # de margen/ROI (no de los ingresos: la venta de chatarra es ingreso real).
+    # Mismo criterio de negocio ya aplicado en el pipeline ML de demanda ("chatarra, no es
+    # un artículo de reposición", Fase 2 de docs/features/plan_mejora_pipeline_ml.md).
+    # NOTA: esto corrige la capa de presentación; `fact_ventas_detalle.margen_bruto` sigue
+    # con el valor derivado y lo consume Comisiones Variables -- pendiente de validar la
+    # unidad de `ultcos` contra Producción (H-01, recomendación 2).
+    ANALYTICS_CLASES_EXCLUIDAS_MARGEN: str = os.getenv("ANALYTICS_CLASES_EXCLUIDAS_MARGEN", "Z-999")
+    # Umbral de ROI considerado sano para el semáforo del resumen ejecutivo. Antes era un
+    # `>= 10` literal dentro de `get_dashboard_report` (H-02).
+    ANALYTICS_ROI_UMBRAL_SANO: float = float(os.getenv("ANALYTICS_ROI_UMBRAL_SANO", "10.0"))
+
+    # Barrido de constantes mágicas asociado a G-01 (docs/features/plan_madurez_bi_toma_
+    # decisiones.md §1). Bandas de incertidumbre de RESPALDO: se usan solo cuando el sidecar
+    # `.meta.json` del modelo no trae MAE. No son reglas de negocio validadas, son supuestos
+    # de ingeniería declarados -- por eso quedan visibles y configurables en vez de literales
+    # enterrados en el servicio.
+    FORECAST_BANDA_FALLBACK_VENTAS_PCT: float = float(os.getenv("FORECAST_BANDA_FALLBACK_VENTAS_PCT", "0.15"))
+    FORECAST_BANDA_FALLBACK_DEMANDA_PCT: float = float(os.getenv("FORECAST_BANDA_FALLBACK_DEMANDA_PCT", "0.20"))
 
     # ── Módulo Bodega (reglas RN-B1..B5, docs/auditoria/23_modulo_bodega.md) ──
     # Umbrales del requerimiento docs/features/modulo_bodega.md §6.3/§3.2/§3.3;
@@ -74,6 +117,9 @@ class Settings(BaseSettings):
     BODEGA_ROTACION_BUENA: float = float(os.getenv("BODEGA_ROTACION_BUENA", "4.0"))
     BODEGA_ROTACION_REGULAR: float = float(os.getenv("BODEGA_ROTACION_REGULAR", "2.0"))
     BODEGA_ROTACION_MIN_COMPRA: float = float(os.getenv("BODEGA_ROTACION_MIN_COMPRA", "3.0"))
+    # Barrido G-01 (auditoría 39): margen sobre el punto de reorden a partir del cual el
+    # estado deja de ser "seguro" y pasa a "cerca del reorden". Antes `reorden * 1.5` literal.
+    BODEGA_FACTOR_CERCA_REORDEN: float = float(os.getenv("BODEGA_FACTOR_CERCA_REORDEN", "1.5"))
     # RN-B9 (docs/auditoria/32_actualizacion_modulo_bodega.md): justificación estadística
     # de transferencias. Costo logístico estimado como % del valor transferido (a costo
     # unitario del destino) -- sin dato real de flete en el EDW, se declara como estimación

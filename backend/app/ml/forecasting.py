@@ -36,7 +36,16 @@ def walk_forward_forecast(
 
     for _ in range(dias):
         next_day = df_sim.index[-1] + pd.Timedelta(days=1)
-        df_sim.loc[next_day] = 0.0
+        # Fase 2 (docs/features/plan_mejora_pipeline_ml.md §4.1): el demanda por
+        # combinación producto×almacén lleva columnas de identidad constantes
+        # ('producto', 'almacen', 'almacen_sk') además del target -- poner TODA la fila
+        # en 0.0 (comportamiento anterior) las borraría, rompiendo el agrupamiento del
+        # siguiente `pipeline.fit_transform`. Se parte de la última fila (conserva la
+        # identidad) y solo se resetea el target -- para ventas (sin esas columnas) el
+        # resultado es idéntico al de antes.
+        fila_siguiente = df_sim.iloc[-1].copy()
+        fila_siguiente[target_col] = 0.0
+        df_sim.loc[next_day] = fila_siguiente
 
         df_feat = pipeline.fit_transform(df_sim.copy())
         X, _ = select_features_and_target(df_feat, target_col)

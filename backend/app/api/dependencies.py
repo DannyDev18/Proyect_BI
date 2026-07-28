@@ -17,6 +17,7 @@ from app.repositories.commission_config_repository import CommissionConfigReposi
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.ml_model_run_repository import MLModelRunRepository
 from app.repositories.prediction_repository import PredictionRepository
 from app.repositories.recommendation_event_repository import RecommendationEventRepository
 from app.repositories.role_repository import RoleRepository
@@ -102,6 +103,13 @@ def get_system_repository(db: SessionDep) -> SystemRepository:
     return SystemRepository(db)
 
 
+def get_ml_model_run_repository(db: SessionDep) -> MLModelRunRepository:
+    return MLModelRunRepository(db)
+
+
+MLModelRunRepositoryDep = Annotated[MLModelRunRepository, Depends(get_ml_model_run_repository)]
+
+
 # ── Modelos ML (Singleton vía app.state, cargado en el lifespan de main.py) ──
 def get_model_loader(request: Request) -> ModelLoader:
     return request.app.state.model_loader
@@ -184,12 +192,14 @@ def get_cartera360_service(
 def get_commission_simulation_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
     commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
 ) -> CommissionSimulationService:
     """Definido antes de `get_notification_service` (igual que `get_cartera360_service`
     arriba): ese servicio la inyecta para el generador calculado de divergencia
     plano vs. variable del piloto en sombra (Fase 2 ítem 3, docs/features/
-    plan_actualizacion_modulo_metas_comisiones.md)."""
-    return CommissionSimulationService(goal_repo, commission_config_repo)
+    plan_actualizacion_modulo_metas_comisiones.md). `catalog_repo` es para
+    `proyectar_comision_variable` (enriquecimiento de nombre de vendedor)."""
+    return CommissionSimulationService(goal_repo, commission_config_repo, catalog_repo)
 
 
 def get_notification_service(

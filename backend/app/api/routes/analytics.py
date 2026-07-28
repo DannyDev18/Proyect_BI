@@ -12,6 +12,7 @@ from app.api.dependencies import (
 )
 from app.core.deps import PermissionChecker
 from app.schemas.analytics import GPKPIGerencia, PrediccionVentasResponse, ReporteDashboardResponse
+from app.services.metricas.comparador import N_PERIODOS_DEFAULT, ModoComparacion
 from app.services.warehouse_export import reporte_a_excel
 
 router = APIRouter()
@@ -32,13 +33,21 @@ def get_management_kpis(
     categoria: Optional[str] = None,
     vendedor: Optional[str] = None,
     almacen: Optional[str] = None,
+    modo_comparacion: ModoComparacion = ModoComparacion.PERIODO_ANTERIOR,
+    n_periodos: int = N_PERIODOS_DEFAULT,
     _audit: None = Depends(audit_log(operacion="READ", tabla_afectada="all", modulo="kpis_gerencia")),
 ) -> GPKPIGerencia:
     """Margen de utilidad, ticket promedio, ventas consolidadas. Aplica seguridad a
-    nivel de fila si el usuario es un gerente zonal."""
+    nivel de fila si el usuario es un gerente zonal.
+
+    G-04 (docs/features/plan_madurez_bi_toma_decisiones.md): `modo_comparacion` elige el
+    período de referencia de las tendencias -- `periodo_anterior` (default),
+    `anio_anterior` (interanual, el relevante en un negocio estacional) o
+    `promedio_n_periodos`. Solo aplica con `start_date`/`end_date` explícitos."""
     kpis = analytics_service.get_management_kpis(
         sucursal=sucursal_filtro, start_date=start_date, end_date=end_date, categoria=categoria,
         vendedor=vendedor, almacen=almacen,
+        modo_comparacion=modo_comparacion, n_periodos=n_periodos,
     )
     return GPKPIGerencia(**kpis)
 

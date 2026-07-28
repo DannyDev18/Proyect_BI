@@ -63,14 +63,25 @@ class TimeSeriesLagsTransformer(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         X_out = X.copy()
-        
-        if 'producto' in X_out.columns:
-            # Generar Lags agrupados por producto
+
+        # Fase 2 (docs/features/plan_mejora_pipeline_ml.md §4.1): el dataset de demanda
+        # producto×almacén (fetch_demand_by_product_warehouse) trae ambas columnas --
+        # agrupar SOLO por 'producto' mezclaría las series de un mismo artículo en
+        # distintos almacenes, deshaciendo el propósito del grano nuevo. El dataset de
+        # ventas generales (sin 'almacen') sigue agrupando solo por 'producto' como antes.
+        claves_grupo = [c for c in ('producto', 'almacen') if c in X_out.columns]
+
+        if claves_grupo:
+            # Generar Lags agrupados por la clave compuesta (producto[, almacén])
             for lag in self.lags:
                 col_name = f'lag_{lag}_{self.target_col}'
-                X_out[col_name] = X_out.groupby('producto')[self.target_col].shift(lag)
-            # Agregar métricas agrupadas
-            gb = X_out.groupby('producto')[self.target_col]
+                X_out[col_name] = X_out.groupby(claves_grupo)[self.target_col].shift(lag)
+            # Agregar métricas agrupadas. `expanding_mean` funciona además como la
+            # codificación histórica ("target encoding") de la combinación: es una media
+            # expandida con shift(1), por construcción solo usa datos < T de esa MISMA
+            # combinación -- sin fuga de datos, sin necesitar un esquema de codificación
+            # out-of-fold aparte (H-05, mismo principio que los cortes temporales de churn).
+            gb = X_out.groupby(claves_grupo)[self.target_col]
             X_out['rolling_mean_7d'] = gb.transform(lambda x: x.shift(1).rolling(window=7, min_periods=1).mean())
             X_out['rolling_mean_30d'] = gb.transform(lambda x: x.shift(1).rolling(window=30, min_periods=1).mean())
             X_out['rolling_std_7d'] = gb.transform(lambda x: x.shift(1).rolling(window=7, min_periods=1).std())
@@ -168,7 +179,10 @@ def select_features_and_target(df: pd.DataFrame, target_col='y_sales_net'):
     """
     # Excluimos variables a usar netamente como Target directo.
     # El preprocesador ya generó the 'lags' dentro de la lógica.
-    drop_cols = [target_col, 'y_quantity', 'sucursal', 'nombre', 'producto', 'ds']
+    # 'almacen' (nombre_almacen, string -- ya usado para agrupar en el transformer) se
+    # descarta igual que 'producto' (codart): la identidad del almacén para el modelo la
+    # da 'almacen_sk' (numérica), que NO se descarta (Fase 2, plan_mejora_pipeline_ml.md §4.1).
+    drop_cols = [target_col, 'y_quantity', 'sucursal', 'nombre', 'producto', 'almacen', 'ds']
     actual_drops = [c for c in drop_cols if c in df.columns]
     
     Y = df[target_col]

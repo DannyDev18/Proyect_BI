@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.goal import Goal
+from app.services.metricas.venta_neta import SQL_VENTA_BRUTA
 
 
 class VendorMonthlySales(NamedTuple):
@@ -180,9 +181,14 @@ class GoalRepository:
         cumplimiento real, no solo la meta. El cálculo de comisión (tramos, tasa, bono) es
         responsabilidad del servicio (`commission_engine.calcular_comision`), no de esta
         consulta."""
-        query = text("""
+        # G-02 (docs/auditoria/39_...): la venta bruta usa el fragmento canónico de
+        # `app/services/metricas/venta_neta.py`, el mismo que consume `analytics_repository`.
+        # Antes esta consulta usaba `SUM(f.subtotal_neto)` (todas las líneas) mientras
+        # Gerencia usaba `SUM(CASE WHEN subtotal_neto > 0 ...)`: divergencia latente (hoy 0
+        # líneas negativas en 522.477, pero nada garantizaba que siguiera siendo así).
+        query = text(f"""
             WITH VentasBrutas AS (
-                SELECT v.codven AS vendedor_origen, SUM(f.subtotal_neto) AS ventas_brutas
+                SELECT v.codven AS vendedor_origen, {SQL_VENTA_BRUTA} AS ventas_brutas
                 FROM edw.fact_ventas_detalle f
                 JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
                 JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
@@ -256,9 +262,10 @@ class GoalRepository:
         período específico -- usado por el panel del vendedor
         (`CommissionService.get_my_commission`), a diferencia de
         `get_vendor_monthly_history` que trae una serie de varios meses."""
-        query = text("""
+        # G-02: mismo fragmento canónico que `get_commission_report` y que Gerencia.
+        query = text(f"""
             WITH VentasBrutas AS (
-                SELECT COALESCE(SUM(f.subtotal_neto), 0.0) AS ventas_brutas
+                SELECT COALESCE({SQL_VENTA_BRUTA}, 0.0) AS ventas_brutas
                 FROM edw.fact_ventas_detalle f
                 JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
                 JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk

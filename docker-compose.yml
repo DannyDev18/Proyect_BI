@@ -42,6 +42,17 @@ services:
     env_file: .env
     environment:
       ENV: production
+      # Fase 3 (§5.2.1 opción 1 del plan de mejora ML): el backend dispara
+      # `docker compose run --rm ml ...` en el HOST vía el socket compartido abajo.
+      # Docker resuelve los bind-mounts del compose (`./ml:/app`, etc.) contra el
+      # filesystem del host, no el del contenedor backend -- por eso necesita conocer
+      # la ruta ABSOLUTA del proyecto en el host (el backend ve /app dentro de su propio
+      # contenedor, que no es la misma ruta). Ajustar en .env si el repo no vive en
+      # C:\Proyect_BI en el host.
+      # `docker run` (no `docker compose run`, ver TrainingService): el daemon resuelve
+      # el bind-mount `-v "<HOST_PROJECT_DIR>\ml:/app"` contra el filesystem del host, no
+      # el de este contenedor.
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-C:\Proyect_BI}
     depends_on:
       postgres_edw:
         condition: service_healthy
@@ -52,6 +63,20 @@ services:
       # Contratos declarativos (JSON), no código fuente de ml/ -- es la interfaz
       # documentada entre las dos imágenes Docker (docs/ml_contracts.md).
       - ./ml/contracts/models:/app/ml_contracts:ro
+      # Socket de Docker del host (patrón "Docker-outside-of-Docker", ya usado por
+      # ml/publish_models.py desde el host): permite que el backend orqueste
+      # `docker run ... proyect_bi-ml ...` (imagen ya construida por
+      # `docker compose build ml`) sin tener el código de ml/ dentro de su propia
+      # imagen. Se usa `docker run` y NO `docker compose run` -- probado en este
+      # entorno (Docker Desktop/Windows): Compose necesita LEER localmente tanto el
+      # YAML como el `.env` que auto-carga para interpolación, y este contenedor no
+      # tiene una ruta local que corresponda a `HOST_PROJECT_DIR` (con backslashes de
+      # Windows); `docker run -v "<HOST_PROJECT_DIR>\ml:/app"` en cambio solo necesita
+      # que el DAEMON (que sí corre en el host real) resuelva el string del bind-mount,
+      # y Docker Desktop acepta rutas estilo Windows ahí sin que el cliente las vea
+      # localmente. Riesgo de seguridad real y documentado -- ver comentario en
+      # backend/Dockerfile y §11 de docs/features/plan_mejora_pipeline_ml.md.
+      - /var/run/docker.sock:/var/run/docker.sock
 
   # ── 3. Frontend React ────────────────────────────────────────────────────────
   frontend:

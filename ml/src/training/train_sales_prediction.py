@@ -57,15 +57,19 @@ def train_sales_model(X_train, y_train, hyperparameter_search=False):
     wrapped_model.fit(X_train, y_train)
     return wrapped_model
 
-def save_model(model, filepath=None, metrics=None, features=None, data_range=None):
+def save_model(model, filepath=None, metrics=None, features=None, data_range=None, extra_meta=None):
+    extra = {"problema": "regresion_serie_temporal", "target": "y_sales_net (USD, artefacto autocontenido)"}
+    if extra_meta:
+        extra.update(extra_meta)
     save_artifact(
         model, "sales.pkl", filepath=filepath, metrics=metrics,
         algorithm=type(model.regressor_).__name__,
         features=features,
         contract_name="sales",
         contract_version="0.3.0",
+        registry_key="sales_rf",
         library_versions_used=library_versions("scikit-learn", "xgboost", "lightgbm", "catboost"),
         data_range=data_range,
         target_transform="log1p",
-        extra={"problema": "regresion_serie_temporal", "target": "y_sales_net (USD, artefacto autocontenido)"},
+        extra=extra,
     )

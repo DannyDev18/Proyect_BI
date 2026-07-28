@@ -1,9 +1,16 @@
 {
   "name": "churn",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "task": "classification",
   "status": "active",
   "features": [
+    {
+      "name": "recency",
+      "dtype": "float",
+      "required": true,
+      "nullable": false,
+      "description": "Días desde la última compra hasta la fecha de corte T (Fase 4, docs/features/plan_mejora_pipeline_ml.md §6: ya se calculaba en el dataset de entrenamiento pero no se usaba como feature, pese a ser la señal RFM típicamente más predictiva de abandono)"
+    },
     {
       "name": "frequency",
       "dtype": "float",
@@ -55,7 +62,7 @@
     "hasta": "2026-04-10"
   },
   "known_serving_mismatch": [
-    "H-03 cerrado en Fase 4: get_churn_features ahora devuelve (frequency, monetary_value, average_ticket) con la MISMA semántica del entrenamiento (frequency = días distintos de compra), calculadas 'a fecha de hoy' (T=now()) en vez de a una fecha de corte histórica -- diferencia esperada en un sistema en vivo, no un bug residual. model_loader.py apunta a churn.pkl."
+    "H-03 cerrado en Fase 4: get_churn_features ahora devuelve (recency, frequency, monetary_value, average_ticket) con la MISMA semántica del entrenamiento (frequency = días distintos de compra), calculadas 'a fecha de hoy' (T=now()) en vez de a una fecha de corte histórica -- diferencia esperada en un sistema en vivo, no un bug residual. model_loader.py apunta a churn.pkl."
   ],
-  "notes": "Reconstruido en Fase 3 (2026-07-09): dataset con 6 cortes temporales (2025-01-15 a 2026-04-10, espaciados 90 días), 296.981 filas cliente×corte. Fuerte desbalance de clases observado (94.8% is_churn=1 / 5.2%=0): con una ventana de repetición de 90 días, la mayoría de clientes no vuelve a comprar en ese plazo (consistente con un negocio de compra infrecuente/B2B). Ganador CatBoostClassifier (learning_rate=0.1, iterations=100, depth=4) con class_weight/auto_class_weights balanceado. ROC-AUC=0.752, accuracy=0.783 (recall clase minoritaria 'no churn'=0.60, precision=0.14 -- esperable dado el desbalance 19:1; no se ajustó el umbral de decisión en esta pasada). Este AUC (0.75) es MENOR que el AUC legacy reportado anteriormente, y eso es la señal correcta: el AUC legacy era alto porque la etiqueta era una función determinista de las mismas features (circular); 0.75 es la capacidad predictiva real del modelo sobre una etiqueta no circular."
+  "notes": "Reconstruido en Fase 3 (2026-07-09): dataset con 6 cortes temporales (2025-01-15 a 2026-04-10, espaciados 90 días), 296.981 filas cliente×corte. Fuerte desbalance de clases observado (94.8% is_churn=1 / 5.2%=0): con una ventana de repetición de 90 días, la mayoría de clientes no vuelve a comprar en ese plazo (consistente con un negocio de compra infrecuente/B2B). Ganador CatBoostClassifier (learning_rate=0.1, iterations=100, depth=4) con class_weight/auto_class_weights balanceado. ROC-AUC=0.752, accuracy=0.783 (recall clase minoritaria 'no churn'=0.60, precision=0.14 -- esperable dado el desbalance 19:1; no se ajustó el umbral de decisión en esta pasada). Este AUC (0.75) es MENOR que el AUC legacy reportado anteriormente, y eso es la señal correcta: el AUC legacy era alto porque la etiqueta era una función determinista de las mismas features (circular); 0.75 es la capacidad predictiva real del modelo sobre una etiqueta no circular. Fase 4 (2026-07-20, docs/features/plan_mejora_pipeline_ml.md §6): se agrega 'recency' como 4ª feature (petición explícita del usuario) y matriz de confusión/precision/recall/F1/PR-AUC completas (antes solo accuracy+roc_auc, D-7); ver ml/model_cards/churn.md para las cifras de la corrida con el feature set ampliado."
 }

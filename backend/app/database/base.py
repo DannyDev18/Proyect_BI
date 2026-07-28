@@ -15,3 +15,4 @@ from app.models.commission_config import (  # noqa: F401
 from app.models.notification import Notification  # noqa: F401
 from app.models.anomalia_revision import AnomaliaRevision  # noqa: F401
 from app.models.login_intento_fallido import LoginIntentoFallido  # noqa: F401
+from app.models.ml_model_run import MLModelRun  # noqa: F401

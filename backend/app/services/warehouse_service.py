@@ -143,7 +143,7 @@ class WarehouseService:
             return ESTADO_SEGURO
         if stock < reorden:
             return ESTADO_CRITICO
-        if stock <= reorden * 1.5:
+        if stock <= reorden * settings.BODEGA_FACTOR_CERCA_REORDEN:
             return ESTADO_CERCA
         return ESTADO_SEGURO
 
@@ -352,7 +352,7 @@ class WarehouseService:
                 enriquecido = self._enriquecer_producto(fila)
                 stock_actual = enriquecido["stock_actual"]
                 punto_reorden = enriquecido["punto_reorden"]
-            prediccion, metodo = self._forecast_ml_producto(producto_cod, dias_horizonte, serie_hist)
+            prediccion, metodo = self._forecast_ml_producto(producto_cod, dias_horizonte, serie_hist, almacen=almacen)
         if not prediccion:
             prediccion = self._forecast_estadistico(serie_hist, dias_horizonte)
             metodo = "estadistico"
@@ -367,18 +367,41 @@ class WarehouseService:
         }
 
     def _forecast_ml_producto(
-        self, producto_cod: str, dias: int, serie_salidas: pd.Series,
+        self, producto_cod: str, dias: int, serie_salidas: pd.Series, almacen: str | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
-        """Walk-forward con el modelo `demand_rf` existente sobre la serie de ventas del
+        """Walk-forward con el modelo `demand_rf` existente sobre la serie de salidas del
         producto (mismo insumo que get_demand_forecast). Banda de confianza con el MAE
         real del sidecar demand.meta.json. Degrada con gracia a [] (el caller usa el
-        método estadístico) — patrón obligatorio de prediction_service."""
+        método estadístico) — patrón obligatorio de prediction_service.
+
+        `almacen` (Fase 2, docs/features/plan_mejora_pipeline_ml.md §4.1): el modelo
+        reentrenado predice por combinación (producto, almacén) -- requiere `almacen_sk`.
+        Los callers que ya conocen el almacén seleccionado en el dashboard de Bodega
+        (`get_salidas_forecast`, `_prediccion_articulo`) lo pasan aquí; si se omite
+        (endpoint legado `/demand-forecasting`, sin almacén en su contrato), la serie
+        agrega todos los almacenes y el modelo degradará a `estadistico` al faltarle
+        `almacen_sk` -- comportamiento documentado en
+        `ml/contracts/models/demand.json::known_serving_mismatch`, no un descuido."""
         try:
-            df_hist = self.dataset_repo.get_product_sales_history(producto_cod)
+            df_hist = self.dataset_repo.get_product_sales_history(producto_cod, almacen=almacen)
             if df_hist.empty:
                 return [], "estadistico"
             df_hist["ds"] = pd.to_datetime(df_hist["ds"])
-            df_hist = df_hist.sort_values("ds").set_index("ds").resample("D").sum().fillna(0)
+            df_hist = df_hist.sort_values("ds").set_index("ds")
+
+            if almacen and "almacen_sk" in df_hist.columns:
+                # Identidad constante para esta consulta puntual -- resamplear con
+                # .sum() la rompería (columnas de texto/una sola combinación); se
+                # resamplea solo el target y se reasigna la identidad después.
+                producto_val = df_hist["producto"].iloc[0]
+                almacen_val = df_hist["almacen"].iloc[0]
+                almacen_sk_val = df_hist["almacen_sk"].iloc[0]
+                df_hist = df_hist[["y_quantity"]].resample("D").sum().fillna(0)
+                df_hist["producto"] = producto_val
+                df_hist["almacen"] = almacen_val
+                df_hist["almacen_sk"] = almacen_sk_val
+            else:
+                df_hist = df_hist.resample("D").sum().fillna(0)
 
             preds = walk_forward_forecast(
                 self.model_loader, df_hist, "y_quantity", dias, inference.predict_demand,
@@ -389,7 +412,9 @@ class WarehouseService:
             for fecha, valor in preds:
                 # La banda del requerimiento es "80%"; sin distribución del error se usa
                 # el MAE diario real (misma convención declarada del módulo de ventas).
-                margen = mae if mae is not None else valor * 0.2
+                # Barrido G-01 (auditoría 39): el `0.2` era un literal; ver nota equivalente
+                # en `prediction_service.py`.
+                margen = mae if mae is not None else valor * settings.FORECAST_BANDA_FALLBACK_DEMANDA_PCT
                 resultado.append({
                     "fecha": fecha.strftime("%Y-%m-%d"),
                     "unidades": round(valor, 2),
@@ -464,7 +489,7 @@ class WarehouseService:
         agotada tras N walk-forwards seguidos en el mismo request) no debe tumbar
         toda la predicción de la categoría -- degrada a "sin datos" para ese
         artículo únicamente (mismo principio que `_forecast_ml_producto`)."""
-        resultado, metodo = self._forecast_ml_producto(codart, dias_horizonte, pd.Series(dtype=float))
+        resultado, metodo = self._forecast_ml_producto(codart, dias_horizonte, pd.Series(dtype=float), almacen=almacen)
         if not resultado:
             try:
                 historial = self.repo.get_salidas_serie_diaria(

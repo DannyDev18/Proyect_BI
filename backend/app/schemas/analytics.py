@@ -19,7 +19,12 @@ class GPKPIGerencia(BaseModel):
     ingresos_totales: float
     margen_utilidad_neta: float
     ticket_promedio: float
-    roi_estimado: float
+    # docs/auditoria/39_madurez_bi_toma_decisiones.md, H-02: reemplaza a `roi_estimado`
+    # (`margen * 1.15`, una constante sin regla de negocio). RN-BI2: retorno sobre costo de
+    # mercadería vendida. `None` cuando no hay costo con el que comparar -- el frontend
+    # debe comunicar "sin base de cálculo", no 0%.
+    roi_real: Optional[float] = None
+    costo_mercaderia: float = 0.0
     ventas_por_sucursal: Dict[str, float]
     ventas_por_vendedor: Optional[Dict[str, float]] = None
     # Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): comparativa vs.
@@ -28,7 +33,22 @@ class GPKPIGerencia(BaseModel):
     ingresos_totales_tendencia_pct: Optional[float] = None
     margen_utilidad_neta_tendencia_pct: Optional[float] = None
     ticket_promedio_tendencia_pct: Optional[float] = None
-    roi_estimado_tendencia_pct: Optional[float] = None
+    roi_real_tendencia_pct: Optional[float] = None
+    # G-04 (docs/features/plan_madurez_bi_toma_decisiones.md): contexto de la comparación --
+    # contra qué período se comparan las tendencias y, si alguna vino en None, por qué no
+    # hubo base de cálculo. `None` cuando no se pidieron fechas explícitas.
+    comparacion: Optional["ContextoComparacion"] = None
+
+
+class ContextoComparacion(BaseModel):
+    """Metadatos de la comparación temporal aplicada a los KPIs (G-04)."""
+    modo: str
+    desde_referencia: str
+    hasta_referencia: str
+    periodos_promediados: int
+    # Motivos por los que una tendencia concreta no tiene base comparable. El criterio de
+    # aceptación de G-04 exige comunicarlo, no mostrar 0%.
+    sin_base: Optional[List[str]] = None
 
 class BPKPIBodega(BaseModel):
     items_sobrestock: int

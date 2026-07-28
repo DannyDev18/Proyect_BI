@@ -31,6 +31,7 @@ from app.services.cartera360_service import Cartera360Service
 from app.services.commission_config_service import CommissionConfigService
 from app.services.commission_service import CommissionService
 from app.services.commission_simulation_service import CommissionSimulationService
+from app.services.cross_sell_engine_service import CrossSellEngineService
 from app.services.goal_ml_service import GoalMLService
 from app.services.goals_service import GoalsService
 from app.services.notification_service import NotificationService
@@ -189,6 +190,19 @@ def get_cartera360_service(
     return Cartera360Service(cartera360_repo, prediction_service, catalog_repo)
 
 
+def get_cross_sell_engine_service(
+    cartera360_repo: Annotated[Cartera360Repository, Depends(get_cartera360_repository)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
+    prediction_service: Annotated[PredictionService, Depends(get_prediction_service)],
+) -> CrossSellEngineService:
+    """Motor compuesto de Venta Cruzada (docs/features/plan_refactor_venta_cruzada_ia.md
+    §3, decisión 1): consume `PredictionService` por inyección en vez de engordarlo,
+    mismo patrón que `get_cartera360_service`. `Cartera360Repository` aporta el CLV
+    histórico/agregados de cliente único (Fase 1); en la Fase 2 este mismo servicio
+    ganará el ranker sin crear un servicio nuevo distinto."""
+    return CrossSellEngineService(cartera360_repo, catalog_repo, prediction_service)
+
+
 def get_commission_simulation_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
     commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
@@ -299,6 +313,7 @@ AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
 AnomaliaRevisionServiceDep = Annotated[AnomaliaRevisionService, Depends(get_anomalia_revision_service)]
 CatalogRepositoryDep = Annotated[CatalogRepository, Depends(get_catalog_repository)]
 Cartera360ServiceDep = Annotated[Cartera360Service, Depends(get_cartera360_service)]
+CrossSellEngineServiceDep = Annotated[CrossSellEngineService, Depends(get_cross_sell_engine_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 SystemServiceDep = Annotated[SystemService, Depends(get_system_service)]
 

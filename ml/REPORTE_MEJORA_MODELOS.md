@@ -275,3 +275,45 @@ como `known_serving_mismatch` en el contrato.
 - **2026-07-20T17:24:06.471347+00:00** -- gating de `anomaly` (versión candidata `20260720.172406`): PROMOVIDO. sin campeón anterior comparable -- se promueve el candidato por defecto
 
 - **2026-07-20T17:24:35.502182+00:00** -- gating de `sales_rf` (versión candidata `20260720.172434`): PROMOVIDO. PROMUEVE (R2: candidato=0.2907 vs. campeón=0.2907, direction=maximize, min_delta=-0.01)
+
+
+## cross_sell_ranker -- 2026-07-28T17:13:50.890065+00:00
+
+Fase 2 de docs/features/plan_refactor_venta_cruzada_ia.md (7º modelo, ranking sobre candidatos item-item). Dataset: 35486 filas (35.44% positivos), 2 cortes mensuales (2026-04-29..2026-05-29), split cronológico 1/2 cortes train/1 test.
+
+Ganador de la competencia: **RandomForestClassifier**. Métricas de clasificación (holdout): {'accuracy': 0.8831, 'precision': 0.8301, 'recall': 0.8411, 'f1': 0.8356, 'confusion_matrix_tn': 10085, 'confusion_matrix_fp': 1047, 'confusion_matrix_fn': 966, 'confusion_matrix_tp': 5115, 'roc_auc': 0.9422, 'pr_auc': 0.9267}.
+
+**Backtest de ranking (mismo protocolo, auditoría 25):**
+- Línea base item-item (fresca, mismo test set): {'n_canastas_test': 4099, 'cobertura': 0.9798, 'hit_rate_5': 0.3625, 'impacto_ticket_medio': 23.22, 'precision_at_3': 0.0989, 'precision_at_5': 0.0782, 'recall_at_3': 0.2029, 'recall_at_5': 0.2718}
+- Ranker (re-ranking de los mismos candidatos): {'n_canastas_test': 4099, 'cobertura': 0.9798, 'hit_rate_5': 0.2984, 'impacto_ticket_medio': 23.3, 'precision_at_3': 0.0764, 'precision_at_5': 0.0635, 'recall_at_3': 0.1637, 'recall_at_5': 0.2297}
+- Línea base histórica documentada (contrato recommendation v0.2.0): Precision@5=0.0769, cobertura=0.979
+
+**Decisión (regla fijada antes de ver resultados, §2.4 del plan):** NO PROMOVIDO -- Precision@5 ranker=0.0635 vs. línea base histórica=0.0769 y fresca=0.0782; cobertura ranker=0.9798 vs. histórica=0.9790 y fresca=0.9798. NO PROMOVIDO (se mantiene el motor item-item actual sin ranker).
+
+
+## cross_sell_ranker -- 2026-07-28T17:18:41.065899+00:00
+
+Fase 2 de docs/features/plan_refactor_venta_cruzada_ia.md (7º modelo, ranking sobre candidatos item-item). Dataset: 261105 filas (26.87% positivos), 12 cortes mensuales (2025-07-03..2026-05-29), split cronológico 9/12 cortes train/3 test.
+
+Ganador de la competencia: **LGBMClassifier**. Métricas de clasificación (holdout): {'accuracy': 0.8966, 'precision': 0.7912, 'recall': 0.8391, 'f1': 0.8144, 'confusion_matrix_tn': 47874, 'confusion_matrix_fp': 4280, 'confusion_matrix_fn': 3109, 'confusion_matrix_tp': 16216, 'roc_auc': 0.9416, 'pr_auc': 0.9018}.
+
+**Backtest de ranking (mismo protocolo, auditoría 25):**
+- Línea base item-item (fresca, mismo test set): {'n_canastas_test': 4099, 'cobertura': 0.9798, 'hit_rate_5': 0.3625, 'impacto_ticket_medio': 23.22, 'precision_at_3': 0.0989, 'precision_at_5': 0.0782, 'recall_at_3': 0.2029, 'recall_at_5': 0.2718}
+- Ranker (re-ranking de los mismos candidatos): {'n_canastas_test': 4099, 'cobertura': 0.9798, 'hit_rate_5': 0.1754, 'impacto_ticket_medio': 32.32, 'precision_at_3': 0.0312, 'precision_at_5': 0.0369, 'recall_at_3': 0.0698, 'recall_at_5': 0.1344}
+- Línea base histórica documentada (contrato recommendation v0.2.0): Precision@5=0.0769, cobertura=0.979
+
+**Decisión (regla fijada antes de ver resultados, §2.4 del plan):** NO PROMOVIDO -- Precision@5 ranker=0.0369 vs. línea base histórica=0.0769 y fresca=0.0782; cobertura ranker=0.9798 vs. histórica=0.9790 y fresca=0.9798. NO PROMOVIDO (se mantiene el motor item-item actual sin ranker).
+
+
+## cross_sell_ranker -- 2026-07-28T17:26:50.495716+00:00
+
+Fase 2 de docs/features/plan_refactor_venta_cruzada_ia.md (7º modelo, ranking sobre candidatos item-item). Dataset: 261105 filas (26.87% positivos), 12 cortes mensuales (2025-07-03..2026-05-29), split cronológico 9/12 cortes train/3 test.
+
+Ganador de la competencia: **LGBMClassifier**. Métricas de clasificación (holdout): {'accuracy': 0.8966, 'precision': 0.7912, 'recall': 0.8391, 'f1': 0.8144, 'confusion_matrix_tn': 47874, 'confusion_matrix_fp': 4280, 'confusion_matrix_fn': 3109, 'confusion_matrix_tp': 16216, 'roc_auc': 0.9416, 'pr_auc': 0.9018}.
+
+**Backtest de ranking (mismo protocolo, auditoría 25):**
+- Línea base item-item (fresca, mismo test set): {'n_canastas_test': 4099, 'cobertura': 0.9798, 'hit_rate_5': 0.3625, 'impacto_ticket_medio': 23.22, 'precision_at_3': 0.0989, 'precision_at_5': 0.0782, 'recall_at_3': 0.2029, 'recall_at_5': 0.2718}
+- Ranker (re-ranking de los mismos candidatos): {'n_canastas_test': 4099, 'cobertura': 0.9798, 'hit_rate_5': 0.1754, 'impacto_ticket_medio': 32.32, 'precision_at_3': 0.0312, 'precision_at_5': 0.0369, 'recall_at_3': 0.0698, 'recall_at_5': 0.1344}
+- Línea base histórica documentada (contrato recommendation v0.2.0): Precision@5=0.0769, cobertura=0.979
+
+**Decisión (regla fijada antes de ver resultados, §2.4 del plan):** NO PROMOVIDO -- Precision@5 ranker=0.0369 vs. línea base histórica=0.0769 y fresca=0.0782; cobertura ranker=0.9798 vs. histórica=0.9790 y fresca=0.9798. NO PROMOVIDO (se mantiene el motor item-item actual sin ranker).

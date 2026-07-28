@@ -124,6 +124,40 @@ Reglas del módulo de Venta Cruzada (`docs/features/plan_modulo_cross_selling.md
 - **RN-CS2 (telemetría y conversión):** cada sugerencia mostrada al vendedor registra un evento `mostrada` en `public.recomendaciones_eventos`; el clic en "Agregar" registra `aceptada`. La tasa de conversión de un período = `count(aceptada) / count(mostrada)`. La "aceptación" es un registro en la plataforma BI, no una línea de factura en SAP (el ERP no se toca, regla de solo-lectura de Producción).
 - **RN-CS3 (diversidad entre categorías, hallazgo de uso real 2026-07-13):** máximo `CROSS_SELL_MAX_POR_CATEGORIA` (default 2) sugerencias de una misma categoría entre las `CROSS_SELL_TOP_N` finales. El artefacto item-item entrena solo los top-20 vecinos por producto, y para algunos productos (p.ej. baterías) los 20 vecinos son TODOS de su misma categoría -- sin señal cruzada real disponible. Cuando la selección final queda concentrada en una sola categoría, se reemplazan hasta 2 sugerencias por los productos más vendidos de OTRAS categorías (`fuente: popularidad_otra_categoria`), para que el asistente siempre ofrezca opciones de venta cruzada real entre categorías, no solo variantes del mismo producto.
 
+**Actualización 2026-07-28 (Fase 1 de `docs/features/plan_refactor_venta_cruzada_ia.md`, auditoría previa `docs/auditoria/40_refactor_venta_cruzada.md`):**
+
+- **RN-CS4 (CLV histórico, decisión de negocio 2026-07-28):** el "valor del cliente" que expone el perfil 360 del asistente (`GET /cross-selling/clientes/{id}/perfil`) es `SUM(subtotal_neto)` de TODA la historia de facturas válidas del cliente (`Cartera360Repository.get_perfil_cliente`) -- **histórico, no predictivo** (se descartó BG/NBD + Gamma-Gamma por requerir un modelo nuevo sin justificación de negocio todavía). A diferencia de `valor_historico` de la cartera de UN vendedor (`get_lista_trabajo`, RN-V1, ventana de 12 meses), este es TODA la historia del cliente sin filtrar por vendedor ni ventana -- un cliente puede haber comprado a más de un vendedor a lo largo del tiempo, y el perfil 360 responde "¿cuánto vale este cliente para la empresa?", no "¿cuánto le ha comprado a MI cartera este año?".
+- **RN-CS5 (estado vacío real para "sin historial", no ceros):** cuando un cliente no tiene ninguna venta válida en el EDW, el perfil devuelve `tiene_historial: false` y todos los campos agregados en `null` (`num_compras`, `valor_historico`, `ticket_promedio`, etc.) -- nunca `0`, que en la UI se leería como "cliente sin valor" en vez de "sin datos todavía". Confirmado con evidencia real en la auditoría 40 (A0-3): 57.8% de la cartera tiene una sola compra registrada y 77.1% menos de 3 meses de historial -- el caso "historial escaso" es el típico, no el raro, y el diseño (incluida la Fase 2 del plan, el ranker) debe tratarlo como tal.
+- **`probabilidad_recompra` es `100 - probabilidad_abandono` de `churn_rf`, no un modelo aparte** (decisión de negocio 2026-07-28): mostrar la misma cifra de churn reexpresada como "probabilidad de recompra" en el perfil 360, documentado así en el schema (`PerfilClienteResponse`) para no sugerir un tercer modelo independiente donde solo hay uno.
+- **RLS obligatoria en el nuevo endpoint** (decisión §3 punto 6 del plan): `GET /cross-selling/clientes/{id}/perfil` aplica el mismo `_verificar_pertenencia_cartera` que `/churn-risk`/`/recommendations`/`/clientes/{id}/segmento` (auditoría 34, H-V2) -- un cliente ajeno a la cartera del vendedor autenticado responde 403, verificado con test de integración (`backend/tests/integration/test_cross_selling_fase1.py`).
+
+**Actualización 2026-07-28 (Fase 2-3 del mismo plan):**
+
+- **RN-CS6 (ranker no promovido, sin cambio de serving):** el modelo `cross_sell_ranker`
+  (7º modelo, Fase 2) se entrenó y evaluó con datos reales del EDW pero NO superó la línea
+  base del motor item-item vigente en el backtest (Precision@5=0.0369 vs. 0.0782 fresco,
+  mismo protocolo de la auditoría 25) -- por la regla de decisión fijada de antemano (§2.4
+  del plan), no se promueve. `registry.json` y el serving del backend quedan sin cambios;
+  el contrato `cross_sell_ranker` permanece en `status: draft`. Detalle completo, incluida
+  la hipótesis de por qué falló (sesgo de distribución train/serving en el muestreo de
+  negativos), en `docs/auditoria/40_refactor_venta_cruzada.md` §Fase 2 aplicada.
+- **RN-CS7 (simulación de canasta, solo cifras reales):** `POST /cross-selling/simular`
+  (Fase 3) nunca predice -- `ticket_estimado`/`margen_estimado` son sumas reales de
+  `dim_producto.precio_oficial`/`costo_promedio` vigente (`margen_estimado` es `None`
+  cuando falta el costo de CUALQUIER producto de la canasta, nunca una suma parcial
+  engañosa); `incremento_vs_ticket_promedio_cliente` y `probabilidad_recompra` reutilizan
+  el perfil de cliente de la Fase 1 (CLV histórico y `churn_rf`) sin cálculo nuevo. No
+  expone "probabilidad de cierre de venta" (el EDW no tiene ventas perdidas, decisión de
+  negocio confirmada) ni "probabilidad de compra por producto" (dependía del ranker de la
+  Fase 2, no promovido). RLS obligatoria cuando se pasa `cliente_id` (mismo criterio de
+  H-V2).
+
+**Actualización 2026-07-28 (Fases 4-6 del mismo plan, bajo la restricción explícita del usuario "esto no debe contener ninguna simulacion, todos con datos reales"):**
+
+- **RN-CS8 (combos inteligentes, 4 estrategias sin campos inventados):** `GET /cross-selling/combos` (Fase 4) expone 4 estrategias -- Oferta Estrella (coocurrencia real de facturas, `get_top_combinaciones`), Mayor Rentabilidad (`get_top_margen_relativo`, top-1 por categoría con costo y venta reales), Cliente Frecuente (solo con `cliente_id`, `popularidad` = % real del gasto histórico del cliente sobre sus productos favoritos) y Protección Total (`get_top_productos_diversos`). "Ideal para Flotas" queda fuera por decisión de negocio ya tomada (sin definición de "cliente de flota/corporativo" derivable del EDW, §8.4 del plan). Los campos `confianza`/`incremento_esperado` del diseño original del plan se OMITEN del contrato (`CombinacionInteligente`) en vez de rellenarse con `None`/placeholders, porque ninguna de las 4 estrategias tiene una base real para calcularlos sin el ranker de la Fase 2 (no promovido). `margen_esperado` es `None` si falta el costo de cualquier producto del combo (mismo criterio agregado que RN-CS7).
+- **RN-CS9 (decomposición del score, dos medidores, no una barra apilada):** `GET /cross-selling/sugerencias` (Fase 5) expone `factor_margen` (siempre real, `1.0` neutro) junto al `score` existente. Como el orden final de sugerencias resulta de **multiplicar** `score × factor_margen`, no de sumarlos, el frontend (`ScoreDecompositionBar.tsx`) los renderiza como dos medidores independientes normalizados contra el máximo de la lista visible -- una barra apilada aditiva sería una representación visual falsa de cómo se compone el ranking real.
+- **RN-CS10 (explicabilidad real vía SHAP, etiquetado explícito, R-3 del plan):** `GET /cross-selling/clientes/{id}/explicacion-churn` (Fase 6) expone la contribución real de cada feature de `churn_rf` (`recency`, `frequency`, `monetary_value`, `average_ticket`) al riesgo de abandono del cliente, calculada con `shap.TreeExplainer` sobre el modelo ya entrenado -- sin modelo nuevo, sin texto generado. El panel se etiqueta explícitamente **"Explicación del modelo (SHAP)"** (`WhyExplanationPanel.tsx`), nunca "IA" ni lenguaje que sugiera generación de contenido, cumpliendo R-3 del plan (no fingir IA generativa donde hay un cálculo determinista/estadístico real). RLS obligatoria (mismo criterio de H-V2); consulta bajo demanda (solo al expandir el panel), no en cada carga del perfil, por el costo real de calcular SHAP.
+
 ## 18. Comisiones Variables por Margen/Categoría (RN-CM1..RN-CM4)
 
 Reglas del sistema de Comisiones Variables (`docs/features/plan_integracion_comisiones_variables.md`, auditoría 30 — `docs/auditoria/30_comisiones_variables.md`). Convive con el esquema plano existente (regla 15/`commission_engine.calcular_comision`), activado por `COMISION_MODO` (`plana` default, `sombra`, `variable`) en `backend/app/core/config.py`.

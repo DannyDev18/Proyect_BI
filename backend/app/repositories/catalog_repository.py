@@ -164,6 +164,23 @@ class CatalogRepository:
         ), {"cliente_id": cliente_id}).fetchone()
         return int(row[0]) if row else None
 
+    def get_cliente_datos(self, cliente_id: str) -> dict[str, Any] | None:
+        """Nombre (PII real, `public.cliente_lookup`) + ciudad (`edw.dim_cliente`
+        vigente) de un cliente por id transaccional. Usado por el perfil de cliente
+        360 del asistente de Venta Cruzada (Fase 1) -- una sola consulta, no dos
+        round-trips separados para dos campos del mismo cliente."""
+        row = self.db.execute(text(
+            """
+            SELECT l.nombre_cliente, c.ciudad
+            FROM public.cliente_lookup l
+            LEFT JOIN edw.dim_cliente c ON c.hash_anonimo = l.hash_anonimo AND c.es_vigente
+            WHERE l.id_cliente_transaccional = :cliente_id
+            """
+        ), {"cliente_id": cliente_id}).fetchone()
+        if not row:
+            return None
+        return {"nombre": row[0] or "", "ciudad": row[1]}
+
     def cliente_pertenece_a_vendedor(self, cliente_id: str, codven: str) -> bool:
         """Verifica que el vendedor `codven` le haya vendido alguna vez a `cliente_id`
         -- RLS de cartera (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V2): antes
@@ -190,20 +207,59 @@ class CatalogRepository:
         `nombre_cliente` son PII REAL que solo puede vivir en `public.cliente_lookup`
         (aislada del EDW a propósito, regla de negocio 8) -- `edw.dim_cliente` solo tiene
         `hash_anonimo`, nunca texto plano, así que esos dos campos concretos deben salir
-        de ahí; el join se hace sobre el EDW, no al revés."""
+        de ahí; el join se hace sobre el EDW, no al revés.
+
+        Enriquecida (Fase 1, docs/features/plan_refactor_venta_cruzada_ia.md CAMBIO 1):
+        `ciudad` (`dim_cliente`, sin dimensión geográfica separada -- `dim_geografia`
+        está vacía, hallazgo abierto de la auditoría 05), y `ultima_compra`/
+        `frecuencia_12m`/`n_compras` calculados en una CTE aparte que agrega
+        `fact_ventas_detalle` SOLO para los candidatos ya acotados por el `LIMIT` del
+        autocompletar (nunca sobre todo el catálogo de clientes) -- sigue siendo una
+        consulta barata apta para dispararse en cada tecla. Sin modelos ML: el
+        autocompletar no puede esperar una inferencia."""
         like = f"%{query}%"
         rows = self.db.execute(text(
             """
-            SELECT l.id_cliente_transaccional, l.nombre_cliente
-            FROM edw.dim_cliente c
-            JOIN public.cliente_lookup l ON l.hash_anonimo = c.hash_anonimo
-            WHERE c.es_vigente AND c.cliente_sk <> -1
-              AND (l.id_cliente_transaccional ILIKE :like OR l.nombre_cliente ILIKE :like)
-            ORDER BY l.nombre_cliente
-            LIMIT :limit
+            WITH candidatos AS (
+                SELECT c.cliente_sk, l.id_cliente_transaccional, l.nombre_cliente, c.ciudad
+                FROM edw.dim_cliente c
+                JOIN public.cliente_lookup l ON l.hash_anonimo = c.hash_anonimo
+                WHERE c.es_vigente AND c.cliente_sk <> -1
+                  AND (l.id_cliente_transaccional ILIKE :like OR l.nombre_cliente ILIKE :like)
+                ORDER BY l.nombre_cliente
+                LIMIT :limit
+            ),
+            historial AS (
+                SELECT
+                    fvd.cliente_sk,
+                    MAX(d.fecha_completa) AS ultima_compra,
+                    COUNT(DISTINCT fvd.num_factura) FILTER (
+                        WHERE d.fecha_completa >= CURRENT_DATE - INTERVAL '365 days'
+                    ) AS frecuencia_12m,
+                    COUNT(DISTINCT fvd.num_factura) AS n_compras
+                FROM edw.fact_ventas_detalle fvd
+                JOIN edw.dim_fecha d ON fvd.fecha_sk = d.fecha_sk
+                JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk
+                WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion
+                  AND fvd.cliente_sk IN (SELECT cliente_sk FROM candidatos)
+                GROUP BY fvd.cliente_sk
+            )
+            SELECT
+                c.id_cliente_transaccional, c.nombre_cliente, c.ciudad,
+                h.ultima_compra, h.frecuencia_12m, h.n_compras
+            FROM candidatos c
+            LEFT JOIN historial h ON h.cliente_sk = c.cliente_sk
+            ORDER BY c.nombre_cliente
             """
         ), {"like": like, "limit": limit}).fetchall()
-        return [{"cliente_id": str(r[0]), "nombre": r[1] or ""} for r in rows]
+        return [
+            {
+                "cliente_id": str(r[0]), "nombre": r[1] or "", "ciudad": r[2],
+                "ultima_compra": r[3], "frecuencia_12m": int(r[4]) if r[4] is not None else None,
+                "n_compras": int(r[5]) if r[5] is not None else None,
+            }
+            for r in rows
+        ]
 
     def get_top_productos_diversos(
         self, categorias_excluir: list[str], excluir_codarts: list[str], limit: int, min_productos_categoria: int = 5,
@@ -284,6 +340,51 @@ class CatalogRepository:
                 "codart_a": str(r[0]), "nombre_a": r[1] or "",
                 "codart_b": str(r[2]), "nombre_b": r[3] or "",
                 "facturas": int(r[4]),
+            }
+            for r in rows
+        ]
+
+    def get_top_margen_relativo(self, limit: int = 4, min_productos_categoria: int = 5) -> list[dict[str, Any]]:
+        """Top-1 producto por CATEGORÍA con mayor margen relativo `(precio-costo)/precio`
+        (una fila por categoría, para el combo "Mayor Rentabilidad" de la Fase 4,
+        docs/features/plan_refactor_venta_cruzada_ia.md) -- mismo patrón de diversidad
+        que `get_top_productos_diversos` (RN-CS3), para no devolver 4 variantes casi
+        idénticas de la misma categoría. Solo catálogo vigente CON costo real
+        (`costo_promedio > 0`, H25-4: nunca se inventa margen) y con al menos una venta
+        histórica real (excluye SKUs sin movimiento, que inflarían el ranking con
+        combinaciones de precio/costo nunca puestas a prueba en el mercado)."""
+        rows = self.db.execute(text(
+            """
+            SELECT codart, nombre_articulo, clase, precio_oficial, costo_promedio, margen_relativo
+            FROM (
+                SELECT
+                    p.codart, p.nombre_articulo, p.clase, p.precio_oficial, p.costo_promedio,
+                    (p.precio_oficial - p.costo_promedio) / p.precio_oficial AS margen_relativo,
+                    ROW_NUMBER() OVER (PARTITION BY p.clase ORDER BY (p.precio_oficial - p.costo_promedio) / p.precio_oficial DESC) AS rn
+                FROM edw.dim_producto p
+                WHERE p.es_vigente AND p.producto_sk <> -1
+                  AND p.costo_promedio IS NOT NULL AND p.costo_promedio > 0 AND p.precio_oficial > 0
+                  AND p.clase IS NOT NULL AND p.clase <> ''
+                  AND p.clase IN (
+                      SELECT clase FROM edw.dim_producto
+                      WHERE es_vigente AND producto_sk <> -1 AND clase IS NOT NULL AND clase <> ''
+                      GROUP BY clase HAVING count(*) >= :min_productos_categoria
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM edw.fact_ventas_detalle f
+                      JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                      WHERE f.producto_sk = p.producto_sk AND ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion
+                  )
+            ) ranked
+            WHERE rn = 1
+            ORDER BY margen_relativo DESC
+            LIMIT :limit
+            """
+        ), {"limit": limit, "min_productos_categoria": min_productos_categoria}).fetchall()
+        return [
+            {
+                "codart": str(r[0]), "nombre": r[1] or "", "categoria": r[2] or "",
+                "precio": float(r[3]), "margen_unitario": float(r[3]) - float(r[4]),
             }
             for r in rows
         ]

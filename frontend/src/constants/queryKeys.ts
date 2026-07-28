@@ -69,8 +69,12 @@ export const qk = {
     sugerencias: (items: string[], clienteId: string | null | undefined) =>
       ['cross-selling', 'sugerencias', items, clienteId] as const,
     kpis: (desde: string | undefined, hasta: string | undefined) => ['cross-selling', 'kpis', desde, hasta] as const,
-    topCombinaciones: () => ['cross-selling', 'top-combinaciones'] as const,
     productos: (q: string) => ['cross-selling', 'productos', q] as const,
     clientes: (q: string) => ['cross-selling', 'clientes', q] as const,
+    perfilCliente: (clienteId: string | null) => ['cross-selling', 'perfil-cliente', clienteId] as const,
+    simular: (items: string[], clienteId: string | null | undefined) =>
+      ['cross-selling', 'simular', items, clienteId] as const,
+    combos: (clienteId: string | null | undefined) => ['cross-selling', 'combos', clienteId] as const,
+    explicacionChurn: (clienteId: string | null) => ['cross-selling', 'explicacion-churn', clienteId] as const,
   },
 };

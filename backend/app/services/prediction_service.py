@@ -52,6 +52,13 @@ class PredictionService:
         self.model_loader = model_loader
         self.catalog_repo = catalog_repo
         self.recommendation_event_repo = recommendation_event_repo
+        # Fase 6 (docs/features/plan_refactor_venta_cruzada_ia.md §2.1 Opción A):
+        # cache en memoria de la explicación SHAP por cliente -- shap.TreeExplainer
+        # sobre 4 features es barato pero no gratis; el perfil de un cliente no cambia
+        # dentro del ciclo de vida de un worker (recency/frequency/etc. solo cambian
+        # con nuevas ventas). Se invalida solo al reiniciar el proceso -- suficiente
+        # para el volumen de este módulo, sin infra de caché distribuida nueva.
+        self._churn_explanation_cache: dict[str, list[dict[str, Any]]] = {}
 
     # ── Caso de uso: Predicción de ventas (Gerencia) ───────────────────────────
     def get_sales_forecast(
@@ -325,6 +332,48 @@ class PredictionService:
             logger.error(f"Fallo inferencia de churn para cliente_id={cliente_id}: {e}")
             return {"probabilidad_abandono": 0.0, "riesgo_alto": False}
 
+    def get_churn_explanation(self, cliente_id: str, codven_restriccion: str | None = None) -> list[dict[str, Any]]:
+        """Fase 6 (docs/features/plan_refactor_venta_cruzada_ia.md §2.1 Opción A):
+        explicabilidad REAL de `churn_rf` -- SHAP TreeExplainer sobre las 4 features
+        del contrato (recency/frequency/monetary_value/average_ticket). `churn_rf` es
+        siempre un ensamble de árboles (RF/XGBoost/LightGBM/CatBoost, competencia de
+        `model_selector.find_best_classification_model`), así que TreeExplainer aplica
+        sin importar cuál ganó. Etiquetado "Explicación del modelo" en el frontend, NO
+        "IA generativa" (R-3 del plan). Cacheado por cliente (ver `__init__`)."""
+        self._verificar_pertenencia_cartera(cliente_id, codven_restriccion)
+        if cliente_id in self._churn_explanation_cache:
+            return self._churn_explanation_cache[cliente_id]
+
+        features = self.prediction_repo.get_churn_features(cliente_id)
+        if features is None:
+            return []
+
+        df_live = pd.DataFrame([features._asdict()])
+        try:
+            import shap
+
+            X = inference._select_features(self.model_loader, 'churn_rf', df_live)
+            model = self.model_loader.get('churn_rf')
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer(X).values
+            # RandomForest/CatBoost devuelven (n_muestras, n_features, n_clases);
+            # XGBoost/LightGBM ya devuelven (n_muestras, n_features) para la clase
+            # positiva -- se normaliza a la contribución de la clase 1 (churn) en
+            # ambos casos, no se asume un shape fijo entre los 4 algoritmos posibles.
+            valores = shap_values[0, :, 1] if shap_values.ndim == 3 else shap_values[0]
+
+            contribuciones = [
+                {"feature": col, "valor": float(X[col].iloc[0]), "contribucion": float(valores[i])}
+                for i, col in enumerate(X.columns)
+            ]
+            contribuciones.sort(key=lambda c: abs(c["contribucion"]), reverse=True)
+        except Exception as e:
+            logger.error(f"Fallo explicación SHAP de churn para cliente_id={cliente_id}: {e}")
+            contribuciones = []
+
+        self._churn_explanation_cache[cliente_id] = contribuciones
+        return contribuciones
+
     def get_churn_risk_batch(self, cliente_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Misma inferencia que `get_churn_risk`, pero para un lote de clientes con UNA
         sola consulta + UNA sola llamada vectorizada al modelo (en vez de N round-trips)
@@ -463,6 +512,12 @@ class PredictionService:
                 "codart": cod, "nombre": info["nombre"], "precio": info["precio"],
                 "categoria": info["categoria"], "score": score, "motivo": motivo, "fuente": fuente,
                 "margen_unitario": margen_unitario,
+                # Fase 5 (docs/features/plan_refactor_venta_cruzada_ia.md, explicabilidad
+                # honesta de §2.1 para el caso sin ranker promovido -- ver auditoría 40):
+                # el orden final es literalmente `score × factor_margen`, así que exponer
+                # ambos sumandos por separado es la descomposición REAL del ranking, no
+                # una aproximación. `factor_margen` nunca se pierde tras el sort.
+                "factor_margen": round(factor_margen, 4),
                 "_orden": score * factor_margen,
             })
         sugerencias.sort(key=lambda s: s.pop("_orden"), reverse=True)
@@ -496,6 +551,7 @@ class PredictionService:
                         "motivo": "Producto popular de otra categoría — buena opción para ampliar la venta",
                         "fuente": "popularidad_otra_categoria",
                         "margen_unitario": info.get("margen_unitario"),
+                        "factor_margen": 1.0,
                     })
                 if nuevas:
                     seleccion = seleccion[: max(0, len(seleccion) - len(nuevas))] + nuevas

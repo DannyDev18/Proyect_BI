@@ -1,0 +1,65 @@
+{
+  "name": "cross_sell_ranker",
+  "version": "0.1.0",
+  "task": "classification",
+  "status": "draft",
+  "features": [
+    {"name": "score_item_item", "dtype": "float", "required": true, "nullable": false,
+     "description": "Score del artefacto `recommendation.pkl` (item-item, similitud coseno) entre el candidato y el contexto reciente del cliente (últimos 5 productos comprados antes del corte T). 0.0 cuando el candidato no aparece en las reglas item-item para ese contexto (llegó al pool por popularidad de respaldo)."},
+    {"name": "misma_categoria_que_canasta", "dtype": "int", "required": true, "nullable": false,
+     "description": "1 si `dim_producto.clase` del candidato coincide con la categoría más frecuente del contexto reciente del cliente; 0 en otro caso."},
+    {"name": "recency", "dtype": "float", "required": true, "nullable": false,
+     "description": "Días desde la última compra del cliente hasta el corte T. Misma definición que el contrato `churn` (v0.2.0)."},
+    {"name": "frequency", "dtype": "float", "required": true, "nullable": false,
+     "description": "Días distintos de compra del cliente hasta T. Misma definición que `churn`."},
+    {"name": "monetary_value", "dtype": "float", "required": true, "nullable": false,
+     "description": "SUM(subtotal_neto) del cliente hasta T. Misma definición que `churn`."},
+    {"name": "average_ticket", "dtype": "float", "required": true, "nullable": false,
+     "description": "monetary_value / frequency hasta T. Misma definición que `churn`."},
+    {"name": "p_abandono", "dtype": "float", "required": true, "nullable": false,
+     "description": "Salida del modelo YA ENTRENADO `churn_rf` (`churn.pkl`) aplicado a (recency, frequency, monetary_value, average_ticket) del propio cliente al corte T -- el modelo de churn entra como FEATURE de este ranker, no solo como servicio aparte (decisión de arquitectura del plan, §3)."},
+    {"name": "segmento_rfm", "dtype": "int", "required": true, "nullable": false,
+     "description": "cluster_id (0-3) del modelo YA ENTRENADO `segmentation` (`segmentation.pkl`, K-Means) aplicado a (recency, frequency, monetary_value) del cliente al corte T."},
+    {"name": "margen_relativo", "dtype": "float", "required": true, "nullable": false,
+     "description": "(precio_oficial - costo_promedio) / precio_oficial del candidato, catálogo VIGENTE (aproximación: no se reconstruye el precio/costo histórico a la fecha T, `dim_producto` es SCD2 pero se usa el catálogo actual -- simplificación documentada, ver notes). 0.0 cuando costo_promedio es NULL/0 (no se inventa margen, H25-4)."},
+    {"name": "precio_relativo_categoria", "dtype": "float", "required": true, "nullable": false,
+     "description": "precio_oficial del candidato / precio_oficial promedio de su categoría (`clase`), catálogo vigente."},
+    {"name": "ventas_7d_norm", "dtype": "float", "required": true, "nullable": false,
+     "description": "Líneas de venta del candidato en (T-7d, T] / promedio mensual histórico de líneas del candidato hasta T (mínimo 1 para evitar división por cero). Señal de estacionalidad de corto plazo -- el modelo aprende su peso, no hay artefacto por ventana (§2.3 del plan)."},
+    {"name": "ventas_30d_norm", "dtype": "float", "required": true, "nullable": false,
+     "description": "Igual que ventas_7d_norm, ventana de 30 días."},
+    {"name": "ventas_90d_norm", "dtype": "float", "required": true, "nullable": false,
+     "description": "Igual que ventas_7d_norm, ventana de 90 días."},
+    {"name": "mes", "dtype": "int", "required": true, "nullable": false, "description": "Mes calendario (1-12) del corte T."},
+    {"name": "semana_anio", "dtype": "int", "required": true, "nullable": false, "description": "Semana ISO del año (1-53) del corte T."},
+    {"name": "ya_compro_categoria", "dtype": "int", "required": true, "nullable": false,
+     "description": "1 si el cliente compró ALGÚN producto de la categoría del candidato antes de T; 0 en otro caso (incluye clientes sin historial -- R-8 del plan, arranque en frío no se excluye del dataset)."},
+    {"name": "dias_desde_ultima_compra_categoria", "dtype": "float", "required": true, "nullable": false,
+     "description": "Días desde la última compra del cliente en esa categoría hasta T. Sentinela 9999 cuando `ya_compro_categoria=0` (nunca, no 'hace mucho') -- convención elegida para que el árbol pueda separarlo del resto del rango sin imputar un valor plausible falso."},
+    {"name": "sucursal", "dtype": "string", "required": true, "nullable": false,
+     "description": "Sucursal MÁS FRECUENTE del cliente hasta T (moda, `edw.dim_sucursal.codigo`/`sucursal_sk` codificado one-hot en el entrenamiento) -- NUNCA la sucursal de la compra futura (sería fuga: esa sucursal se conoce recién cuando la compra ya ocurrió). Agregada por decisión de la auditoría 40 (docs/auditoria/40_refactor_venta_cruzada.md, A0-5): la afinidad item-item es fuertemente local por sucursal (intersección 0/20 en el top-20 de coocurrencia entre las 2 sucursales de mayor volumen), así que el ranker necesita saber en qué sucursal opera el cliente para poder aprender esa localidad, algo que la Etapa 1 (item-item global) no puede."}
+  ],
+  "target": {
+    "name": "label",
+    "transform": null,
+    "inverse_transform": null,
+    "description": "1 si el cliente compró el producto candidato por PRIMERA VEZ en (T, T+ML_RANKER_HORIZONTE_DIAS] (next-product-to-buy); 0 si el candidato fue propuesto por el item-item (o el respaldo de popularidad) en T y el cliente NO lo compró en esa ventana. Cortes temporales mensuales (ML_RANKER_CORTES_MESES, default 12): TODAS las features se calculan con datos <= T, la etiqueta observa (T, T+h] -- mismo patrón anti-fuga que `churn` (H-05). Split de evaluación CRONOLÓGICO por corte (cortes antiguos entrenan, recientes evalúan), nunca aleatorio."
+  },
+  "output": {
+    "type": "probability",
+    "unit": "",
+    "plausible_range": [0, 1]
+  },
+  "population_filter": {
+    "description": "Mismo filtro de estado/devolución/centinelas que el resto del pipeline (C-1, regla 12 CLAUDE.md). Positivos y negativos excluyen cliente_sk=-1 y producto_sk=-1.",
+    "sql_condition": "JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion AND fvd.cliente_sk <> -1 AND fvd.producto_sk <> -1"
+  },
+  "library_versions": {},
+  "data_range": {},
+  "known_serving_mismatch": [
+    "El artefacto serializado NO tiene una columna 'sucursal' literal: `preparar_matriz_features` (ml/src/features/cross_sell_ranker_features.py) la codifica one-hot contra el vocabulario de sucursales visto en el entrenamiento ('sucursal_<codigo>', ver `sucursal_valores_entrenamiento` en el sidecar) -- el contrato declara la feature LÓGICA (pre-codificación), no las columnas físicas del `.pkl`; `contract_validator` lo marca como INFO en modelos draft, no bloquea.",
+    "El serving en vivo (Fase 2.5, backend/) debe calcular estas mismas 15 features al momento de la inferencia con T=ahora, igual que `PredictionService.get_churn_risk`/`get_customer_segment` ya hacen para churn/segmentación -- pendiente de implementar, no es parte de esta pasada de entrenamiento.",
+    "margen_relativo/precio_relativo_categoria usan el catálogo VIGENTE (dim_producto SCD2 actual), no el precio/costo histórico a la fecha T de cada corte de entrenamiento -- simplificación deliberada (reconstruir precios históricos exactos por SCD2 habría exigido un JOIN adicional por vigencia temporal, fuera de alcance de esta pasada); el mismo criterio aplica en producción (siempre precios vigentes), así que no hay asimetría train/serving en esto."
+  ],
+  "notes": "PENDIENTE de completar tras el entrenamiento real (docs/features/plan_refactor_venta_cruzada_ia.md, Fase 2). Este contrato queda en status=draft hasta que el backtest decida si se promueve (regla de decisión fijada en el plan §2.4: Precision@5 >= línea base de recommendation.pkl manteniendo cobertura >= línea base)."
+}

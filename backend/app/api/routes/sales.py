@@ -6,7 +6,8 @@ import datetime
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import (
-    AnalyticsServiceDep, CommissionServiceDep, GoalMLServiceDep, PredictionServiceDep, resolve_sucursal_filter,
+    AnalyticsServiceDep, CommissionServiceDep, CrossSellEngineServiceDep, GoalMLServiceDep, PredictionServiceDep,
+    resolve_sucursal_filter,
 )
 from app.core.deps import CurrentUserDep, PermissionChecker
 from app.core.exceptions import ValidationError
@@ -17,9 +18,10 @@ from app.schemas.analytics import (
 )
 from app.schemas.commission import MiComisionResponse, PostGoalInvoiceItemResponse, PostGoalInvoicesResponse
 from app.schemas.cross_selling import (
-    ClienteBusqueda, CrossSellEventoRequest, CrossSellEventoResponse, CrossSellKpisResponse,
-    CrossSellSugerenciasRequest, CrossSellSugerenciasResponse, ProductoBusqueda, SugerenciaProducto,
-    TopCombinacionProducto, TopCombinacionesResponse,
+    ChurnExplicacionResponse, ClienteBusqueda, CombosResponse, CrossSellEventoRequest, CrossSellEventoResponse,
+    CrossSellKpisResponse, CrossSellSugerenciasRequest, CrossSellSugerenciasResponse, FeatureContribucion,
+    PerfilClienteResponse, ProductoBusqueda, ProductoFavorito, SimulacionVentaRequest, SimulacionVentaResponse,
+    SugerenciaProducto, TopCombinacionProducto, TopCombinacionesResponse,
 )
 
 router = APIRouter()
@@ -223,3 +225,66 @@ def search_cross_sell_productos(q: str, prediction_service: PredictionServiceDep
 )
 def search_cross_sell_clientes(q: str, prediction_service: PredictionServiceDep) -> list[ClienteBusqueda]:
     return [ClienteBusqueda(**c) for c in prediction_service.search_clientes(q)]
+
+
+@router.get(
+    "/cross-selling/clientes/{cliente_id}/perfil", response_model=PerfilClienteResponse,
+    dependencies=[Depends(vendedor_checker)],
+    summary="Perfil 360 de un cliente (RFM, churn, valor histórico) para el asistente de Venta Cruzada",
+)
+def get_cross_sell_perfil_cliente(
+    cliente_id: str, cross_sell_engine: CrossSellEngineServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+) -> PerfilClienteResponse:
+    """Fase 1 de docs/features/plan_refactor_venta_cruzada_ia.md: compone en una sola
+    llamada lo que antes requería 2-3 requests separados del frontend (churn +
+    segmento + agregados propios). RLS obligatoria (`_codven_restriccion`, mismo
+    criterio que `/churn-risk`)."""
+    perfil = cross_sell_engine.get_perfil_cliente(cliente_id, codven_restriccion)
+    perfil["productos_favoritos"] = [ProductoFavorito(**p) for p in perfil["productos_favoritos"]]
+    return PerfilClienteResponse(**perfil)
+
+
+@router.post(
+    "/cross-selling/simular", response_model=SimulacionVentaResponse, dependencies=[Depends(vendedor_checker)],
+    summary="Cifras reales de la canasta que el vendedor está armando (ticket, margen, CLV)",
+)
+def post_cross_sell_simular(
+    body: SimulacionVentaRequest, cross_sell_engine: CrossSellEngineServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+) -> SimulacionVentaResponse:
+    """Fase 3 de docs/features/plan_refactor_venta_cruzada_ia.md: recalcula en vivo con
+    cada cambio de canasta. RLS obligatoria cuando se pasa `cliente_id`."""
+    resultado = cross_sell_engine.simular_venta(body.items, body.cliente_id, codven_restriccion)
+    return SimulacionVentaResponse(**resultado)
+
+
+@router.get(
+    "/cross-selling/combos", response_model=CombosResponse, dependencies=[Depends(vendedor_checker)],
+    summary="Combos inteligentes por estrategia declarada (afinidad, margen, reincidencia, diversidad)",
+)
+def get_cross_sell_combos(
+    cross_sell_engine: CrossSellEngineServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+    cliente_id: str | None = None,
+) -> CombosResponse:
+    """Fase 4 de docs/features/plan_refactor_venta_cruzada_ia.md. RLS obligatoria
+    cuando se pasa `cliente_id`."""
+    return CombosResponse(combinaciones=cross_sell_engine.get_combos(cliente_id, codven_restriccion))
+
+
+@router.get(
+    "/cross-selling/clientes/{cliente_id}/explicacion-churn", response_model=ChurnExplicacionResponse,
+    dependencies=[Depends(vendedor_checker)],
+    summary="Explicación real (SHAP) del riesgo de abandono de un cliente -- 'Explicación del modelo', no IA generativa",
+)
+def get_cross_sell_explicacion_churn(
+    cliente_id: str, prediction_service: PredictionServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+) -> ChurnExplicacionResponse:
+    """Fase 6 de docs/features/plan_refactor_venta_cruzada_ia.md (Opción A). RLS
+    obligatoria, mismo criterio que `/churn-risk`."""
+    contribuciones = prediction_service.get_churn_explanation(cliente_id, codven_restriccion)
+    return ChurnExplicacionResponse(
+        cliente_id=cliente_id, contribuciones=[FeatureContribucion(**c) for c in contribuciones],
+    )

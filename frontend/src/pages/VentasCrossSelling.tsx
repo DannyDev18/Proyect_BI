@@ -1,19 +1,26 @@
-import { useState } from 'react';
-import { X } from 'lucide-react';
 import { Badge } from '../components/ui/Badge';
-import { Autocomplete } from '../components/ui/Autocomplete';
-import { TopCombinacionesPanel } from '../components/crossSelling/TopCombinacionesPanel';
 import { SaleAssistant } from '../components/crossSelling/SaleAssistant';
-import { useSearchClientes } from '../hooks/crossSelling';
-import type { ClienteBusqueda } from '../types/crossSelling';
+import { ClientProfileCard } from '../components/crossSelling/ClientProfileCard';
+import { IntelligentCombosPanel } from '../components/crossSelling/IntelligentCombosPanel';
+import { useCrossSellStore } from '../store/crossSellStore';
 
 /** Módulo de Venta Cruzada (docs/auditoria/25_modulo_cross_selling.md): página propia
  * bajo /ventas/cross-selling, mismo patrón que Metas y Comisiones (VendorGoalDashboard) --
- * no una sección embebida en el dashboard general de Ventas. */
+ * no una sección embebida en el dashboard general de Ventas.
+ *
+ * Orden jerárquico (revisión de usabilidad 2026-07-28, a pedido del usuario): el
+ * selector de cliente vive DENTRO de `SaleAssistant` (cliente y asistente son una sola
+ * herramienta de trabajo, no dos paneles separados) -- es lo primero que usa el
+ * vendedor. El Perfil 360 va INMEDIATAMENTE después del Asistente (no al final de la
+ * página) porque es el resultado directo de elegir cliente ahí mismo -- separarlo con
+ * Combos Inteligentes en medio dejaba el estado vacío "Busca un cliente para empezar"
+ * desconectado de dónde se busca al cliente. Combos Inteligentes cierra la página
+ * (otra vía de venta cruzada, pero de uso secundario frente al asistente). Se retiró
+ * el panel "Top combinaciones" (cards "Combo # más vendido junto"): quedó redundante
+ * con la estrategia "Oferta Estrella" de Combos Inteligentes, que muestra la misma
+ * coocurrencia real de facturas con más contexto. */
 export const VentasCrossSelling = () => {
-  const [cliente, setCliente] = useState<ClienteBusqueda | null>(null);
-  const [busquedaCliente, setBusquedaCliente] = useState('');
-  const clientesEncontrados = useSearchClientes(busquedaCliente);
+  const cliente = useCrossSellStore((s) => s.cliente);
 
   return (
     <div className="space-y-6">
@@ -26,43 +33,14 @@ export const VentasCrossSelling = () => {
         <Badge variant="info" dot>ML Activo — Filtrado Colaborativo Item-Item</Badge>
       </div>
 
-      <TopCombinacionesPanel />
-
-      {/* Cliente opcional: personaliza las sugerencias excluyendo lo ya comprado */}
-      <div className="card p-6 animate-fade-in-up stagger-1">
-        <h3 className="font-sans font-semibold text-slate-200 mb-4">Cliente (opcional)</h3>
-        {cliente ? (
-          <Badge variant="info" className="pr-1">
-            {cliente.nombre} <span className="font-mono text-xs opacity-70 ml-1">{cliente.cliente_id}</span>
-            <button onClick={() => setCliente(null)} className="ml-1 hover:text-danger">
-              <X size={12} />
-            </button>
-          </Badge>
-        ) : (
-          <Autocomplete<ClienteBusqueda>
-            placeholder="Busca por cédula/RUC o nombre del cliente…"
-            label="Personalizar sugerencias por cliente"
-            loading={clientesEncontrados.loading}
-            options={clientesEncontrados.data}
-            onQueryChange={setBusquedaCliente}
-            getKey={(c) => c.cliente_id}
-            onSelect={setCliente}
-            renderOption={(c) => (
-              <span className="flex justify-between">
-                <span className="truncate">{c.nombre}</span>
-                <span className="text-slate-500 font-mono text-xs ml-2 shrink-0">{c.cliente_id}</span>
-              </span>
-            )}
-          />
-        )}
-        {cliente && (
-          <p className="text-xs text-slate-500 mt-2">
-            Excluyendo productos ya comprados por <span className="text-slate-300">{cliente.nombre}</span>.
-          </p>
-        )}
-      </div>
-
       <SaleAssistant clienteId={cliente?.cliente_id ?? null} />
+
+      <ClientProfileCard cliente={cliente} />
+
+      <div>
+        <h3 className="font-sans font-semibold text-slate-200 mb-4">Combos inteligentes</h3>
+        <IntelligentCombosPanel clienteId={cliente?.cliente_id ?? null} />
+      </div>
     </div>
   );
 };

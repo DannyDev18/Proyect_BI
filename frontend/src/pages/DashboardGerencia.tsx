@@ -179,22 +179,7 @@ export const DashboardGerencia = () => {
             ))}
           </Select>
         </FilterField>
-
-        {/* G-04: un número solo no es un indicador; lo es cuando se compara. El modo por
-            defecto conserva el comportamiento histórico (período anterior de igual longitud). */}
-        <FilterField label="Comparar contra">
-          <Select
-            aria-label="Período de referencia de las tendencias"
-            value={filters.modo_comparacion}
-            onChange={(e) => setFilters(f => ({ ...f, modo_comparacion: e.target.value as ModoComparacion }))}
-            className="min-w-[190px]"
-            disabled={!filters.start_date || !filters.end_date}
-          >
-            {(Object.keys(MODO_COMPARACION_LABEL) as ModoComparacion[]).map(modo => (
-              <option key={modo} value={modo}>{MODO_COMPARACION_LABEL[modo]}</option>
-            ))}
-          </Select>
-        </FilterField>
+       
       </FilterBar>
 
       {/* G-04: decir explícitamente contra qué se compara. Sin esto, una variación de "+14%"

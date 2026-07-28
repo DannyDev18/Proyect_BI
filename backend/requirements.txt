@@ -30,3 +30,8 @@ lightgbm==4.6.0
 openpyxl>=3.1.0,<4.0.0
 # Rate limiting de /auth/login (S-3, docs/features/plan_correcciones_pendientes.md)
 slowapi>=0.1.9,<0.2.0
+# Explicabilidad real de churn_rf (Fase 6, docs/features/plan_refactor_venta_cruzada_ia.md
+# §2.1 Opción A): shap.TreeExplainer sobre 4 features -- churn_rf es siempre un ensamble de
+# árboles (RF/XGBoost/LightGBM/CatBoost, competencia de model_selector.py), TreeExplainer
+# aplica a los 4 sin distinción de cuál ganó.
+shap>=0.46.0,<0.47.0

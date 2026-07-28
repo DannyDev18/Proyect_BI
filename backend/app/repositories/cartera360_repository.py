@@ -77,6 +77,88 @@ class Cartera360Repository:
             })
         return resultado
 
+    def get_perfil_cliente(self, cliente_id: str) -> dict[str, Any] | None:
+        """Perfil agregado de UN cliente para el asistente de Venta Cruzada (Fase 1,
+        docs/features/plan_refactor_venta_cruzada_ia.md CAMBIO 1). A diferencia de
+        `get_lista_trabajo` (cartera de UN vendedor), aquí se agrega la historia
+        completa del cliente sin filtrar por `codven` -- decisión de negocio §2.4 del
+        plan: CLV histórico = `SUM(subtotal_neto)` de TODA la historia del cliente,
+        no solo lo vendido por el vendedor que lo consulta (un cliente puede haber
+        comprado a más de un vendedor). El ticket promedio se calcula por FACTURA
+        (`num_factura`), no por línea -- una factura con 5 líneas no son 5 tickets."""
+        query = """
+            WITH lineas AS (
+                SELECT f.num_factura, d.fecha_completa AS fecha, f.subtotal_neto AS neto,
+                       p.clase AS categoria
+                FROM edw.fact_ventas_detalle f
+                JOIN edw.dim_cliente c ON f.cliente_sk = c.cliente_sk
+                JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
+                JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+                WHERE l.id_cliente_transaccional = :cliente_id
+                  AND ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion AND p.producto_sk <> -1
+            ),
+            facturas AS (
+                SELECT num_factura, MIN(fecha) AS fecha, SUM(neto) AS total_factura
+                FROM lineas GROUP BY num_factura
+            ),
+            categoria_favorita AS (
+                SELECT categoria, SUM(neto) AS venta FROM lineas
+                WHERE categoria IS NOT NULL AND categoria <> ''
+                GROUP BY categoria ORDER BY venta DESC LIMIT 1
+            )
+            SELECT
+                (SELECT COUNT(*) FROM facturas) AS num_compras,
+                (SELECT MAX(fecha) FROM facturas) AS ultima_compra,
+                (SELECT MIN(fecha) FROM facturas) AS primera_compra,
+                (SELECT COALESCE(SUM(total_factura), 0) FROM facturas) AS valor_historico,
+                (SELECT COALESCE(AVG(total_factura), 0) FROM facturas) AS ticket_promedio,
+                (SELECT COUNT(*) FILTER (WHERE fecha >= CURRENT_DATE - INTERVAL '365 days') FROM facturas) AS frecuencia_12m,
+                (SELECT categoria FROM categoria_favorita) AS categoria_favorita
+        """
+        row = self.db.execute(text(query), {"cliente_id": cliente_id}).fetchone()
+        if row is None or row[0] == 0:
+            return None
+        num_compras = int(row[0])
+        ultima_compra = row[1]
+        primera_compra = row[2]
+        antiguedad_dias = (datetime.date.today() - primera_compra).days if primera_compra else None
+        return {
+            "num_compras": num_compras,
+            "ultima_compra": ultima_compra,
+            "antiguedad_dias": antiguedad_dias,
+            "valor_historico": round(float(row[3] or 0), 2),
+            "ticket_promedio": round(float(row[4] or 0), 2),
+            "frecuencia_12m": int(row[5] or 0),
+            "categoria_favorita": row[6],
+        }
+
+    def get_productos_favoritos_cliente(self, cliente_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Top productos (por venta neta acumulada) del cliente, para el panel de
+        perfil del asistente de Venta Cruzada (Fase 1) y el combo "Cliente Frecuente"
+        de la Fase 4 (`venta_acumulada` real, usada ahí para calcular qué fracción del
+        gasto histórico del cliente representan sus productos favoritos -- nunca un
+        porcentaje inventado). Mismas exclusiones que el resto del repositorio (estado
+        válido, sin devoluciones, catálogo vigente)."""
+        rows = self.db.execute(text(
+            """
+            SELECT p.codart, p.nombre_articulo, SUM(f.subtotal_neto) AS venta
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_cliente c ON f.cliente_sk = c.cliente_sk
+            JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+            WHERE l.id_cliente_transaccional = :cliente_id
+              AND ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion AND p.producto_sk <> -1
+              AND p.es_vigente
+            GROUP BY p.codart, p.nombre_articulo
+            ORDER BY venta DESC
+            LIMIT :limit
+            """
+        ), {"cliente_id": cliente_id, "limit": limit}).fetchall()
+        return [{"codart": str(r[0]), "nombre": r[1] or "", "venta_acumulada": float(r[2] or 0)} for r in rows]
+
     # ── Registro de gestión (mismo patrón que public.recomendaciones_eventos) ──
     def log_gestion(
         self, usuario_id: int, cliente_sk: int | None, evento: str, motivo: str | None = None,

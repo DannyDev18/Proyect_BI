@@ -36,6 +36,18 @@ MUESTRA_ANOMALIAS = int(os.getenv("ML_MUESTRA_ANOMALIAS", "20000"))
 # (mismo patrón que `_forecast_ml_producto` usa hoy para historial vacío).
 DEMANDA_MIN_MESES_VENTA = int(os.getenv("ML_DEMANDA_MIN_MESES_VENTA", "6"))
 
+# Parámetros del dataset de ranking de Venta Cruzada (Fase 2, docs/features/
+# plan_refactor_venta_cruzada_ia.md; auditoría previa docs/auditoria/40_refactor_venta_cruzada.md,
+# A0-0 confirmó volumen de sobra: ~4.765 pares positivos/corte sobre 95 cortes posibles).
+# Se acotan los cortes a los últimos ML_RANKER_CORTES_MESES (no los 95 disponibles) para
+# mantener el tiempo de entrenamiento razonable -- sigue siendo un volumen muy superior al
+# de churn (296.981 filas cliente×corte con solo 6 cortes).
+RANKER_HORIZONTE_DIAS = int(os.getenv("ML_RANKER_HORIZONTE_DIAS", "60"))
+RANKER_N_CORTES = int(os.getenv("ML_RANKER_CORTES_MESES", "12"))
+RANKER_ESPACIADO_DIAS = int(os.getenv("ML_RANKER_ESPACIADO_DIAS", "30"))
+RANKER_RATIO_NEGATIVOS = int(os.getenv("ML_RANKER_RATIO_NEGATIVOS", "3"))
+RANKER_TOP_CANDIDATOS = int(os.getenv("ML_RANKER_TOP_CANDIDATOS", "50"))
+
 
 class SalesTimeSerieExtractor:
     def __init__(self):
@@ -256,6 +268,31 @@ class SalesTimeSerieExtractor:
         return pd.concat(frames, ignore_index=True)[
             ['cliente_sk', 'fecha_corte', 'recency', 'frequency', 'monetary_value', 'average_ticket', 'is_churn']
         ]
+
+    def fetch_cross_sell_transacciones(self) -> pd.DataFrame:
+        """Líneas de venta válidas con producto+sucursal+economía, para construir el
+        dataset de ranking de Venta Cruzada (Fase 2, docs/features/
+        plan_refactor_venta_cruzada_ia.md). A diferencia de `fetch_customer_transactions`
+        (solo cliente/fecha/monto, usada por `fetch_churn_data`), aquí se necesita
+        también `codart`/`clase`/`sucursal_sk` porque las features del ranker son a
+        nivel (cliente, producto candidato), no solo (cliente, fecha). Mismos filtros
+        de negocio que el resto del pipeline (C-1, regla 12 CLAUDE.md); catálogo VIGENTE
+        (`es_vigente`) porque el candidato debe ser un producto que hoy se pueda vender."""
+        sql = """
+            SELECT
+                fvd.cliente_sk, p.codart, p.clase AS categoria, fvd.sucursal_sk,
+                df.fecha_completa AS fecha, fvd.subtotal_neto
+            FROM edw.fact_ventas_detalle fvd
+            JOIN edw.dim_fecha df ON fvd.fecha_sk = df.fecha_sk
+            JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk
+            JOIN edw.dim_producto p ON fvd.producto_sk = p.producto_sk
+            WHERE ed.estado_documento_sk <> -1 AND NOT ed.es_devolucion
+              AND fvd.cliente_sk <> -1 AND fvd.producto_sk <> -1 AND p.es_vigente
+        """
+        df = pd.read_sql(sql, self.engine)
+        if not df.empty:
+            df['fecha'] = pd.to_datetime(df['fecha'])
+        return df
 
     def fetch_market_basket(self, ventana_anios: int | None = None, limite: int | None = None) -> pd.DataFrame:
         """Líneas de venta para reglas de asociación. La transacción real es la factura

@@ -5,9 +5,7 @@ import {
 } from '../services/goals';
 import { qk } from '../constants/queryKeys';
 import type { GoalPeriod, GoalProposal, GoalsAISummary, VendorCommissionRow } from '../types/goals';
-
-const errorMessage = (error: unknown): string | null =>
-  error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
+import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 // Stable references so effects keyed on `.data` don't re-fire every render while loading.
 const EMPTY_PERIODS: GoalPeriod[] = [];
@@ -23,10 +21,10 @@ export const usePeriods = () => {
   return { data: query.data ?? EMPTY_PERIODS, loading: query.isLoading, error: errorMessage(query.error) };
 };
 
-export const useGoalsTracking = (anio: number, mes: number) => {
+export const useGoalsTracking = (anio: number, mes: number, vendedor?: string | null) => {
   const query = useQuery({
-    queryKey: qk.goals.tracking(anio, mes),
-    queryFn: () => getGoalsTracking(anio, mes).then((r) => r.data.reporte_cumplimiento || []),
+    queryKey: qk.goals.tracking(anio, mes, vendedor),
+    queryFn: () => getGoalsTracking(anio, mes, vendedor).then((r) => r.data.reporte_cumplimiento || []),
   });
   return { data: query.data ?? EMPTY_PROPOSALS, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };
@@ -51,10 +49,10 @@ export const useGoalsAISummary = () => {
 
 /** Comisiones (docs/modulo_metas.md): cumplimiento real + comisión devengada por
  * vendedor en el período, para el panel gerencial. */
-export const useCommissionTracking = (anio: number, mes: number) => {
+export const useCommissionTracking = (anio: number, mes: number, vendedor?: string | null) => {
   const query = useQuery({
-    queryKey: qk.goals.commissionTracking(anio, mes),
-    queryFn: () => getCommissionTracking(anio, mes).then((r) => r.data.comisiones),
+    queryKey: qk.goals.commissionTracking(anio, mes, vendedor),
+    queryFn: () => getCommissionTracking(anio, mes, vendedor).then((r) => r.data.comisiones),
   });
   return { data: query.data ?? EMPTY_COMMISSIONS, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };

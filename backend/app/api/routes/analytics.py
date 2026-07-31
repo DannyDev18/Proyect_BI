@@ -91,8 +91,7 @@ def get_reporte_dashboard(
     almacen: str | None = None,
 ) -> ReporteDashboardResponse:
     """Fase 2 Gerencia: reporte tipado del dashboard principal (resumen ejecutivo +
-    secciones), mismo contrato que los reportes de Bodega. El frontend lo puede
-    renderizar con vista imprimible (PDF vía `window.print()`, sin librería nueva)."""
+    secciones), mismo contrato que los reportes de Bodega."""
     return ReporteDashboardResponse(**_generar_reporte_dashboard(
         analytics_service, commission_service, sucursal_filtro, start_date, end_date, categoria, vendedor, almacen,
     ))

@@ -3,7 +3,6 @@ export interface GerenciaKPIs {
   // antes el frontend lo reconstruía sumando `ventas_por_sucursal`, una fuente que
   // excluye sucursales con neto exactamente 0 y podía divergir del total real.
   ingresos_totales: number;
-  ventas_consolidadas?: number;
   ticket_promedio: number;
   margen_utilidad_neta: number;
   // docs/auditoria/39_madurez_bi_toma_decisiones.md, H-02: reemplaza a `roi_estimado`

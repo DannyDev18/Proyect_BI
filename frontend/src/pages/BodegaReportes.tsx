@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, FileDown, FileSpreadsheet, Printer } from 'lucide-react';
+import { ArrowLeft, FileDown, FileSpreadsheet } from 'lucide-react';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
 import { BodegaFilterBar } from '../components/bodega/BodegaFilterBar';
 import { useReporteBodega } from '../hooks/bodega';
 import { descargarReporteExcel } from '../services/bodega';
@@ -29,6 +30,18 @@ const REPORTES: { tipo: TipoReporteBodega; titulo: string; pregunta: string; des
     pregunta: '¿Cómo cerró el mes el inventario?',
     descripcion: 'Consolidado mensual: críticos, excesos, comparativa y plan de compras (§2.3)',
   },
+  {
+    tipo: 'sin-venta',
+    titulo: 'Artículos sin movimiento en ventas',
+    pregunta: '¿Qué artículos no se están vendiendo?',
+    descripcion: 'Estancados (con stock) o sin venta completo, por almacén, con última venta real (§6.2)',
+  },
+  {
+    tipo: 'kardex',
+    titulo: 'Movimientos de Kardex',
+    pregunta: '¿Qué movimientos de inventario hubo?',
+    descripcion: 'Entradas y salidas individuales por almacén, con existencia global derivada del kardex (§6.7)',
+  },
 ];
 
 const tonoCls: Record<TonoKpi, string> = {
@@ -37,11 +50,14 @@ const tonoCls: Record<TonoKpi, string> = {
   neutral: 'text-slate-200',
 };
 
-const RESALTAR_VALORES = new Set(['Alta', 'Crítico']);
+// Fase 6.1 (H-2, RN-B11): "Inmovilizado" se resalta igual que "Crítico" -- es el peor
+// caso de sobre-stock (stock parado, cero salidas), no un estado neutro.
+const RESALTAR_VALORES = new Set(['Alta', 'Crítico', 'Inmovilizado']);
 const BADGE_VARIANT: Record<string, 'danger' | 'warning' | 'info' | 'success' | 'neutral'> = {
-  alta: 'danger', crítico: 'danger',
+  alta: 'danger', crítico: 'danger', inmovilizado: 'danger',
   media: 'warning', cerca: 'warning', baja: 'neutral',
   seguro: 'success', exceso: 'info',
+  entrada: 'success', salida: 'info',
 };
 
 const fmtCelda = (valor: unknown, columna: ColumnaReporte): React.ReactNode => {
@@ -105,20 +121,28 @@ const TablaSeccion = ({ seccion }: { seccion: SeccionReporte }) => {
   );
 };
 
-/** §2: Reportes de bodega para presentación a gerencia, con export Excel y PDF (print). */
+/** §2: Reportes de bodega para presentación a gerencia, con export Excel. */
 export const BodegaReportes = () => {
   const store = useBodegaFiltersStore();
   const filters = useMemo(() => toQueryFilters(store), [store]);
   const [tipo, setTipo] = useState<TipoReporteBodega>('justificacion');
   const [descargando, setDescargando] = useState(false);
-  const reporte = useReporteBodega(tipo, filters);
+  // §6.2: solo aplican a tipo="sin-venta" -- "estancados" (con stock) por defecto,
+  // que es la pregunta de negocio más frecuente ("¿qué se está quedando parado?").
+  const [soloConStock, setSoloConStock] = useState(true);
+  const [busqueda, setBusqueda] = useState('');
+  const extra = useMemo(
+    () => (tipo === 'sin-venta' ? { solo_con_stock: soloConStock, busqueda: busqueda || undefined } : {}),
+    [tipo, soloConStock, busqueda],
+  );
+  const reporte = useReporteBodega(tipo, filters, extra);
   const meta = REPORTES.find((r) => r.tipo === tipo)!;
   const toast = useToast();
 
   const exportarExcel = async () => {
     setDescargando(true);
     try {
-      await descargarReporteExcel(tipo, filters);
+      await descargarReporteExcel(tipo, filters, extra);
       toast('Reporte Excel descargado correctamente.', 'success');
     } catch {
       toast('No se pudo descargar el reporte Excel. Intenta nuevamente.', 'error');
@@ -145,16 +169,35 @@ export const BodegaReportes = () => {
             aria-label="Exportar reporte a Excel">
             {descargando ? 'Generando…' : 'Exportar Excel'}
           </Button>
-          <Button variant="primary" size="sm" onClick={() => window.print()} disabled={reporte.loading}
-            icon={<Printer size={14} aria-hidden="true" />} aria-label="Imprimir o exportar a PDF">
-            Imprimir / PDF
-          </Button>
         </div>
       </div>
 
       <div className="print:hidden">
         <BodegaFilterBar />
       </div>
+
+      {tipo === 'sin-venta' && (
+        <div className="card p-4 flex flex-wrap items-end gap-3 print:hidden">
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] uppercase tracking-widest text-slate-500" htmlFor="sin-venta-busqueda">
+              Buscar por código o nombre
+            </label>
+            <Input
+              id="sin-venta-busqueda" type="text" placeholder="Ej: 043714 o HANKOOK"
+              value={busqueda} onChange={(e) => setBusqueda(e.target.value)}
+              className="min-w-[220px]"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-300 pb-1.5">
+            <input
+              type="checkbox" checked={soloConStock}
+              onChange={(e) => setSoloConStock(e.target.checked)}
+              className="rounded border-slate-700 bg-slate-950 text-primary focus-ring"
+            />
+            Solo artículos con stock (estancados) — desmarcar para ver también los agotados
+          </label>
+        </div>
+      )}
 
       {/* Selector de reporte: cada tarjeta explica qué decisión soporta */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 print:hidden">
@@ -208,6 +251,13 @@ export const BodegaReportes = () => {
             <p className="text-sm text-slate-300 print:text-black bg-slate-900/60 print:bg-gray-50 border border-slate-800 print:border-gray-300 rounded-lg p-4 mb-6">
               {reporte.data.interpretacion}
             </p>
+
+            {/* Auditoría 43: ventana real de datos, cuando el reporte la declara */}
+            {reporte.data.nota_cobertura_datos && (
+              <p className="text-xs text-warning/90 print:text-gray-700 bg-warning/5 print:bg-gray-50 border border-warning/20 print:border-gray-300 rounded-lg p-3 mb-6">
+                ⚠ {reporte.data.nota_cobertura_datos}
+              </p>
+            )}
 
             {reporte.data.secciones.map((s) => <TablaSeccion key={s.titulo} seccion={s} />)}
           </>

@@ -24,12 +24,12 @@ import { UserMenuContent, initials, roleLabel } from './UserMenu';
 // Icons are a presentation concern, kept local to the Sidebar rather than in the permissions map.
 const NAV_ICONS: Partial<Record<RouteKey, ReactNode>> = {
   admin: <ShieldAlert size={20} />,
-  users: <Users size={20} />,
   gerencia: <LayoutDashboard size={20} />,
   bodega: <PackageSearch size={20} />,
   ventas: <TrendingUp size={20} />,
 };
 const SUB_NAV_ICONS: Partial<Record<RouteKey, ReactNode>> = {
+  'admin.usuarios': <Users size={16} />,
   'gerencia.metas': <Target size={16} />,
   'ventas.metas': <Target size={16} />,
   'ventas.cross-selling': <Sparkles size={16} />,

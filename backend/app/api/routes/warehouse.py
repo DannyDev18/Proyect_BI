@@ -1,18 +1,29 @@
 # backend/app/api/routes/warehouse.py
 """Bodega: dashboard de inventario y abastecimiento (docs/features/modulo_bodega.md,
-auditoría 23). Los endpoints legados `/kpis-inventory` y `/demand-forecasting` se
-conservan sin cambios (H23-7); el módulo nuevo vive en las rutas siguientes.
+auditoría 23). El endpoint legado `/demand-forecasting` se conserva sin cambios (H23-7);
+el módulo nuevo vive en las rutas siguientes.
 
 Routers thin (regla CLAUDE.md): sin lógica de negocio, solo inyección de dependencias
 y traducción de query params. RBAC: roles bodega/gerencia/administrador; el rol bodega
-queda forzado a su sucursal vía `resolve_sucursal_filter(allow_override=False)`."""
+queda forzado a sus almacenes asignados vía `resolve_almacenes_filter` (RN-B10,
+`public.usuario_almacenes`). `sucursal` NO se usa como filtro de seguridad en este
+módulo (docs/auditoria/42_..., hallazgo Bodega-sucursal): `edw.dim_sucursal` agrupa
+`codalm` muy distintos bajo un mismo nombre (ej. "PRINCIPAL: MATRIZ" agrupa 8 almacenes,
+incluidas camionetas de vendedores individuales y bodegas de consignación) -- no es la
+unidad de acceso real del rol bodega, y forzarla producía 0 filas para cualquier usuario
+cuyo `usuarios.sucursal` no calzara textualmente con `dim_sucursal.nombre_sucursal`
+(caso real confirmado: un usuario con `todos_los_almacenes=True` veía el dashboard
+completamente vacío)."""
+import datetime
+
 from fastapi import APIRouter, Depends, Response
 
 from app.api.dependencies import (
     AnalyticsServiceDep,
+    CatalogRepositoryDep,
     PredictionServiceDep,
     WarehouseServiceDep,
-    resolve_sucursal_filter,
+    resolve_almacenes_filter,
 )
 from app.core.deps import PermissionChecker
 from app.core.exceptions import NotFoundError
@@ -40,18 +51,17 @@ from app.services.warehouse_export import reporte_a_excel
 router = APIRouter()
 
 bodeguero_checker = PermissionChecker(allowed_roles=["administrador", "gerencia", "bodega"])
-sucursal_bodega = resolve_sucursal_filter(allow_override=False)
 
 
 # ── Endpoints legados (pre-módulo, consumidores existentes) ───────────────────
 @router.get("/kpis-inventory", response_model=BPKPIBodega, dependencies=[Depends(bodeguero_checker)])
 def get_warehouse_kpis(
     analytics_service: AnalyticsServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
+    almacenes_permitidos: list[str] | None = Depends(resolve_almacenes_filter),
 ) -> BPKPIBodega:
     """Ítems en sobrestock, en riesgo de desabastecimiento, y sugerencias de
-    transferencias inter-sucursales."""
-    kpis = analytics_service.get_warehouse_kpis(sucursal=sucursal_filtro)
+    transferencias entre almacenes."""
+    kpis = analytics_service.get_warehouse_kpis(almacenes_permitidos=almacenes_permitidos)
     return BPKPIBodega(**kpis)
 
 
@@ -70,13 +80,30 @@ def get_demand_prediction(
 def get_filtros(
     warehouse_service: WarehouseServiceDep,
     analytics_service: AnalyticsServiceDep,
+    catalog_repo: CatalogRepositoryDep,
+    almacenes_permitidos: list[str] | None = Depends(resolve_almacenes_filter),
+    categoria: str | None = None,
 ) -> FiltrosBodegaResponse:
-    """Catálogos para los filtros globales del dashboard de bodega."""
+    """Catálogos para los filtros globales del dashboard de bodega. El selector de
+    almacén (RN-B10) solo lista las bodegas asignadas al usuario -- si se creó para una
+    sola bodega, no ve las demás en el desplegable; si se marcó `todos_los_almacenes`,
+    ve el catálogo completo, igual que gerencia/administrador. `categoria` (Fase 2,
+    filtros "inteligentes"): si se pasa, `proveedores` se restringe a los que
+    realmente suministran esa categoría -- evita ofrecer combinaciones inexistentes."""
+    almacenes = analytics_service.get_almacenes()
+    if almacenes_permitidos is not None:
+        # `analytics_service.get_almacenes()` devuelve nombres (catálogo compartido con
+        # otros módulos); la asignación del usuario es por `codalm` -- se traduce vía
+        # CatalogRepository.list_almacenes() (mismo catálogo que usa el panel Admin).
+        nombres_permitidos = {
+            a["nombre_almacen"] for a in catalog_repo.list_almacenes() if a["codalm"] in almacenes_permitidos
+        }
+        almacenes = [n for n in almacenes if n in nombres_permitidos]
     data = warehouse_service.get_filtros({
-        "almacenes": analytics_service.get_almacenes(),
+        "almacenes": almacenes,
         "categorias": analytics_service.get_categories(),
         "sucursales": analytics_service.get_sucursales(),
-    })
+    }, categoria=categoria)
     return FiltrosBodegaResponse(**data)
 
 
@@ -84,7 +111,6 @@ def get_filtros(
 @router.get("/kpis", response_model=KpisBodegaResponse, dependencies=[Depends(bodeguero_checker)])
 def get_kpis_bodega(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
@@ -94,7 +120,7 @@ def get_kpis_bodega(
 ) -> KpisBodegaResponse:
     """Los 6 KPIs del dashboard (§1.2), afectados por los filtros globales."""
     data = warehouse_service.get_kpis(
-        sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
+        almacen=almacen, categoria=categoria,
         proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
     )
@@ -105,7 +131,6 @@ def get_kpis_bodega(
 @router.get("/salidas-forecast", response_model=SalidasForecastResponse, dependencies=[Depends(bodeguero_checker)])
 def get_salidas_forecast(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     producto_cod: str | None = None,
     almacen: str | None = None,
     categoria: str | None = None,
@@ -118,7 +143,7 @@ def get_salidas_forecast(
     declarada para agregados top-10)."""
     data = warehouse_service.get_salidas_forecast(
         producto_cod=producto_cod, dias_horizonte=dias_horizonte,
-        sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
+        almacen=almacen, categoria=categoria,
         proveedor=proveedor, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
     )
     return SalidasForecastResponse(**data)
@@ -127,7 +152,6 @@ def get_salidas_forecast(
 @router.get("/prediccion-compras-mes", response_model=PrediccionComprasMesResponse, dependencies=[Depends(bodeguero_checker)])
 def get_prediccion_compras_mes(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     categoria: str | None = None,
     producto_cod: str | None = None,
     almacen: str | None = None,
@@ -138,7 +162,7 @@ def get_prediccion_compras_mes(
     individual de uno de los top artículos devueltos por `categoria`."""
     data = warehouse_service.get_prediccion_compras_mes(
         categoria=categoria, producto_cod=producto_cod,
-        sucursal=sucursal_filtro, almacen=almacen, proveedor=proveedor,
+        almacen=almacen, proveedor=proveedor,
     )
     return PrediccionComprasMesResponse(**data)
 
@@ -146,7 +170,6 @@ def get_prediccion_compras_mes(
 @router.get("/rotacion-matriz", response_model=RotacionMatrizResponse, dependencies=[Depends(bodeguero_checker)])
 def get_rotacion_matriz(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
@@ -156,7 +179,7 @@ def get_rotacion_matriz(
 ) -> RotacionMatrizResponse:
     """G2: matriz rotación × margen por producto (cuadrantes de prioridad)."""
     data = warehouse_service.get_rotacion_matriz(
-        sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
+        almacen=almacen, categoria=categoria,
         proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
     )
@@ -166,7 +189,6 @@ def get_rotacion_matriz(
 @router.get("/top-productos", response_model=list[ProductoTopSalidas], dependencies=[Depends(bodeguero_checker)])
 def get_top_productos(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
@@ -177,7 +199,7 @@ def get_top_productos(
 ) -> list[ProductoTopSalidas]:
     """G3: top N productos con mayor salida, con stock, días y tendencia."""
     data = warehouse_service.get_top_productos(
-        sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
+        almacen=almacen, categoria=categoria,
         proveedor=proveedor, tipo_movimiento=tipo_movimiento,
         fecha_desde=fecha_desde, fecha_hasta=fecha_hasta, limit=min(limit, 100),
     )
@@ -187,7 +209,6 @@ def get_top_productos(
 @router.get("/salidas-categoria", response_model=list[CategoriaSalidas], dependencies=[Depends(bodeguero_checker)])
 def get_salidas_categoria(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     almacen: str | None = None,
     proveedor: str | None = None,
     tipo_movimiento: str | None = None,
@@ -196,7 +217,7 @@ def get_salidas_categoria(
 ) -> list[CategoriaSalidas]:
     """G4: distribución de salidas por categoría con comparativa vs período anterior."""
     data = warehouse_service.get_salidas_categoria(
-        sucursal=sucursal_filtro, almacen=almacen, proveedor=proveedor,
+        almacen=almacen, proveedor=proveedor,
         tipo_movimiento=tipo_movimiento, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
     )
     return [CategoriaSalidas(**d) for d in data]
@@ -205,7 +226,6 @@ def get_salidas_categoria(
 @router.get("/stock-reorden", response_model=Page[ProductoStockReorden], dependencies=[Depends(bodeguero_checker)])
 def get_stock_reorden(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     pagination: PaginationParams = Depends(pagination_params),
     almacen: str | None = None,
     categoria: str | None = None,
@@ -215,7 +235,7 @@ def get_stock_reorden(
 ) -> Page[ProductoStockReorden]:
     """G5: estado de stock vs punto de reorden (RN-B1/B2). Paginado (docs/auditoria/24)."""
     pagina = warehouse_service.get_stock_reorden(
-        pagination, sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
+        pagination, almacen=almacen, categoria=categoria,
         proveedor=proveedor, tipo_movimiento=tipo_movimiento, solo_criticos=solo_criticos,
     )
     return Page(
@@ -227,7 +247,6 @@ def get_stock_reorden(
 @router.get("/necesidad-compra", response_model=NecesidadCompraResponse, dependencies=[Depends(bodeguero_checker)])
 def get_necesidad_compra(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     pagination: PaginationParams = Depends(pagination_params),
     almacen: str | None = None,
     categoria: str | None = None,
@@ -238,7 +257,7 @@ def get_necesidad_compra(
     """G6 y §3.3 (RN-B4): proyección de necesidad de compra. `horizonte_dias=45`
     produce el plan de fin de mes. `recomendados` paginado (docs/auditoria/24)."""
     data = warehouse_service.get_necesidad_compra(
-        pagination, sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
+        pagination, almacen=almacen, categoria=categoria,
         proveedor=proveedor, tipo_movimiento=tipo_movimiento, horizonte_dias=horizonte_dias,
     )
     recomendados = data["recomendados"]
@@ -260,7 +279,6 @@ def get_necesidad_compra(
 @router.get("/inventario-matriz", response_model=InventarioMatrizResponse, dependencies=[Depends(bodeguero_checker)])
 def get_inventario_matriz(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     pagination: PaginationParams = Depends(pagination_params),
     almacen: str | None = None,
     categoria: str | None = None,
@@ -272,7 +290,7 @@ def get_inventario_matriz(
     Si se filtra por `almacen`, la matriz queda restringida a esa sola bodega (una
     columna) en vez de mostrar todas. Paginado (docs/auditoria/24)."""
     data = warehouse_service.get_inventario_matriz(
-        pagination, sucursal=sucursal_filtro, almacen=almacen, categoria=categoria,
+        pagination, almacen=almacen, categoria=categoria,
         proveedor=proveedor, tipo_movimiento=tipo_movimiento, estado=estado,
     )
     productos = data["productos"]
@@ -289,7 +307,6 @@ def get_inventario_matriz(
 @router.get("/transferencias-sugeridas", response_model=TransferenciasResponse, dependencies=[Depends(bodeguero_checker)])
 def get_transferencias_sugeridas(
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     pagination: PaginationParams = Depends(pagination_params),
     categoria: str | None = None,
     proveedor: str | None = None,
@@ -298,7 +315,7 @@ def get_transferencias_sugeridas(
     """§3.2 (RN-B3): transferencias inteligentes entre bodegas con prioridad y ahorro.
     Paginado (docs/auditoria/24)."""
     data = warehouse_service.get_transferencias_sugeridas(
-        pagination, sucursal=sucursal_filtro, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
+        pagination, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
     )
     sugerencias = data["sugerencias"]
     return TransferenciasResponse(
@@ -321,13 +338,17 @@ def get_transferencias_sugeridas(
 
 
 # ── §2 (Fase 5) Reportes tipados ────────────────────────────────────────────
-_TIPOS_REPORTE = {"justificacion", "transferencias", "analisis-mensual"}
+_TIPOS_REPORTE = {"justificacion", "transferencias", "analisis-mensual", "sin-venta", "kardex"}
 
 
 def _generar_reporte(
+    # `sucursal` ya no se resuelve desde ningún endpoint (siempre None) -- se conserva el
+    # parámetro porque `WarehouseService`/`WarehouseRepository` aún lo aceptan, ver
+    # docstring del módulo sobre por qué se retiró como filtro de seguridad/negocio.
     warehouse_service, tipo: str, sucursal: str | None, almacen: str | None,
     categoria: str | None, proveedor: str | None, tipo_movimiento: str | None,
     fecha_desde: str | None, fecha_hasta: str | None,
+    solo_con_stock: bool = True, busqueda: str | None = None,
 ) -> dict:
     if tipo == "justificacion":
         return warehouse_service.get_reporte_justificacion(
@@ -337,6 +358,16 @@ def _generar_reporte(
     if tipo == "transferencias":
         return warehouse_service.get_reporte_transferencias(
             sucursal=sucursal, categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento,
+        )
+    if tipo == "sin-venta":
+        return warehouse_service.get_reporte_sin_venta(
+            sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor,
+            fecha_desde=fecha_desde, fecha_hasta=fecha_hasta, solo_con_stock=solo_con_stock, busqueda=busqueda,
+        )
+    if tipo == "kardex":
+        return warehouse_service.get_reporte_kardex(
+            sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor,
+            tipo_movimiento=tipo_movimiento, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta, busqueda=busqueda,
         )
     return warehouse_service.get_reporte_analisis_mensual(
         sucursal=sucursal, almacen=almacen, categoria=categoria, proveedor=proveedor,
@@ -348,23 +379,28 @@ def _generar_reporte(
 def get_reporte(
     tipo: str,
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
     tipo_movimiento: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
+    solo_con_stock: bool = True,
+    busqueda: str | None = None,
 ) -> ReporteBodegaResponse:
     """§2: reporte tipado para gerencia (tipo: justificacion | transferencias |
-    analisis-mensual) -- resumen ejecutivo interpretado + secciones de tabla con
-    columnas de negocio (Fase 5, docs/auditoria/32_actualizacion_modulo_bodega.md).
-    El frontend lo renderiza con vista imprimible (PDF)."""
+    analisis-mensual | sin-venta | kardex) -- resumen ejecutivo interpretado +
+    secciones de tabla con columnas de negocio (Fase 5, docs/auditoria/32_actualizacion_
+    modulo_bodega.md). `solo_con_stock`/`busqueda` solo aplican a `tipo=sin-venta`
+    (Fase 6.2, H-9): reemplaza QUERY_PRODUCTOS_SIN_VENTA/QUERY_ARTICULOS_ESTANCADOS con
+    un solo reporte parametrizado. `tipo=kardex` (Fase 6.7, H-11) migra
+    QUERY_KARDEX_MOVIMIENTOS: listado de movimientos individuales, no un agregado.
+    El frontend lo renderiza como tabla; el export descargable es Excel (`/excel`)."""
     if tipo not in _TIPOS_REPORTE:
         raise NotFoundError(f"Tipo de reporte desconocido: {tipo}")
     contenido = _generar_reporte(
-        warehouse_service, tipo, sucursal_filtro, almacen, categoria, proveedor,
-        tipo_movimiento, fecha_desde, fecha_hasta,
+        warehouse_service, tipo, None, almacen, categoria, proveedor,
+        tipo_movimiento, fecha_desde, fecha_hasta, solo_con_stock, busqueda,
     )
     return ReporteBodegaResponse(**contenido)
 
@@ -373,25 +409,29 @@ def get_reporte(
 def get_reporte_excel(
     tipo: str,
     warehouse_service: WarehouseServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_bodega),
     almacen: str | None = None,
     categoria: str | None = None,
     proveedor: str | None = None,
     tipo_movimiento: str | None = None,
     fecha_desde: str | None = None,
     fecha_hasta: str | None = None,
+    solo_con_stock: bool = True,
+    busqueda: str | None = None,
 ) -> Response:
     """§2.1: export XLSX del reporte para edición en Excel -- hoja Resumen (KPIs +
     filtros aplicados) + una hoja por sección con encabezados/formato de negocio."""
     if tipo not in _TIPOS_REPORTE:
         raise NotFoundError(f"Tipo de reporte desconocido: {tipo}")
     contenido = _generar_reporte(
-        warehouse_service, tipo, sucursal_filtro, almacen, categoria, proveedor,
-        tipo_movimiento, fecha_desde, fecha_hasta,
+        warehouse_service, tipo, None, almacen, categoria, proveedor,
+        tipo_movimiento, fecha_desde, fecha_hasta, solo_con_stock, busqueda,
     )
     archivo = reporte_a_excel(contenido)
+    # Fase 6.4 (H-4, docs/features/plan_correcciones_integrales_sistema.md): fecha/hora
+    # del servidor en el nombre de archivo, generado en backend (no en frontend).
+    marca_tiempo = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
     return Response(
         content=archivo,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="reporte_{tipo}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="reporte_{tipo}_{marca_tiempo}.xlsx"'},
     )

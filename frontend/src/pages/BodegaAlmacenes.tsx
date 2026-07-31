@@ -14,15 +14,17 @@ import { fmt } from '../utils/format';
 import type { EstadoStock, ProductoCompra, ProductoMatrizAlmacen, TransferenciaSugerida } from '../types/bodega';
 
 const estadoBadge: Record<EstadoStock, 'danger' | 'warning' | 'neutral' | 'info'> = {
-  'Crítico': 'danger', 'Cerca': 'warning', 'Seguro': 'neutral', 'Exceso': 'info',
+  'Crítico': 'danger', 'Cerca': 'warning', 'Seguro': 'neutral', 'Exceso': 'info', 'Inmovilizado': 'danger',
 };
 
 // Tinte de fila por estado (heat-map ligero, mismo patrón que `rowClassName` en DashboardBodega).
+// Fase 6.1 (H-2): "Inmovilizado" es el peor caso de sobre-stock (cero salidas), mismo
+// tinte que "Crítico" -- antes caía silenciosamente en "Seguro" sin ningún tinte.
 const estadoRowTint: Record<EstadoStock, string> = {
-  'Crítico': 'bg-danger/5', 'Cerca': 'bg-warning/5', 'Seguro': '', 'Exceso': 'bg-primary/5',
+  'Crítico': 'bg-danger/5', 'Cerca': 'bg-warning/5', 'Seguro': '', 'Exceso': 'bg-primary/5', 'Inmovilizado': 'bg-danger/5',
 };
 
-const ESTADOS: EstadoStock[] = ['Crítico', 'Cerca', 'Seguro', 'Exceso'];
+const ESTADOS: EstadoStock[] = ['Crítico', 'Cerca', 'Seguro', 'Exceso', 'Inmovilizado'];
 
 /** §3: Panel de Status de Artículos por Almacén + Matriz de Transferencias
  * Inteligentes + Proyección de necesidades antes de comprar. */

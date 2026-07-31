@@ -50,6 +50,9 @@ class MiComisionResponse(BaseModel):
     comision_variable: Optional[float] = None
     nivel_variable: Optional[str] = None
     desglose_variable: Optional[dict] = None
+    # Auditoría 43 (H43-15): modo real de `COMISION_MODO` -- el frontend deja de asumir
+    # "sombra" a ciegas para etiquetar el panel dual.
+    modo_comision: str = "plana"
 
 
 class PostGoalInvoiceItemResponse(BaseModel):

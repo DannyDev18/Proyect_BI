@@ -41,8 +41,10 @@ export const getDemandForecast = (producto_cod: string) =>
   api.get<DemandaResponse>(`${BASE}/demand-forecasting`, { params: { producto_cod } });
 
 // ── Módulo Bodega (auditoría 23) ────────────────────────────────────────────
-export const getBodegaFiltros = () =>
-  api.get<FiltrosBodega>(`${BASE}/filtros`);
+/** `categoria` (Fase 2, filtros "inteligentes"): si se pasa, `proveedores` en la
+ * respuesta viene restringido a los que realmente suministran esa categoría. */
+export const getBodegaFiltros = (categoria?: string | null) =>
+  api.get<FiltrosBodega>(`${BASE}/filtros`, { params: clean({ categoria }) });
 
 export const getKpisBodega = (filters: BodegaQueryFilters) =>
   api.get<KpisBodega>(`${BASE}/kpis`, { params: clean(filters) });
@@ -94,19 +96,33 @@ export const getPrediccionComprasMes = (filters: BodegaQueryFilters, productoCod
     }),
   });
 
-export const getReporteBodega = (tipo: TipoReporteBodega, filters: BodegaQueryFilters) =>
-  api.get<ReporteBodega>(`${BASE}/reportes/${tipo}`, { params: clean(filters) });
+/** `extra` cubre parámetros específicos de un solo tipo de reporte (Fase 6.2,
+ * `solo_con_stock`/`busqueda` de `tipo=sin-venta`) sin ensuciar `BodegaQueryFilters`,
+ * que son los filtros globales compartidos por los 4 reportes. */
+export const getReporteBodega = (
+  tipo: TipoReporteBodega, filters: BodegaQueryFilters, extra: Record<string, string | boolean | undefined> = {},
+) =>
+  api.get<ReporteBodega>(`${BASE}/reportes/${tipo}`, { params: clean({ ...filters, ...extra }) });
 
-/** Descarga el XLSX del reporte (§2.1 "exportar a Excel para edición"). */
-export const descargarReporteExcel = async (tipo: TipoReporteBodega, filters: BodegaQueryFilters) => {
+const nombreArchivoDesdeHeader = (contentDisposition: unknown, fallback: string): string => {
+  const match = typeof contentDisposition === 'string' ? contentDisposition.match(/filename="?([^";]+)"?/) : null;
+  return match?.[1] ?? fallback;
+};
+
+/** Descarga el XLSX del reporte (§2.1 "exportar a Excel para edición"). Fase 6.4
+ * (H-4): el nombre real (con fecha/hora del servidor) viaja en `Content-Disposition`
+ * -- se lee de ahí en vez de fijar un nombre sin fecha en el frontend. */
+export const descargarReporteExcel = async (
+  tipo: TipoReporteBodega, filters: BodegaQueryFilters, extra: Record<string, string | boolean | undefined> = {},
+) => {
   const res = await api.get<Blob>(`${BASE}/reportes/${tipo}/excel`, {
-    params: clean(filters),
+    params: clean({ ...filters, ...extra }),
     responseType: 'blob',
   });
   const url = URL.createObjectURL(res.data);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `reporte_${tipo}.xlsx`;
+  link.download = nombreArchivoDesdeHeader(res.headers?.['content-disposition'], `reporte_${tipo}.xlsx`);
   link.click();
   URL.revokeObjectURL(url);
 };

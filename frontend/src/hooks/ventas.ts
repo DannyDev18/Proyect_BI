@@ -2,14 +2,13 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import {
   getSalesGoals, getMyGoalTracking, getChurnRisk, getRecommendations, getCustomerSegment,
   getGoalForecastCierre, getMetaSugerida, getGoalRecommendations, getMyCommission, getPostGoalInvoices,
+  getMiNegocio,
 } from '../services/ventas';
 import { qk } from '../constants/queryKeys';
 import type { PostGoalInvoiceItem } from '../types/ventas';
+import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 const EMPTY_INVOICES: PostGoalInvoiceItem[] = [];
-
-const errorMessage = (error: unknown): string | null =>
-  error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
 
 /** `anio`/`mes` opcionales para consultar un período anterior (docs/auditoria/
  * 34_actualizacion_modulo_ventas.md, H-V3) -- omitidos, el backend usa el vigente. */
@@ -21,8 +20,9 @@ export const useSalesGoals = (anio?: number, mes?: number) => {
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };
 
-/** Dashboard vendedor: cumplimiento de meta del período vigente, vía el mismo endpoint
- * de `useSalesGoals` pero tipado según el contrato real del backend. */
+/** Dashboard vendedor: cumplimiento de meta del período vigente, mismo endpoint y tipo
+ * que `useSalesGoals` sin los parámetros `anio`/`mes` (el panel de metas del vendedor
+ * siempre pide el período vigente). */
 export const useMyGoalTracking = () => {
   const query = useQuery({
     queryKey: qk.ventas.myGoalTracking(),
@@ -100,6 +100,15 @@ export const useRecommendations = () => {
     error: errorMessage(mutation.error),
     execute: (cliente_id: string) => { mutation.reset(); mutation.mutate(cliente_id); },
   };
+};
+
+/** Dashboard "Mi Negocio" del vendedor (auditoría 43, Fase 5). */
+export const useMiNegocio = () => {
+  const query = useQuery({
+    queryKey: qk.ventas.miNegocio(),
+    queryFn: () => getMiNegocio().then((r) => r.data),
+  });
+  return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };
 
 export const useCustomerSegment = () => {

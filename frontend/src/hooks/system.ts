@@ -1,8 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getProvenance } from '../services/system';
-
-const errorMessage = (error: unknown): string | null =>
-  error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
+import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 // Refresca cada 5 min: procedencia de datos, no requiere tiempo real (docs/auditoria/
 // 33_actualizacion_modulo_gerencia.md, H4).

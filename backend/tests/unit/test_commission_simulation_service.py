@@ -38,6 +38,14 @@ def commission_config_repo():
     repo.get_matriz_as_reglas.return_value = []
     repo.get_factores_credito_as_rangos.return_value = []
     repo.get_config_vendedor.return_value = None
+    # Auditoría 44 (docs/features/plan_comisiones_sobre_cobros.md): sin fórmula activa
+    # configurada, el motor compartido (`commission_variable_engine`) cae al fallback
+    # defensivo que reproduce la estructura histórica (líneas de venta × tipo ×
+    # cumplimiento − devoluciones + bonos) -- que es la que estos tests, preexistentes a
+    # la fórmula editable, ejercitan. Sin este default, `MagicMock()[1]` se itera como
+    # una lista vacía (comportamiento por defecto de MagicMock), dejando 'claves_activas'
+    # vacío y ningún componente se calcula.
+    repo.get_formula_activa.return_value = None
     return repo
 
 

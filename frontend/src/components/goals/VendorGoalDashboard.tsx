@@ -37,6 +37,24 @@ const NIVEL_CONFIG: Record<NivelComision, { label: string; badgeVariant: 'danger
   EXCELENTE: { label: 'Excelente', badgeVariant: 'success' },
 };
 
+// Auditoría 43 (H43-15, docs/auditoria/43_correcciones_sesion_ventas_y_datos.md): el
+// panel dual mostraba SIEMPRE "Piloto en sombra" / "no afecta tu pago actual", asumiendo
+// `COMISION_MODO=sombra` -- si se activa `variable`, esa comisión SÍ es la que se paga, y
+// el texto anterior sería falso. El badge y el copy se derivan ahora del modo real que
+// reporta el backend (`MiComision.modo_comision`).
+const PANEL_VARIABLE_CONFIG: Record<'sombra' | 'variable', { badge: string; titulo: string; nota: string }> = {
+  sombra: {
+    badge: 'Piloto en sombra',
+    titulo: 'Con el sistema nuevo habrías ganado',
+    nota: 'Comparación simulada — no afecta tu pago actual mientras el piloto esté en sombra.',
+  },
+  variable: {
+    badge: 'Esquema oficial',
+    titulo: 'Tu comisión por margen y categoría',
+    nota: 'Este es el esquema con el que se calcula tu pago actual.',
+  },
+};
+
 export const VendorGoalDashboard = () => {
   const { data, loading, error } = useMyGoalTracking();
   const forecast = useGoalForecastCierre();
@@ -179,31 +197,40 @@ export const VendorGoalDashboard = () => {
           </div>
         </ChartCard>
 
-        {/* Comisiones Variables (piloto en sombra): solo se muestra si el backend está
-            calculando el esquema por margen/categoría en paralelo (COMISION_MODO=sombra). */}
-        {comision.data?.comision_variable != null && (
+        {/* Comisiones Variables: solo se muestra si el backend está calculando el esquema
+            por margen/categoría (COMISION_MODO=sombra o variable). Auditoría 43 (H43-15):
+            badge/título/nota se derivan del modo real, no de un texto fijo asumiendo
+            "sombra" -- en modo "variable" esta comisión SÍ es la que se paga. */}
+        {comision.data?.comision_variable != null && (() => {
+          const modo = comision.data.modo_comision === 'variable' ? 'variable' : 'sombra';
+          const cfg = PANEL_VARIABLE_CONFIG[modo];
+          return (
           <ChartCard
-            title="Con el sistema nuevo habrías ganado"
-            badge={{ label: 'Piloto en sombra', variant: 'ml' }}
+            title={cfg.titulo}
+            badge={{ label: cfg.badge, variant: 'ml' }}
             height="h-[220px]"
           >
             <div className="grid grid-cols-2 gap-4 h-full items-center">
               <div className="flex flex-col items-center text-center gap-1">
-                <Wallet size={20} className="text-warning" aria-hidden="true" />
-                <span className="font-mono text-2xl font-semibold text-warning">
+                <Wallet size={20} className={modo === 'variable' ? 'text-success' : 'text-warning'} aria-hidden="true" />
+                <span className={`font-mono text-2xl font-semibold ${modo === 'variable' ? 'text-success' : 'text-warning'}`}>
                   {fmtMoney(comision.data.comision_variable)}
                 </span>
-                <span className="text-xs text-slate-500">Comisión variable (margen/categoría)</span>
+                <span className="text-xs text-slate-500">
+                  {modo === 'variable' ? 'Comisión oficial (margen/categoría)' : 'Comisión variable (margen/categoría)'}
+                </span>
               </div>
               <div className="flex flex-col items-center text-center gap-1">
                 <Wallet size={20} className="text-primary" aria-hidden="true" />
                 <span className="font-mono text-2xl font-semibold text-slate-100">
                   {fmtMoney(comision.data.comision_devengada)}
                 </span>
-                <span className="text-xs text-slate-500">Comisión actual (tasa plana)</span>
+                <span className="text-xs text-slate-500">
+                  {modo === 'variable' ? 'Esquema plano (referencia, ya no se paga)' : 'Comisión actual (tasa plana)'}
+                </span>
               </div>
               <p className="col-span-2 text-xs text-slate-500 text-center">
-                Comparación simulada -- no afecta tu pago actual mientras el piloto esté en sombra.
+                {cfg.nota}
               </p>
               {comision.data.desglose_variable && (
                 <details className="col-span-2 text-xs text-slate-400">
@@ -222,7 +249,8 @@ export const VendorGoalDashboard = () => {
               )}
             </div>
           </ChartCard>
-        )}
+          );
+        })()}
 
         {/* Recomendaciones de productos -- reglas de asociación */}
         <ChartCard

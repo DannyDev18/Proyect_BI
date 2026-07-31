@@ -6,8 +6,8 @@ import datetime
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import (
-    AnalyticsServiceDep, CommissionServiceDep, CrossSellEngineServiceDep, GoalMLServiceDep, PredictionServiceDep,
-    resolve_sucursal_filter,
+    AnalyticsServiceDep, CatalogRepositoryDep, CommissionServiceDep, CrossSellEngineServiceDep, GoalMLServiceDep,
+    PredictionServiceDep, VendorDashboardServiceDep,
 )
 from app.core.deps import CurrentUserDep, PermissionChecker
 from app.core.exceptions import ValidationError
@@ -17,6 +17,7 @@ from app.schemas.analytics import (
     SegmentacionClienteResponse, VPKPIVentas,
 )
 from app.schemas.commission import MiComisionResponse, PostGoalInvoiceItemResponse, PostGoalInvoicesResponse
+from app.schemas.vendor_dashboard import MiNegocioResponse
 from app.schemas.cross_selling import (
     ChurnExplicacionResponse, ClienteBusqueda, CombosResponse, CrossSellEventoRequest, CrossSellEventoResponse,
     CrossSellKpisResponse, CrossSellSugerenciasRequest, CrossSellSugerenciasResponse, FeatureContribucion,
@@ -27,30 +28,35 @@ from app.schemas.cross_selling import (
 router = APIRouter()
 
 vendedor_checker = PermissionChecker(allowed_roles=["administrador", "gerencia", "ventas"])
-sucursal_ventas = resolve_sucursal_filter(allow_override=False)
-
-
-@router.get("/goals", response_model=VPKPIVentas, dependencies=[Depends(vendedor_checker)])
-def get_sales_goals(
-    analytics_service: AnalyticsServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_ventas),
-    anio: int | None = None,
-    mes: int | None = None,
-) -> VPKPIVentas:
-    """KPIs de ventas: metas, ranking y proyecciones. Por defecto el período vigente;
-    `anio`/`mes` permiten consultar un período anterior (docs/auditoria/
-    34_actualizacion_modulo_ventas.md, H-V3)."""
-    kpis = analytics_service.get_sales_kpis(sucursal=sucursal_filtro, anio=anio, mes=mes)
-    return VPKPIVentas(**kpis)
 
 
 def _codven_restriccion(current_user: CurrentUserDep) -> str | None:
     """RLS de cartera (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V2): rol
     `ventas` queda restringido a su propia cartera; gerencia/administrador consultan
-    cualquier cliente (mismo criterio de privilegio que `resolve_sucursal_filter`)."""
+    cualquier cliente (mismo criterio de privilegio que `resolve_sucursal_filter`).
+    Desde la auditoría A-0.3 (decisión B-3, 2026-07-29) es también el discriminador de
+    `/goals` y `/goals/forecast-cierre` -- `sucursal` se retiró de este router porque el
+    90.9% de los vendedores activos transaccionan en 4-7 de las 7 sucursales reales del
+    EDW (ver docstring de `AnalyticsRepository.get_sales_performance`); forzar la
+    sucursal asignada al usuario le ocultaba al vendedor la mayoría de sus ventas."""
     if current_user.role.nombre in ("administrador", "gerencia"):
         return None
     return current_user.id_vendedor_origen
+
+
+@router.get("/goals", response_model=VPKPIVentas, dependencies=[Depends(vendedor_checker)])
+def get_sales_goals(
+    analytics_service: AnalyticsServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+    anio: int | None = None,
+    mes: int | None = None,
+) -> VPKPIVentas:
+    """KPIs de ventas: metas, proyección y (para administrador/gerencia, sin
+    restricción de vendedor) ranking global. Por defecto el período vigente; `anio`/
+    `mes` permiten consultar un período anterior (docs/auditoria/
+    34_actualizacion_modulo_ventas.md, H-V3)."""
+    kpis = analytics_service.get_sales_kpis(vendedor=codven_restriccion, anio=anio, mes=mes)
+    return VPKPIVentas(**kpis)
 
 
 @router.get("/churn-risk", response_model=ChurnResponse, dependencies=[Depends(vendedor_checker)])
@@ -89,18 +95,28 @@ def get_customer_segmentation(
 # ── Integración ML: Metas y Comisiones (docs/auditoria/15_...) — panel del vendedor ──
 @router.get(
     "/goals/forecast-cierre", response_model=ForecastCierreResponse, dependencies=[Depends(vendedor_checker)],
-    summary="Pronóstico de cierre de mes (modelo de ventas) para la sucursal del usuario",
+    summary="Pronóstico de cierre de mes (modelo de ventas) para el vendedor autenticado",
 )
 def get_goal_forecast_cierre(
     goal_ml_service: GoalMLServiceDep,
     analytics_service: AnalyticsServiceDep,
-    sucursal_filtro: str | None = Depends(sucursal_ventas),
+    catalog_repo: CatalogRepositoryDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
 ) -> ForecastCierreResponse:
     """% esperado de cumplimiento, ventas proyectadas al cierre y probabilidad de
     alcanzar la meta -- modelo `sales_rf` vía el mismo walk-forward que usa Gerencia,
-    horizonte = días restantes del mes en curso."""
-    kpis = analytics_service.get_sales_kpis(sucursal=sucursal_filtro)
-    resultado = goal_ml_service.forecast_cierre(sucursal=sucursal_filtro, meta_mensual=kpis["meta_mensual"])
+    horizonte = días restantes del mes en curso. Auditoría A-0.3 (decisión B-3): ya no
+    filtra por `sucursal` (ver `_codven_restriccion`); `get_daily_sales_history` filtra
+    por `nombre_vendedor`, no por `codven`, así que se resuelve el nombre antes de
+    llamar al servicio de ML."""
+    kpis = analytics_service.get_sales_kpis(vendedor=codven_restriccion)
+    vendedor_nombre = None
+    if codven_restriccion:
+        vendedor = catalog_repo.get_vendedor_activo(codven_restriccion)
+        vendedor_nombre = vendedor["nombre_vendedor"] if vendedor else None
+    resultado = goal_ml_service.forecast_cierre(
+        sucursal=None, meta_mensual=kpis["meta_mensual"], vendedor_nombre=vendedor_nombre,
+    )
     return ForecastCierreResponse(**resultado.__dict__)
 
 
@@ -159,6 +175,25 @@ def get_post_goal_invoices(commission_service: CommissionServiceDep, current_use
     hoy = datetime.date.today()
     facturas = commission_service.get_post_goal_invoices(vendedor_origen, hoy.year, hoy.month)
     return PostGoalInvoicesResponse(facturas=[PostGoalInvoiceItemResponse(**f.__dict__) for f in facturas])
+
+
+@router.get(
+    "/mi-negocio", response_model=MiNegocioResponse, dependencies=[Depends(vendedor_checker)],
+    summary="Dashboard agregado del vendedor: cuota, comisión, ranking, tendencia, cartera en riesgo y agenda",
+)
+def get_mi_negocio(
+    vendor_dashboard_service: VendorDashboardServiceDep, current_user: CurrentUserDep,
+) -> MiNegocioResponse:
+    """Auditoría 43 (H43-16, docs/auditoria/43_correcciones_sesion_ventas_y_datos.md):
+    `DashboardVentas.tsx` era efectivamente un formulario de búsqueda -- ningún widget
+    real hasta que el vendedor escribía un `cliente_id` exacto de memoria. Este endpoint
+    compone en UNA sola llamada datos que YA existen en otros servicios (metas/comisión,
+    ranking, cartera priorizada con churn_rf real, agenda de próximas acciones), sin
+    ningún modelo ML nuevo ni lógica de negocio nueva de comisiones/cartera."""
+    vendedor_origen = _requerir_vendedor(current_user)
+    hoy = datetime.date.today()
+    resultado = vendor_dashboard_service.get_mi_negocio(vendedor_origen, current_user.id, hoy.year, hoy.month)
+    return MiNegocioResponse(**resultado)
 
 
 # ── Asistente de Venta Cruzada (docs/auditoria/25_modulo_cross_selling.md) ──────────
@@ -223,8 +258,15 @@ def search_cross_sell_productos(q: str, prediction_service: PredictionServiceDep
     "/cross-selling/clientes", response_model=list[ClienteBusqueda], dependencies=[Depends(vendedor_checker)],
     summary="Autocompletar cliente por cédula/RUC o nombre (asistente de Venta Cruzada)",
 )
-def search_cross_sell_clientes(q: str, prediction_service: PredictionServiceDep) -> list[ClienteBusqueda]:
-    return [ClienteBusqueda(**c) for c in prediction_service.search_clientes(q)]
+def search_cross_sell_clientes(
+    q: str, prediction_service: PredictionServiceDep,
+    codven_restriccion: str | None = Depends(_codven_restriccion),
+) -> list[ClienteBusqueda]:
+    """RLS de cartera: un vendedor (rol `ventas`) solo puede encontrar clientes a los
+    que le haya vendido alguna vez -- antes este autocompletar buscaba en todo el
+    catálogo, permitiendo descubrir clientes ajenos por nombre/cédula aunque los demás
+    endpoints de este router sí validaran pertenencia al consultarlos después."""
+    return [ClienteBusqueda(**c) for c in prediction_service.search_clientes(q, codven_restriccion)]
 
 
 @router.get(

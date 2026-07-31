@@ -11,7 +11,7 @@ export const qk = {
   },
   bodega: {
     kpis: () => ['bodega', 'kpis'] as const,
-    filtros: () => ['bodega', 'filtros'] as const,
+    filtros: (categoria?: string | null) => ['bodega', 'filtros', categoria ?? null] as const,
     kpisDashboard: (filters: unknown) => ['bodega', 'kpis-dashboard', filters] as const,
     salidasForecast: (filters: unknown, producto: string | null) => ['bodega', 'salidas-forecast', filters, producto] as const,
     rotacionMatriz: (filters: unknown) => ['bodega', 'rotacion-matriz', filters] as const,
@@ -37,12 +37,15 @@ export const qk = {
     goalRecommendations: () => ['ventas', 'goal-recommendations'] as const,
     myCommission: () => ['ventas', 'my-commission'] as const,
     postGoalInvoices: () => ['ventas', 'post-goal-invoices'] as const,
+    miNegocio: () => ['ventas', 'mi-negocio'] as const,
   },
   goals: {
     periods: () => ['goals', 'periods'] as const,
-    tracking: (anio: number, mes: number) => ['goals', 'tracking', anio, mes] as const,
+    tracking: (anio: number, mes: number, vendedor?: string | null) =>
+      ['goals', 'tracking', anio, mes, vendedor ?? null] as const,
     aiSummary: () => ['goals', 'ai-summary'] as const,
-    commissionTracking: (anio: number, mes: number) => ['goals', 'commission-tracking', anio, mes] as const,
+    commissionTracking: (anio: number, mes: number, vendedor?: string | null) =>
+      ['goals', 'commission-tracking', anio, mes, vendedor ?? null] as const,
     metaSugeridaGerencia: (vendedorOrigen: string) => ['goals', 'meta-sugerida', vendedorOrigen] as const,
   },
   commissionConfig: {
@@ -55,11 +58,20 @@ export const qk = {
     auditoria: () => ['commission-config', 'auditoria'] as const,
     searchClases: (q: string) => ['commission-config', 'search-clases', q] as const,
     searchVendedores: (q: string) => ['commission-config', 'search-vendedores', q] as const,
+    tramosCobranza: () => ['commission-config', 'tramos-cobranza'] as const,
+    formulas: () => ['commission-config', 'formulas'] as const,
   },
   cartera360: {
     listaTrabajo: () => ['cartera360', 'lista-trabajo'] as const,
     detalleCliente: (clienteId: string) => ['cartera360', 'detalle-cliente', clienteId] as const,
     tasaRecuperacion: () => ['cartera360', 'tasa-recuperacion'] as const,
+  },
+  ruta: {
+    hoy: () => ['ruta', 'hoy'] as const,
+    timeline: (clienteId: string) => ['ruta', 'timeline', clienteId] as const,
+    efectividad: () => ['ruta', 'efectividad'] as const,
+    planSemanal: () => ['ruta', 'plan-semanal'] as const,
+    proximasAcciones: () => ['ruta', 'proximas-acciones'] as const,
   },
   notificaciones: {
     lista: () => ['notificaciones', 'lista'] as const,

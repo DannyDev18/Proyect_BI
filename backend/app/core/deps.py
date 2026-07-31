@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.database.session import SessionLocal
 from app.models.user import User
+from app.models.token_revocado import TokenRevocado
 from app.schemas.token import TokenPayload
 
 logger = logging.getLogger(__name__)
@@ -47,9 +48,21 @@ def get_current_user(db: SessionDep, token: TokenDep) -> User:
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-        token_data = TokenPayload(sub=username)
+        token_data = TokenPayload(sub=username, jti=payload.get("jti"), exp=payload.get("exp"))
     except JWTError:
         raise credentials_exception
+
+    # Auditoría 43 (H43-12): un token con firma y `exp` válidos puede haber sido revocado
+    # explícitamente por un logout -- rechazarlo aquí es lo que hace real "cerrar sesión"
+    # del lado del servidor, no solo borrar el token del navegador.
+    if token_data.jti is not None:
+        revocado = (
+            db.query(TokenRevocado.id)
+            .filter(TokenRevocado.jti == token_data.jti)
+            .first()
+        )
+        if revocado is not None:
+            raise credentials_exception
 
     # Carga el usuario con la relación del rol en un solo JOIN
     user = (

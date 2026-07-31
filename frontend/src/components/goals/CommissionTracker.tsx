@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Wallet, Gift } from 'lucide-react';
 
 import { usePeriods, useCommissionTracking } from '../../hooks/goals';
+import { useVendedores } from '../../hooks/gerencia';
 import type { GoalPeriodOption, NivelComision, VendorCommissionRow } from '../../types/goals';
 import { fmtMoney, pct } from '../../utils/format';
 import { Select } from '../ui/Select';
@@ -30,8 +31,10 @@ const NIVEL_LABEL: Record<NivelComision, string> = {
 export function CommissionTracker() {
   const [period, setPeriod] = useState({ anio: new Date().getFullYear(), mes: new Date().getMonth() + 1 });
   const [hasInitializedPeriod, setHasInitializedPeriod] = useState(false);
+  const [vendedorFiltro, setVendedorFiltro] = useState<string>('');
 
   const periods = usePeriods();
+  const { data: vendedoresLista } = useVendedores();
   const months = useMemo<GoalPeriodOption[]>(() => periods.data.map((d) => {
     const date = new Date(d.anio, d.mes - 1, 1);
     const name = date.toLocaleString('es-ES', { month: 'long' });
@@ -45,7 +48,7 @@ export function CommissionTracker() {
     }
   }, [months, hasInitializedPeriod]);
 
-  const tracking = useCommissionTracking(period.anio, period.mes);
+  const tracking = useCommissionTracking(period.anio, period.mes, vendedorFiltro || null);
   const totalComision = tracking.data.reduce((sum, f) => sum + f.comision_devengada, 0);
   // Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md):
   // `comision_variable` solo viene poblado cuando el backend corre en modo "sombra"/
@@ -90,21 +93,37 @@ export function CommissionTracker() {
           <Wallet className="w-8 h-8 text-primary" aria-hidden="true" />
           <h2 className="text-2xl font-bold tracking-tight">Comisiones devengadas</h2>
         </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-semibold text-slate-400" htmlFor="commission-tracker-period">Período</label>
-          <Select
-            id="commission-tracker-period"
-            onChange={(e) => {
-              const selectedValue = e.target.value;
-              const selectedMonth = months.find((m) => `${m.anio}-${m.mes}` === selectedValue);
-              if (selectedMonth) setPeriod({ anio: selectedMonth.anio, mes: selectedMonth.mes });
-            }}
-            value={`${period.anio}-${period.mes}`}
-          >
-            {months.map((m, idx) => (
-              <option key={idx} value={`${m.anio}-${m.mes}`}>{m.label}</option>
-            ))}
-          </Select>
+        <div className="flex items-end gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-slate-400" htmlFor="commission-tracker-vendedor">Vendedor</label>
+            <Select
+              id="commission-tracker-vendedor"
+              value={vendedorFiltro}
+              onChange={(e) => setVendedorFiltro(e.target.value)}
+              className="min-w-[180px]"
+            >
+              <option value="">Todos los vendedores</option>
+              {vendedoresLista?.map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-slate-400" htmlFor="commission-tracker-period">Período</label>
+            <Select
+              id="commission-tracker-period"
+              onChange={(e) => {
+                const selectedValue = e.target.value;
+                const selectedMonth = months.find((m) => `${m.anio}-${m.mes}` === selectedValue);
+                if (selectedMonth) setPeriod({ anio: selectedMonth.anio, mes: selectedMonth.mes });
+              }}
+              value={`${period.anio}-${period.mes}`}
+            >
+              {months.map((m, idx) => (
+                <option key={idx} value={`${m.anio}-${m.mes}`}>{m.label}</option>
+              ))}
+            </Select>
+          </div>
         </div>
       </div>
 

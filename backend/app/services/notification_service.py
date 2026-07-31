@@ -82,8 +82,12 @@ class NotificationService:
         ]
 
     def _generar_bodega(self, user: User) -> list[dict[str, Any]]:
-        almacen = None if user.role and user.role.nombre in ("administrador", "gerencia") else user.codalm
-        crudos = self.warehouse_service.get_notificaciones(sucursal=user.sucursal, almacen=almacen)
+        """RN-B10: para un usuario bodega con varias bodegas asignadas, este generador
+        no restringe por almacén aquí (get_notificaciones no lo soporta como lista) --
+        la restricción real ya la aplica `WarehouseRepository` (RLS por
+        `almacenes_permitidos`, inyectado por request vía `resolve_almacenes_filter`),
+        así que `self.warehouse_service` ya solo puede leer las bodegas del usuario."""
+        crudos = self.warehouse_service.get_notificaciones(sucursal=user.sucursal, almacen=None)
         return [
             {
                 "tipo_evento": d["tipo"],

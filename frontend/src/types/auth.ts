@@ -6,4 +6,7 @@ export interface User {
   email: string;
   role: Role;
   sucursalId?: string;
+  /** Bodegas asignadas (rol "bodega"), RN-B10 -- vacío si `todosLosAlmacenes`. */
+  codalms?: string[];
+  todosLosAlmacenes?: boolean;
 }

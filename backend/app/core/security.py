@@ -1,4 +1,5 @@
 # backend/app/core/security.py
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union
 from jose import jwt
@@ -44,7 +45,9 @@ def create_access_token(
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
-    to_encode = {"exp": expire, "sub": str(subject)}
+    # `jti` (auditoría 43, H43-12): identificador único del token, requerido para poder
+    # revocarlo en un logout explícito sin invalidar los demás tokens del mismo usuario.
+    to_encode = {"exp": expire, "sub": str(subject), "jti": str(uuid.uuid4())}
 
     # Inyectar claims analíticos en el token para filtros de seguridad fila
     if extra_claims:

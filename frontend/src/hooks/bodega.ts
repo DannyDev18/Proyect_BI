@@ -19,9 +19,7 @@ import {
 import type { TipoReporteBodega } from '../types/bodega';
 import type { PaginationQuery } from '../types/pagination';
 import { qk } from '../constants/queryKeys';
-
-const errorMessage = (error: unknown): string | null =>
-  error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
+import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 const wrap = <T,>(query: { data?: T; isLoading: boolean; error: unknown; refetch: () => unknown }) => ({
   data: query.data ?? null,
@@ -48,10 +46,13 @@ export const useDemandForecast = () => {
 };
 
 // ── Módulo Bodega (auditoría 23) ────────────────────────────────────────────
-export const useBodegaFiltros = () =>
+/** `categoria` (Fase 2, filtros "inteligentes"): al pasarla, `proveedores` viene
+ * restringido a los que realmente la suministran -- refetch automático al cambiar
+ * (queryKey incluye la categoría). */
+export const useBodegaFiltros = (categoria?: string | null) =>
   wrap(useQuery({
-    queryKey: qk.bodega.filtros(),
-    queryFn: () => getBodegaFiltros().then((r) => r.data),
+    queryKey: qk.bodega.filtros(categoria),
+    queryFn: () => getBodegaFiltros(categoria).then((r) => r.data),
     staleTime: 5 * 60 * 1000,
   }));
 
@@ -120,9 +121,12 @@ export const usePrediccionComprasMes = (filters: BodegaQueryFilters, productoCod
     staleTime: 30 * 60 * 1000, // 30 min: 20 walk-forward por request, no repetir al alternar drill-downs
   }));
 
-export const useReporteBodega = (tipo: TipoReporteBodega, filters: BodegaQueryFilters, enabled = true) =>
+export const useReporteBodega = (
+  tipo: TipoReporteBodega, filters: BodegaQueryFilters,
+  extra: Record<string, string | boolean | undefined> = {}, enabled = true,
+) =>
   wrap(useQuery({
-    queryKey: qk.bodega.reporte(tipo, filters),
-    queryFn: () => getReporteBodega(tipo, filters).then((r) => r.data),
+    queryKey: qk.bodega.reporte(tipo, { ...filters, ...extra }),
+    queryFn: () => getReporteBodega(tipo, filters, extra).then((r) => r.data),
     enabled,
   }));

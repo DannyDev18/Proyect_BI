@@ -29,7 +29,8 @@ export interface UserData {
   es_activo: boolean;
   sucursal: string | null;
   id_vendedor_origen: string | null;
-  codalm: string | null;
+  codalms: string[];
+  todos_los_almacenes: boolean;
   role: { id: number; nombre: string };
   rol_id?: number;
 }
@@ -40,7 +41,7 @@ export interface UserPayload {
   rol_id: number;
   sucursal: string | null;
   id_vendedor_origen: string | null;
-  codalm: string | null;
+  codalms: string[];
   todos_los_almacenes?: boolean;
   password?: string;
 }
@@ -86,4 +87,13 @@ export interface SystemHealth {
   etl_detalle: EtlControlEntry[];
   logins_fallidos_ventana_horas: number;
   logins_fallidos_conteo: number;
+}
+
+/** Fase 5 §5.5 (docs/features/plan_correcciones_integrales_sistema.md): métricas
+ * reales del dashboard de Admin. Contrato de backend/app/schemas/system.py::AdminResumenResponse. */
+export interface AdminResumen {
+  usuarios_activos: number;
+  usuarios_inactivos: number;
+  total_vendedores_activos: number;
+  total_almacenes: number;
 }

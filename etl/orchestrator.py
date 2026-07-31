@@ -21,7 +21,7 @@ from transformers.dim_transformer import (
 from transformers.fact_transformer import (
     transformar_ventas_detalle, transformar_inventario_snapshot,
     transformar_movimientos_inventario, transformar_compras,
-    transformar_cobros_cxc, transformar_pagos_cxp,
+    transformar_cobros_cxc, transformar_cobros_cuotas, transformar_pagos_cxp,
     transformar_nomina, transformar_movimientos_caja,
     transformar_metas_comerciales, transformar_logs_auditoria,
     transformar_devoluciones, transformar_transferencias
@@ -278,11 +278,21 @@ PIPELINE_CONFIG = [
     {'file': 'facturas_detalle_extractor.sql', 'tabla': 'fact_ventas_detalle', 'transform': transformar_ventas_detalle, 'loader': 'fact_inc', 'delta_col': 'e.fecfac', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_producto', 'dim_cliente', 'dim_vendedor', 'dim_almacen', 'dim_sucursal']},
     {'file': 'compras_detalle_extractor.sql', 'tabla': 'fact_compras', 'transform': transformar_compras, 'loader': 'fact_inc', 'delta_col': 'e.fecfac', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_producto', 'dim_proveedor', 'dim_almacen', 'dim_sucursal']},
     {'file': 'cobros_cxc_extractor.sql', 'tabla': 'fact_cobros_cxc', 'transform': transformar_cobros_cxc, 'loader': 'fact_inc', 'delta_col': 'fecemi', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_cliente', 'dim_vendedor', 'dim_formapago']},
+    # Auditoría 44 (docs/auditoria/44_comisiones_sobre_cobros.md): cobranza al grano
+    # (cobro, cuota, instrumento) -- base de la comisión sobre cobros. 'delta_col': 'banfec'
+    # (renombrada a 'fecha' por el transformer) es la fecha de DEVENGO/efectivización, no la
+    # de emisión de la factura -- distinción central del hallazgo H-3.
+    {'file': 'cobros_cuotas_extractor.sql', 'tabla': 'fact_cobros_cuotas', 'transform': transformar_cobros_cuotas, 'loader': 'fact_inc', 'delta_col': 'banfec', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_cliente', 'dim_vendedor']},
     {'file': 'pagos_cxp_extractor.sql', 'tabla': 'fact_pagos_cxp', 'transform': transformar_pagos_cxp, 'loader': 'fact_inc', 'delta_col': 'fecemi', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_proveedor', 'dim_formapago']},
     {'file': 'nomina_extractor.sql', 'tabla': 'fact_nomina', 'transform': transformar_nomina, 'loader': 'fact_inc', 'delta_col': 'fecdoc', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_empleado']},
     {'file': 'movimientos_caja_extractor.sql', 'tabla': 'fact_movimientos_caja', 'transform': transformar_movimientos_caja, 'loader': 'fact_inc', 'delta_col': 'fecape', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_usuario', 'dim_formapago']},
     {'file': 'metas_comerciales_extractor.sql', 'tabla': 'fact_metas_comerciales', 'transform': transformar_metas_comerciales, 'loader': 'fact_inc', 'delta_col': 'fecmes', 'pg_date_col': 'fecha_sk', 'depende_de': []},
-    {'file': 'devoluciones_detalle_extractor.sql', 'tabla': 'fact_devoluciones', 'transform': transformar_devoluciones, 'loader': 'fact_inc', 'delta_col': 'e.fecfac', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_producto', 'dim_almacen', 'dim_sucursal', 'dim_vendedor']},
+    # Auditoría 41 (H2): faltaba 'dim_cliente' aqui -- a diferencia de cobros_cxc/ventas_detalle
+    # (0% de cliente_sk sin resolver), esta era la unica de las tres sin la dependencia
+    # declarada, por lo que no quedaba protegida por 'dependencias_fallidas' (linea ~560) si
+    # dim_cliente fallaba o quedaba incompleta en una corrida -- causa raiz mas probable del
+    # 92-100% de fact_devoluciones.cliente_sk en el centinela -1.
+    {'file': 'devoluciones_detalle_extractor.sql', 'tabla': 'fact_devoluciones', 'transform': transformar_devoluciones, 'loader': 'fact_inc', 'delta_col': 'e.fecfac', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_producto', 'dim_cliente', 'dim_almacen', 'dim_sucursal', 'dim_vendedor']},
     # Auditoría 10: extractor validado desde antes (comentario propio del archivo) pero nunca
     # conectado a PIPELINE_CONFIG; Fact_Transferencias existía en el DDL con 0 filas.
     {'file': 'transferencias_extractor.sql', 'tabla': 'fact_transferencias', 'transform': transformar_transferencias, 'loader': 'fact_inc', 'delta_col': 'fecha', 'pg_date_col': 'fecha_sk', 'depende_de': ['dim_producto', 'dim_almacen', 'dim_sucursal']}
@@ -329,6 +339,26 @@ def resolver_llaves_hecho(pg: PostgresConnector, df: pd.DataFrame, tbl_destino: 
         df = df.merge(df_fecha, left_on='fecha_lookup', right_on='fecha_completa', how='left')
         df.drop(columns=['fecha_lookup', 'fecha_completa'], errors='ignore', inplace=True)
     
+    # 1b. Resolver fechas ADICIONALES (hechos con más de una FK a Dim_Fecha). El bloque 1 de
+    # arriba resuelve una sola 'fecha_sk' desde la primera columna que encuentra de una lista
+    # fija; un hecho como fact_cobros_cuotas tiene tres fechas con significado distinto
+    # (efectivización = devengo, registro del cobro, emisión de la factura origen) y necesita
+    # las tres. Mismo patrón que el bloque 9b para las dos FKs a Dim_Almacen de
+    # fact_transferencias.
+    fechas_adicionales = [('fecha_registro', 'fecha_registro_sk'), ('fecha_emision', 'fecha_emision_sk')]
+    columnas_extra = [(c, sk) for c, sk in fechas_adicionales if c in df.columns]
+    if columnas_extra:
+        df_fecha_extra = _leer_dim_cacheada(engine, 'dim_fecha', f"SELECT fecha_sk, fecha_completa FROM {schema}.dim_fecha")
+        df_fecha_extra['fecha_completa'] = pd.to_datetime(df_fecha_extra['fecha_completa']).dt.date
+        for col_origen, col_sk in columnas_extra:
+            df[col_origen] = pd.to_datetime(df[col_origen], errors='coerce')
+            df['_lookup_extra'] = df[col_origen].dt.date
+            df = df.merge(
+                df_fecha_extra.rename(columns={'fecha_sk': col_sk, 'fecha_completa': '_lookup_extra'}),
+                on='_lookup_extra', how='left',
+            )
+            df.drop(columns=['_lookup_extra'], errors='ignore', inplace=True)
+
     # 2. Resolver producto_sk (codemp, codart)
     if 'codart' in df.columns:
         df_prod = _leer_dim_cacheada(engine, 'dim_producto', f"SELECT producto_sk, codemp, codart FROM {schema}.dim_producto WHERE es_vigente = TRUE")
@@ -614,6 +644,19 @@ def run_etl(config: ETLConfig, tablas_incluir: list = None) -> None:
                         )
                         res = conn_tabla.execute(text(delete_sql), {"desde": fecha_desde})
                         logger.info(f"Idempotencia: {res.rowcount} registros eliminados en {cfg['tabla']} (fecha >= {fecha_desde}).")
+                    elif es_hecho:
+                        # Auditoría 41 (H6): recarga FULL/histórica (sin corrida SUCCESS previa
+                        # en etl_control, p.ej. tras un reset deliberado o la primera carga de
+                        # una tabla) no tenía rama de borrado -- solo existían 'snapshot' e
+                        # 'incremental'. Sin este DELETE, una recarga completa repetida sobre una
+                        # tabla que YA tiene datos los duplica en vez de reemplazarlos (reproducido
+                        # con fact_cobros_cxc/fact_devoluciones: 213.845->641.641 y 18.492->55.490
+                        # tras dos recargas FULL consecutivas). Un hecho transaccional en modo FULL
+                        # implica "recargar todo lo que compete a este hecho" -- se vacía por
+                        # completo, mismo criterio que la rama incremental pero sin acotar por fecha.
+                        delete_sql = f"DELETE FROM {schema}.{cfg['tabla']}"
+                        res = conn_tabla.execute(text(delete_sql))
+                        logger.info(f"Idempotencia (FULL): {res.rowcount} registros eliminados en {cfg['tabla']} (recarga histórica completa).")
 
                     for df_chunk in sa.yield_query_chunks(sql_query, chunksize=config.BATCH_SIZE):
                         logger.info(f"Procesando Chunk #{chunk_idx} ({len(df_chunk)} registros)...")

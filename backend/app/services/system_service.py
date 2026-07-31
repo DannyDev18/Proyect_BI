@@ -7,13 +7,20 @@ from typing import Any
 
 from app.core.config import settings
 from app.ml.model_loader import MODEL_DISPLAY_NAMES, ModelLoader
+from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.system_repository import SystemRepository
+from app.repositories.user_repository import UserRepository
 
 
 class SystemService:
-    def __init__(self, system_repo: SystemRepository, model_loader: ModelLoader):
+    def __init__(
+        self, system_repo: SystemRepository, model_loader: ModelLoader,
+        user_repo: UserRepository, catalog_repo: CatalogRepository,
+    ):
         self.system_repo = system_repo
         self.model_loader = model_loader
+        self.user_repo = user_repo
+        self.catalog_repo = catalog_repo
 
     def get_provenance(self) -> dict[str, Any]:
         ultima_carga = self.system_repo.get_ultima_carga_dw()
@@ -57,4 +64,17 @@ class SystemService:
             "logins_fallidos_conteo": self.system_repo.get_conteo_logins_fallidos(
                 settings.ADMIN_LOGINS_FALLIDOS_VENTANA_HORAS
             ),
+        }
+
+    def get_admin_resumen(self) -> dict[str, Any]:
+        """Fase 5 §5.5 (docs/features/plan_correcciones_integrales_sistema.md):
+        métricas reales para el dashboard de Admin -- usuarios activos/inactivos
+        (`public.usuarios`), vendedores y bodegas vigentes (EDW). Sin actividad
+        reciente aquí (ya la cubre `GET /analytics/admin/audit-logs`, no se duplica)."""
+        usuarios_activos, usuarios_inactivos = self.user_repo.count_por_estado()
+        return {
+            "usuarios_activos": usuarios_activos,
+            "usuarios_inactivos": usuarios_inactivos,
+            "total_vendedores_activos": self.catalog_repo.count_vendedores_activos(),
+            "total_almacenes": self.catalog_repo.count_almacenes(),
         }

@@ -35,3 +35,12 @@ slowapi>=0.1.9,<0.2.0
 # árboles (RF/XGBoost/LightGBM/CatBoost, competencia de model_selector.py), TreeExplainer
 # aplica a los 4 sin distinción de cuál ganó.
 shap>=0.46.0,<0.47.0
+# Auditoría 41 (refactor Cartera 360, hallazgo real): `shap==0.46.0` importa incondicionalmente
+# su módulo de gráficos (`shap/plots/colors/_colorconv.py`, código heredado de skimage) desde
+# `shap/__init__.py`, aunque nunca se usa ningún gráfico aquí (solo `TreeExplainer`). Ese módulo
+# llama `np.dtype(np.floating)` con un tipo abstracto -- numpy>=2.3 lo rechaza
+# (`TypeError: Converting np.inexact or np.floating to a dtype not allowed`), rompiendo el
+# `import shap` completo, no solo el plotting. Sin pin explícito, pip resolvía numpy 2.4.x
+# (compatible con pandas/scikit-learn/xgboost, pero no con shap 0.46). Reproducido en vivo:
+# `import shap` fallaba en el contenedor real tras reconstruir la imagen.
+numpy<2.3

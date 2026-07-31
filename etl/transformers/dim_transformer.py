@@ -52,11 +52,21 @@ def deduplicar(df: pd.DataFrame, clave_natural: list) -> pd.DataFrame:
     return df
 
 def transformar_clientes(df: pd.DataFrame) -> pd.DataFrame:
-    df = normalizar_strings(df, ['codcli', 'codemp', 'nombre_cliente', 'ruc_cedula', 'tipo_id', 
+    df = normalizar_strings(df, ['codcli', 'codemp', 'nombre_cliente', 'ruc_cedula', 'tipo_id',
                                  'clase_cliente', 'nombre_clase', 'zona', 'nombre_zona', 'ciudad', 'estado', 'sexo'])
-    df = normalizar_numericos(df, ['limite_credito', 'dias_credito'])
+    # Auditoría 41: 'dias_credito' ahora viene de clientes.codcre (real), NULL en el 98.4% de
+    # los clientes (sin plazo de crédito definido -- no es lo mismo que "0 días"); se
+    # conserva NULL en vez de fillna(0) para no reemplazar un hardcode fabricado (30) por
+    # otro (0). 'limite_credito' sí es un monto siempre presente en SAP (cupo).
+    df = normalizar_numericos(df, ['limite_credito', 'dias_credito'], permitir_nulos=['dias_credito'])
     df = normalizar_estado(df, 'estado')
-    df = normalizar_tipo_id(df, 'tipo_id')
+    # Auditoría 41: 'tipo_id' ahora viene de clientes.tiprucced (código real de SAP: C=cédula,
+    # R=RUC, P=pasaporte, F=? -- confirmado C/R/P con evidencia de volumen, F sin confirmar,
+    # 2 filas). TIPO_ID_MAP/normalizar_tipo_id (códigos SRI '04'..'08') fue diseñado para un
+    # esquema de códigos DISTINTO que nunca existió en el dato real (el extractor anterior
+    # hardcodeaba '05' para el 100% de los clientes) -- aplicarlo aquí mapearía todo a 'OTRO'.
+    # Se conserva el código real de SAP tal cual en vez de inventar una traducción no
+    # verificada para 'F'.
     # Auditoría 08 (F8): sin este paso, dos filas para el mismo (codemp, codcli) llegarían
     # al loader como candidatas "vigentes" y violarían el índice único parcial de SCD2.
     df = deduplicar(df, clave_natural=['codemp', 'codcli'])

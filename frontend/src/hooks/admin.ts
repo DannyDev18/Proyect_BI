@@ -1,13 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  actualizarAnomaliaRevision, detectAnomaly, getAnomaliaRevisiones, getAuditLogs, getMLOpsStatus, getModelsStatus,
-  getSystemHealth,
+  actualizarAnomaliaRevision, detectAnomaly, getAdminResumen, getAnomaliaRevisiones, getAuditLogs, getMLOpsStatus,
+  getModelsStatus, getSystemHealth,
 } from '../services/admin';
 import type { AnomaliaEstado, AuditLogFilters } from '../types/admin';
 import type { PaginationQuery } from '../types/pagination';
-
-const errorMessage = (error: unknown): string | null =>
-  error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
+import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 export const useAnomalyDetector = () => {
   const mutation = useMutation({
@@ -71,6 +69,14 @@ export const useActualizarAnomaliaRevision = () => {
     loading: mutation.isPending,
     error: errorMessage(mutation.error),
   };
+};
+
+export const useAdminResumen = () => {
+  const query = useQuery({
+    queryKey: ['admin', 'resumen'],
+    queryFn: () => getAdminResumen().then((r) => r.data),
+  });
+  return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error) };
 };
 
 export const useSystemHealth = () => {

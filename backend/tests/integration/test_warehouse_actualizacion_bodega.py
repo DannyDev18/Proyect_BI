@@ -3,6 +3,8 @@
 docs/auditoria/32_actualizacion_modulo_bodega.md): filtros E2E en reportes/Excel,
 validación cerrada de tipo_movimiento, montos condicionados (RN-B8) y justificación
 estadística de transferencias (RN-B9). Requiere Postgres real (ver tests/integration/conftest.py)."""
+import re
+
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -43,7 +45,7 @@ def test_reporte_analisis_mensual_refleja_filtros_aplicados(client, auth_headers
 
 
 # ── Fase 5: contrato tipado del reporte ─────────────────────────────────────
-@pytest.mark.parametrize("tipo", ["justificacion", "transferencias", "analisis-mensual"])
+@pytest.mark.parametrize("tipo", ["justificacion", "transferencias", "analisis-mensual", "sin-venta", "kardex"])
 def test_reporte_tiene_contrato_tipado(client, auth_headers, tipo):
     r = client.get(f"/api/v1/analytics/bodega/reportes/{tipo}", headers=auth_headers("bodega"))
     assert r.status_code == 200
@@ -77,6 +79,91 @@ def test_reporte_excel_acepta_los_6_filtros(client, auth_headers):
     )
     assert r.status_code == 200
     assert r.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+# ── Fase 6.2 (H-9): reporte único "artículos sin movimiento en ventas" ──────
+def test_sin_venta_solo_con_stock_excluye_agotados(client, auth_headers):
+    """`solo_con_stock=True` (estancados) debe ser un subconjunto de `False` (sin venta
+    completo) -- nunca al revés (H-9: estancados ⊂ sin venta)."""
+    headers = auth_headers("bodega")
+    con_stock = client.get(
+        "/api/v1/analytics/bodega/reportes/sin-venta",
+        params={"solo_con_stock": True}, headers=headers,
+    ).json()
+    sin_filtro_stock = client.get(
+        "/api/v1/analytics/bodega/reportes/sin-venta",
+        params={"solo_con_stock": False}, headers=headers,
+    ).json()
+    filas_con_stock = con_stock["secciones"][0]["filas"]
+    filas_completo = sin_filtro_stock["secciones"][0]["filas"]
+    assert all(f["stock_actual"] > 0 for f in filas_con_stock)
+    assert any(f["stock_actual"] <= 0 for f in filas_completo) or len(filas_completo) >= len(filas_con_stock)
+
+
+def test_sin_venta_busqueda_filtra_por_codigo_o_nombre(client, auth_headers):
+    # administrador (no RLS por almacén, a diferencia de "bodega") -- este test valida
+    # el filtro de búsqueda en sí, no la restricción de bodegas asignadas.
+    r = client.get(
+        "/api/v1/analytics/bodega/reportes/sin-venta",
+        params={"solo_con_stock": False, "busqueda": "HANKOOK"},
+        headers=auth_headers("administrador"),
+    )
+    assert r.status_code == 200
+    filas = r.json()["secciones"][0]["filas"]
+    assert len(filas) > 0
+    assert all("HANKOOK" in f["nombre"].upper() or "HANKOOK" in f["codart"].upper() for f in filas)
+
+
+def test_sin_venta_expone_fecha_ultima_venta_sin_columna_cliente(client, auth_headers):
+    """Decisión del usuario (§6.0 del plan): sin PII, sin columna Cliente."""
+    r = client.get("/api/v1/analytics/bodega/reportes/sin-venta", headers=auth_headers("bodega"))
+    columnas = {c["key"] for c in r.json()["secciones"][0]["columnas"]}
+    assert "fecha_ultima_venta" in columnas
+    assert "cliente" not in columnas
+
+
+# ── Fase 6.7 (H-11): reporte "Movimientos de Kardex" (QUERY_KARDEX_MOVIMIENTOS) ─────
+def test_kardex_expone_movimientos_con_direccion_y_existencia_global(client, auth_headers):
+    r = client.get(
+        "/api/v1/analytics/bodega/reportes/kardex",
+        params={"fecha_desde": "2026-01-01", "fecha_hasta": "2026-06-30"},
+        headers=auth_headers("administrador"),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["tipo"] == "kardex"
+    columnas = {c["key"] for c in body["secciones"][0]["columnas"]}
+    assert {"direccion", "existencia_global", "tipo_movimiento", "cantidad"} <= columnas
+    assert "cliente" not in columnas
+    for fila in body["secciones"][0]["filas"][:20]:
+        assert fila["direccion"] in ("Entrada", "Salida", "N/D")
+        assert "2026-01-01" <= fila["fecha"] <= "2026-06-30"
+
+
+def test_kardex_filtro_tipo_movimiento_filtra_por_fila_no_por_articulo(client, auth_headers):
+    """A diferencia del resto del módulo (donde `tipo_movimiento` filtra artículos que
+    ALGUNA VEZ tuvieron ese tipo), en el listado de kardex cada fila debe SER de ese
+    tipo -- si no, filtrar por FAC devolvería movimientos TRA/CPA de productos que
+    también se vendieron alguna vez."""
+    r = client.get(
+        "/api/v1/analytics/bodega/reportes/kardex",
+        params={"tipo_movimiento": "TRA", "fecha_desde": "2026-01-01", "fecha_hasta": "2026-06-30"},
+        headers=auth_headers("administrador"),
+    )
+    assert r.status_code == 200
+    filas = r.json()["secciones"][0]["filas"]
+    assert len(filas) > 0
+    assert all(f["tipo_movimiento"] == "TRA" for f in filas)
+
+
+# ── Fase 6.4 (H-4): nombre de archivo Excel con fecha/hora del servidor ─────
+def test_reporte_excel_incluye_fecha_hora_en_el_nombre(client, auth_headers):
+    r = client.get(
+        "/api/v1/analytics/bodega/reportes/analisis-mensual/excel", headers=auth_headers("bodega"),
+    )
+    assert r.status_code == 200
+    disposicion = r.headers["content-disposition"]
+    assert re.search(r"reporte_analisis-mensual_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}\.xlsx", disposicion)
 
 
 # ── H32-3: validación cerrada de tipo_movimiento ────────────────────────────

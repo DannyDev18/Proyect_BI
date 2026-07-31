@@ -124,7 +124,7 @@ export interface CategoriaSalidas {
   monto_ventas: number | null;
 }
 
-export type EstadoStock = 'Crítico' | 'Cerca' | 'Seguro' | 'Exceso';
+export type EstadoStock = 'Crítico' | 'Cerca' | 'Seguro' | 'Exceso' | 'Inmovilizado';
 
 export interface ProductoStockReorden {
   codart: string;
@@ -136,6 +136,10 @@ export interface ProductoStockReorden {
   dias_inventario: number | null;
   dias_hasta_reorden: number | null;
   estado: EstadoStock;
+  // Fase 6.1 (H-2/RN-B11), auditoría A-0.4: caso "El Rey" -- "0 días de stock" con una
+  // salida_diaria marginal (< BODEGA_MIN_SALIDA_CONFIABLE) no es la misma urgencia que
+  // un artículo de alta rotación, aunque el cálculo dé el mismo número.
+  dias_inventario_baja_confianza: boolean;
 }
 
 export interface ProductoCompra {
@@ -225,7 +229,7 @@ export interface Transferencias {
 }
 
 // ── §2 Reportes (Fase 5, docs/features/plan_actualizacion_modulo_bodega.md) ─────
-export type TipoReporteBodega = 'justificacion' | 'transferencias' | 'analisis-mensual';
+export type TipoReporteBodega = 'justificacion' | 'transferencias' | 'analisis-mensual' | 'sin-venta' | 'kardex';
 
 export type TonoKpi = 'positivo' | 'negativo' | 'neutral';
 
@@ -260,6 +264,9 @@ export interface ReporteBodega {
   resumen_ejecutivo: KpiResumenEjecutivo[];
   interpretacion: string;
   secciones: SeccionReporte[];
+  // Auditoría 43: declara la ventana real de kardex usada para calcular stock/última venta en
+  // reportes derivados del histórico del EDW (hoy solo "sin-venta") -- null en el resto.
+  nota_cobertura_datos: string | null;
 }
 
 // ── Predicción de compras del próximo mes por categoría (docs/auditoria/24) ──

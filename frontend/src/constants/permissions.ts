@@ -7,7 +7,7 @@ export interface RouteConfig {
   nav?: { label: string };
 }
 
-export type RouteKey = 'admin' | 'users' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'ventas' | 'ventas.metas' | 'ventas.cross-selling' | 'ventas.cartera360' | 'settings';
+export type RouteKey = 'admin' | 'admin.usuarios' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'ventas' | 'ventas.metas' | 'ventas.cross-selling' | 'ventas.cartera360' | 'ventas.ruta' | 'settings';
 // Nota: 'bodega.compras' (Compras y Proveedores) y 'gerencia.cartera' (Cartera y Flujo de
 // Caja) se retiraron del alcance -- ver docs/auditoria/31_.../33_... para el análisis de
 // datos que motivó su implementación original y esta decisión de descope.
@@ -18,8 +18,10 @@ export const ROUTES: Record<RouteKey, RouteConfig> = {
     allowedRoles: ['administrador'],
     nav: { label: 'Sistema & Logs' },
   },
-  users: {
-    path: '/users',
+  // Fase 5 §5.4 (docs/features/plan_correcciones_integrales_sistema.md): anidado bajo
+  // /admin/usuarios (antes ruta hermana /users, sin relación jerárquica visible).
+  'admin.usuarios': {
+    path: '/admin/usuarios',
     allowedRoles: ['administrador'],
     nav: { label: 'Gestión de Usuarios' },
   },
@@ -63,10 +65,21 @@ export const ROUTES: Record<RouteKey, RouteConfig> = {
     allowedRoles: ['administrador', 'gerencia', 'ventas'],
     nav: { label: 'Venta Cruzada' },
   },
+  // "Mi Ruta Inteligente de Ventas" (docs/features/plan_refactor_cartera360_ruta_
+  // inteligente.md §7 Estrategia de migración): "el Sidebar apunta a la nueva desde la
+  // Fase 3; la vieja queda accesible por URL directa como escape hatch" -- por eso
+  // 'ventas.cartera360' pierde su `nav` (sigue registrada, sigue funcionando, solo deja
+  // de aparecer en el menú) y 'ventas.ruta' lo gana. Requiere
+  // CARTERA360_RUTA_INTELIGENTE_ENABLED=true en el backend (si está en false, esta
+  // página carga pero sus llamadas a /ruta/* devuelven 404).
   'ventas.cartera360': {
     path: '/ventas/cartera360',
     allowedRoles: ['administrador', 'gerencia', 'ventas'],
-    nav: { label: 'Cartera 360' },
+  },
+  'ventas.ruta': {
+    path: '/ventas/ruta',
+    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    nav: { label: 'Mi Ruta Inteligente' },
   },
   settings: {
     path: '/settings',

@@ -166,7 +166,11 @@ def transformar_cobros_cxc(df: pd.DataFrame) -> pd.DataFrame:
     df = normalizar_strings(df, ['codemp', 'codcli', 'codven', 'codforpag', 'num_transaccion', 'establ'])
     if 'dias_vencimiento' in df.columns:
         df['dias_vencimiento'] = pd.to_numeric(df['dias_vencimiento'], errors='coerce').fillna(0).astype(int)
-    df = normalizar_numericos(df, ['valor_cobrado', 'saldo_documento'])
+    # Auditoría 41 (H3): 'saldodoc' llega NULL en el 55.5% de los documentos reales de SAP
+    # (saldo desconocido, no "pagado" -- ningún documento real trae 0 explícito). fillna(0)
+    # los volvía indistinguibles de un documento cerrado; se conserva NULL (columna nullable
+    # desde esta auditoría, ver edw/03_hechos.sql).
+    df = normalizar_numericos(df, ['valor_cobrado', 'saldo_documento'], permitir_nulos=['saldo_documento'])
     # Auditoría 08 (F18): "días de vencimiento desconocidos" (fillna(0) arriba) se interpreta
     # como "no vencido" — regla implícita, documentada aquí pero no corregida (requeriría un
     # estado "no determinable" que el modelo actual de esta_vencido (BOOLEAN) no admite).
@@ -208,6 +212,59 @@ def transformar_nomina(df: pd.DataFrame) -> pd.DataFrame:
 def transformar_movimientos_caja(df: pd.DataFrame) -> pd.DataFrame:
     df = normalizar_numericos(df, ['monto_apertura', 'monto_ingreso', 'monto_egreso', 'monto_cierre', 'diferencia_arqueo'])
     df = normalizar_strings(df, ['num_caja', 'codemp', 'establ', 'codusu', 'codforpag'])
+    return df
+
+def transformar_cobros_cuotas(df: pd.DataFrame) -> pd.DataFrame:
+    """Cobranza al grano (cobro, cuota, instrumento) -> edw.fact_cobros_cuotas.
+    Auditoría 44 (docs/auditoria/44_comisiones_sobre_cobros.md), base de la comisión
+    sobre cobros.
+
+    Punto crítico -- el devengo es `banfec`, NO `fecemi`: `resolver_llaves_hecho()`
+    (orchestrator.py) resuelve `fecha_sk` tomando la PRIMERA columna que encuentra de una
+    lista fija ['fecdoc','fecfac','fecemi','fecape','fecmes','fecha_ingreso','fecha'].
+    El extractor trae `fecemi` (fecha de la factura origen), que aparece ANTES que 'fecha'
+    en esa lista: dejarla con su nombre crudo haría que `fecha_sk` fuera la fecha de la
+    FACTURA y no la de efectivización, invirtiendo exactamente la regla de negocio que esta
+    tabla existe para implementar (H-3: el 47,4% de los cheques postfechados cruzan de mes
+    entre ambas fechas). Por eso `banfec` se renombra a 'fecha' y `fecemi` se saca de la
+    lista renombrándose a 'fecha_emision'."""
+    df = df.rename(columns={
+        'banfec': 'fecha',            # -> fecha_sk (DEVENGO)
+        'fectra': 'fecha_registro',   # -> fecha_registro_sk (bloque 1b del orchestrator)
+        'fecemi': 'fecha_emision',    # -> fecha_emision_sk (idem); fuera de la lista fija
+        'tiptra': 'tipo_instrumento',
+        'numcco': 'num_comprobante',
+        'numtra': 'num_transaccion',
+        'ncuota': 'num_cuota',
+        'numche': 'num_cheque',
+    })
+    df = normalizar_strings(df, [
+        'codemp', 'codcli', 'codven', 'tipo_instrumento',
+        'num_comprobante', 'num_transaccion', 'num_cheque',
+    ])
+    df = normalizar_numericos(df, ['valor_cobrado'])
+
+    for col in ('fecha', 'fecha_registro', 'fecha_emision', 'fecven'):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+
+    df['es_postfechado'] = df['tipo_instrumento'].eq('CP')
+
+    # Notas de débito: el reporte del ERP las excluye con substring(numcco,1,2) <> 'ND'.
+    # Se MARCAN en vez de descartarse, para que la exclusión sea una decisión configurable
+    # de la capa de negocio y no una pérdida de dato irreversible en el ETL.
+    df['es_nota_debito'] = df['num_comprobante'].str.slice(0, 2).eq('ND').fillna(False)
+
+    # dias_cobro = banfec - fecemi, con piso en 0. Se materializa aquí (no por consulta)
+    # porque es el discriminante del tramo de comisión. El piso responde a un dato real:
+    # 12 filas históricas tienen banfec anterior a fecemi (mínimo -25 días, H-9); un día
+    # negativo caería fuera de todo tramo configurado, así que se colapsa al tramo mínimo
+    # (el más favorable, que es como el ERP las trata al no tener tramo negativo).
+    dias = (df['fecha'] - df['fecha_emision']).dt.days
+    df['dias_cobro'] = dias.fillna(0).clip(lower=0).astype(int)
+
+    if 'num_cuota' in df.columns:
+        df['num_cuota'] = pd.to_numeric(df['num_cuota'], errors='coerce').astype('Int64')
     return df
 
 def transformar_metas_comerciales(df: pd.DataFrame) -> pd.DataFrame:

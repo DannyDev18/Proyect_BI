@@ -40,6 +40,13 @@ CREATE INDEX idx_fc_prod        ON edw.Fact_Compras (producto_sk);
 CREATE INDEX idx_fcc_composite  ON edw.Fact_Cobros_CXC (fecha_sk, cliente_sk);
 CREATE INDEX idx_fcc_ven        ON edw.Fact_Cobros_CXC (vendedor_sk);
 
+-- == 5b. Índices Fact_Cobros_Cuotas ==
+-- El acceso dominante es "cobranza de UN vendedor en UN mes" (liquidación de comisiones):
+-- el índice lidera por vendedor_sk y luego fecha_sk (= banfec, el devengo).
+CREATE INDEX idx_fccu_ven_fecha ON edw.Fact_Cobros_Cuotas (vendedor_sk, fecha_sk);
+CREATE INDEX idx_fccu_fecha     ON edw.Fact_Cobros_Cuotas (fecha_sk);
+CREATE INDEX idx_fccu_cli       ON edw.Fact_Cobros_Cuotas (cliente_sk);
+
 -- == 6. Índices Fact_Pagos_CXP ==
 CREATE INDEX idx_fpc_composite  ON edw.Fact_Pagos_CXP (fecha_sk, proveedor_sk);
 

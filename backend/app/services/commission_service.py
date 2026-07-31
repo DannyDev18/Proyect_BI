@@ -12,11 +12,10 @@ from dataclasses import asdict, dataclass
 from app.core.config import settings
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.goal_repository import GoalRepository
-from app.services.commission_bonus import calcular_bonos_periodo
 from app.services.commission_engine import (
-    ComisionVariableCalculada, ConfigComisionVariable, DesgloseLinea, LineaComisionable, NivelCumplimiento,
-    calcular_comision, calcular_comision_variable, fecha_referencia_periodo,
+    ComisionVariableCalculada, DesgloseLinea, NivelCumplimiento, calcular_comision, fecha_referencia_periodo,
 )
+from app.services.commission_variable_engine import calcular_comision_variable_completa
 
 # Alerta de cierre (docs/modulo_metas.md, Fase 3 "PROPUESTA IA"): última semana del mes,
 # vendedor por debajo del umbral de riesgo -> mensaje destacado.
@@ -60,6 +59,12 @@ class MiComision:
     comision_variable: float | None = None
     nivel_variable: str | None = None
     desglose_variable: dict | None = None
+    # Auditoría 43 (H43-15, docs/auditoria/43_correcciones_sesion_ventas_y_datos.md): el
+    # frontend etiquetaba el panel dual con un texto fijo ("Piloto en sombra", "no afecta
+    # tu pago actual") que asumía `COMISION_MODO=sombra` -- se vuelve FALSO en cuanto se
+    # activa `variable` (ahí sí se paga sobre el esquema nuevo). Se expone el modo real
+    # para que la UI se derive de él en vez de asumirlo.
+    modo_comision: str = "plana"
 
 
 @dataclass
@@ -76,8 +81,8 @@ class CommissionService:
         self.commission_config_repo = commission_config_repo
 
     # ── Panel gerencial: cumplimiento real de todos los vendedores del período ────
-    def get_commission_tracking(self, anio: int, mes: int) -> list[VendorCommissionRow]:
-        rows = self.goal_repo.get_commission_tracking_rows(anio, mes)
+    def get_commission_tracking(self, anio: int, mes: int, vendedor: str | None = None) -> list[VendorCommissionRow]:
+        rows = self.goal_repo.get_commission_tracking_rows(anio, mes, vendedor=vendedor)
         modo = settings.COMISION_MODO
         resultado = []
         for r in rows:
@@ -156,6 +161,7 @@ class CommissionService:
             comision_devengada=c.comision_devengada, dias_restantes_mes=dias_restantes,
             en_alerta_cierre=en_alerta, mensaje_alerta=mensaje,
             comision_variable=comision_variable, nivel_variable=nivel_variable, desglose_variable=desglose_variable,
+            modo_comision=settings.COMISION_MODO,
         )
 
     # `settings.COMISION_MODO` ("plana"/"sombra"/"variable") es el mecanismo de rollback
@@ -176,6 +182,15 @@ class CommissionService:
     def _calcular_variable(
         self, vendedor_origen: str, anio: int, mes: int, venta_real: float, monto_meta: float,
     ) -> ComisionVariableCalculada:
+        """Corrección de diseño 2026-07-30 (auditoría 44, petición explícita del
+        usuario): las Comisiones Variables son UN SOLO TOTAL por vendedor -- líneas de
+        venta (margen/categoría), cobranza (por tramo de días de cobro) y ventas de
+        contado de agencia se SUMAN, nunca se elige entre "un esquema u otro". Delega en
+        `commission_variable_engine.calcular_comision_variable_completa`, que resuelve
+        el monto real de cada componente ACTIVO de la fórmula vigente (hay una sola) y
+        evalúa la tubería declarativa configurada -- usado también por
+        `CommissionSimulationService` para que el simulador refleje exactamente lo mismo
+        que se liquida."""
         assert self.commission_config_repo is not None
         modo_liquidacion = self._MODO_BACKEND_A_LIQUIDACION[settings.COMISION_MODO]
 
@@ -194,50 +209,38 @@ class CommissionService:
             if congelada is not None:
                 return self._reconstruir_desde_snapshot(congelada)
 
-        lineas_repo = self.goal_repo.get_commission_lines(vendedor_origen, anio, mes)
-        lineas = [
-            LineaComisionable(
-                codart=l.codart, clase=l.clase, subclase=l.subclase, es_servicio=l.es_servicio,
-                subtotal_neto=l.subtotal_neto, margen_bruto=l.margen_bruto, valor_descuento=l.valor_descuento,
-                dias_plazo=l.dias_plazo,
-            )
-            for l in lineas_repo
-        ]
         # Configuración vigente AL CIERRE DEL PERÍODO consultado, no "hoy" (docs/auditoria/
         # 35_actualizacion_modulo_metas.md, H1): antes esta llamada no pasaba fecha y
         # siempre resolvía la matriz/crédito vigentes en el momento de la consulta, sin
-        # importar qué anio/mes se pedía -- mismo fix que ya tenía la simulación
-        # (auditoría 34, H-8) pero que nunca se aplicó al cálculo real.
+        # importar qué anio/mes se pedía.
         fecha_periodo = fecha_referencia_periodo(anio, mes)
-        matriz = self.commission_config_repo.get_matriz_as_reglas(fecha_periodo)
-        rangos_credito = self.commission_config_repo.get_factores_credito_as_rangos(fecha_periodo)
-        config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor_origen, fecha_periodo)
-        factor_tipo = (
-            float(config_vendedor.factor_tipo) if config_vendedor else settings.COMISION_FACTOR_EXTERNO_DEFAULT
-        )
-        devoluciones = self.goal_repo.get_vendor_devoluciones_period(vendedor_origen, anio, mes)
-        config = ConfigComisionVariable(
-            tope_descuento_pct=settings.COMISION_TOPE_DESCUENTO_PCT,
-            tasa_minima_sin_costo_pct=settings.COMISION_TASA_MINIMA_SIN_COSTO_PCT,
-            umbral_subtotal_x=settings.COMISION_UMBRAL_SUBTOTAL_X,
-            mult_excelente=settings.COMISION_MULT_EXCELENTE, mult_cerca=settings.COMISION_MULT_CERCA,
-            piso_lejos=settings.COMISION_PISO_LEJOS,
+        resultado = calcular_comision_variable_completa(
+            goal_repo=self.goal_repo, commission_config_repo=self.commission_config_repo,
+            vendedor_origen=vendedor_origen, anio=anio, mes=mes,
+            venta_real=venta_real, monto_meta=monto_meta, fecha_config=fecha_periodo,
         )
 
-        # Bono 3 (cobranza sana) es "% ADICIONAL SOBRE LA COMISIÓN TOTAL" (§3.4 del plan)
-        # -- requiere conocer la comisión antes de sumar bonos, así que se resuelve en
-        # dos pasadas: (1) sin bonos, para obtener `comision_post_cumplimiento`; (2) con
-        # el total de bonos ya conocido.
-        pre_bonos = calcular_comision_variable(
-            lineas=lineas, matriz=matriz, rangos_credito=rangos_credito, factor_tipo_vendedor=factor_tipo,
-            venta_real=venta_real, monto_meta=monto_meta, devoluciones_mes=devoluciones,
-            bonos_total=0.0, config=config,
+        comision_base = (
+            resultado.montos.get("base_lineas_venta", 0.0) + resultado.montos.get("base_cobranza", 0.0)
+            + resultado.montos.get("contado_agencia", 0.0)
         )
-        bonos_total = calcular_bonos_periodo(self.goal_repo, vendedor_origen, anio, mes, pre_bonos.comision_post_cumplimiento)
-        cv = pre_bonos if bonos_total == 0.0 else calcular_comision_variable(
-            lineas=lineas, matriz=matriz, rangos_credito=rangos_credito, factor_tipo_vendedor=factor_tipo,
-            venta_real=venta_real, monto_meta=monto_meta, devoluciones_mes=devoluciones,
-            bonos_total=bonos_total, config=config,
+        cv = ComisionVariableCalculada(
+            comision_base=round(comision_base, 4),
+            comision_post_tipo=round(comision_base * resultado.montos.get("factor_tipo_vendedor", 1.0), 4),
+            nivel=resultado.nivel,
+            multiplicador_cumplimiento=resultado.montos.get("multiplicador_cumplimiento", 1.0),
+            comision_post_cumplimiento=round(
+                comision_base * resultado.montos.get("factor_tipo_vendedor", 1.0)
+                * resultado.montos.get("multiplicador_cumplimiento", 1.0), 4,
+            ),
+            devoluciones_estimadas=resultado.montos.get("devoluciones", 0.0),
+            bonos_total=resultado.montos.get("bonos", 0.0),
+            comision_final=resultado.comision_final,
+            desglose_lineas=resultado.desglose_lineas,
+            desglose_cobranza=(
+                tuple(asdict(d) for d in resultado.desglose_cobranza) if resultado.desglose_cobranza is not None else None
+            ),
+            traza_formula=resultado.traza_formula,
         )
         # Persiste aquí (no en el llamador): esta es la única rama de cálculo fresco --
         # la rama "congelada" de arriba ya retornó antes de llegar aquí, así que nunca

@@ -207,6 +207,14 @@ class ComisionVariableCalculada:
     bonos_total: float
     comision_final: float
     desglose_lineas: tuple[DesgloseLinea, ...]
+    # Poblados solo cuando la fórmula VIGENTE (auditoría 44) incluye 'base_cobranza' /
+    # cualquier componente -- None para la fórmula 'actual' (comportamiento legacy
+    # intacto). `desglose_cobranza` es el detalle por tramo (mismo formato que el reporte
+    # del ERP); `traza_formula` es el paso a paso de `evaluar_formula` (transparencia
+    # total, salvaguarda 6, ahora también sobre la ESTRUCTURA de la fórmula, no solo los
+    # valores).
+    desglose_cobranza: tuple[dict, ...] | None = None
+    traza_formula: tuple[dict, ...] | None = None
 
 
 def _resolver_regla(clase: str, subclase: str | None, matriz: list[ReglaCategoria]) -> ReglaCategoria | None:
@@ -299,6 +307,217 @@ def _calcular_linea(
         factor_estrategico=factor_estrategico, factor_credito=factor_credito,
         comision_linea=round(comision, 4), sin_costo=False, pendiente_aprobacion=False,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# Comisión sobre COBROS (docs/auditoria/44_comisiones_sobre_cobros.md,
+# docs/features/plan_comisiones_sobre_cobros.md). La regla realmente vigente en la
+# empresa: tasa por tramo de DÍAS DE COBRO (banfec - fecemi, RN-CM8/RN-CM9), no sobre
+# venta facturada. Convive con el motor por margen/categoría de arriba -- cuál de los dos
+# es la base de la comisión lo decide la FÓRMULA configurada (ver `evaluar_formula`), no
+# esta función.
+# ══════════════════════════════════════════════════════════════════════════════════
+PERFIL_EXTERNO = "externo"
+PERFIL_INTERNO = "interno"
+PERFIL_JEFE_AGENCIA = "jefe_agencia"
+
+
+@dataclass(frozen=True)
+class TramoCobranza:
+    """Una fila resuelta de `comision_tramos_cobranza` (ya filtrada por vigencia)."""
+    dias_hasta: int | None  # None = sin tope superior (equivalente al remanente > 365)
+    tasa_pct: float
+
+
+@dataclass(frozen=True)
+class CobroComisionable:
+    """Un cobro ya resuelto por el repositorio (grano `fact_cobros_cuotas`)."""
+    valor_cobrado: float
+    dias_cobro: int  # ya con piso en 0 (auditoría 44, H-9) -- materializado en el ETL
+
+
+@dataclass(frozen=True)
+class DesgloseTramoCobranza:
+    dias_hasta: int | None
+    tasa_pct: float
+    base_cobrada: float
+    comision_tramo: float
+
+
+@dataclass(frozen=True)
+class ComisionCobranzaCalculada:
+    comision_total: float
+    total_cobrado: float
+    desglose_tramos: tuple[DesgloseTramoCobranza, ...]
+
+
+def resolver_tramo_cobranza(dias_cobro: int, tramos: list[TramoCobranza]) -> float:
+    """Tasa del primer tramo (ordenado por `dias_hasta` ascendente, `None` al final) cuyo
+    techo cubre `dias_cobro`. Sin tramo que lo cubra (p.ej. > 365 sin fila `dias_hasta=None`
+    configurada) -> 0.0, igual que el cuadro de negocio original ("365 días: 0.00%")."""
+    dias_cobro = max(0, dias_cobro)  # defensivo: el ETL ya aplica el piso (H-9)
+    ordenados = sorted(tramos, key=lambda t: (t.dias_hasta is None, t.dias_hasta or 0))
+    for t in ordenados:
+        if t.dias_hasta is None or dias_cobro <= t.dias_hasta:
+            return t.tasa_pct
+    return 0.0
+
+
+def calcular_comision_cobranza(
+    cobros: list[CobroComisionable], tramos: list[TramoCobranza],
+) -> ComisionCobranzaCalculada:
+    """Σ cobros × tasa del tramo de sus días de cobro, con desglose POR TRAMO -- el mismo
+    formato que el reporte "Comisión sobre cobros" del ERP (auditoría 44 §3), para que el
+    vendedor pueda auditar su comisión tramo a tramo."""
+    ordenados = sorted(tramos, key=lambda t: (t.dias_hasta is None, t.dias_hasta or 0))
+    acumulado: dict[int, list[float]] = {i: [0.0, 0.0] for i in range(len(ordenados))}  # [base, comision]
+
+    for c in cobros:
+        dias = max(0, c.dias_cobro)
+        for i, t in enumerate(ordenados):
+            if t.dias_hasta is None or dias <= t.dias_hasta:
+                acumulado[i][0] += c.valor_cobrado
+                acumulado[i][1] += c.valor_cobrado * (t.tasa_pct / 100.0)
+                break
+
+    desglose = tuple(
+        DesgloseTramoCobranza(
+            dias_hasta=t.dias_hasta, tasa_pct=t.tasa_pct,
+            base_cobrada=round(acumulado[i][0], 4), comision_tramo=round(acumulado[i][1], 4),
+        )
+        for i, t in enumerate(ordenados)
+    )
+    return ComisionCobranzaCalculada(
+        comision_total=round(sum(d.comision_tramo for d in desglose), 4),
+        total_cobrado=round(sum(c.valor_cobrado for c in cobros), 4),
+        desglose_tramos=desglose,
+    )
+
+
+def calcular_contado_agencia(ventas_contado_agencia: float, pct: float) -> float:
+    """Componente "1% de ventas de contado de la agencia" de los jefes de agencia
+    (auditoría 44 §1). `ventas_contado_agencia` ya viene filtrada por el repositorio a
+    las ventas con `conpag='E'` (contado -- verificado contra Producción, RN-CM11:
+    contraintuitivo, 'E' es contado y 'C' es crédito) del vendedor en SU agencia."""
+    return round(max(0.0, ventas_contado_agencia) * (pct / 100.0), 4)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# Fórmula como configuración persistida (auditoría 44, pedido explícito del usuario: la
+# fórmula debe ser editable sin tocar código). `evaluar_formula` ejecuta una tubería
+# ORDENADA de componentes de un catálogo CERRADO -- nunca evalúa una expresión arbitraria
+# (superficie de ejecución inaceptable en un módulo que mueve dinero real). Cada
+# componente aporta un monto ya resuelto por el llamador (servicio); esta función solo
+# decide CÓMO se combinan (sumar/restar/multiplicar) y en qué orden, con piso $0 final.
+# ══════════════════════════════════════════════════════════════════════════════════
+OPERADOR_SUMAR = "sumar"
+OPERADOR_RESTAR = "restar"
+OPERADOR_MULTIPLICAR = "multiplicar"
+
+# Catálogo cerrado de componentes soportados por el motor (validado por el servicio antes
+# de guardar una fórmula -- ver CommissionConfigService). Documentado aquí porque es la
+# única fuente de verdad de qué aporta cada clave.
+COMPONENTES_FORMULA = frozenset({
+    "base_lineas_venta", "base_cobranza", "contado_agencia",
+    "factor_tipo_vendedor", "multiplicador_cumplimiento", "devoluciones", "bonos",
+})
+
+
+@dataclass(frozen=True)
+class PasoFormula:
+    orden: int
+    componente: str
+    operador: str
+    monto: float  # ya resuelto por el servicio antes de llamar a evaluar_formula
+
+
+@dataclass(frozen=True)
+class ResultadoFormula:
+    comision_final: float
+    pasos: tuple[dict, ...]  # traza: {orden, componente, operador, monto, acumulado_tras_paso}
+
+
+def evaluar_formula(pasos: list[PasoFormula]) -> ResultadoFormula:
+    """Ejecuta la tubería en orden de `orden` ascendente. `sumar`/`restar` operan sobre el
+    acumulado; `multiplicar` reemplaza el acumulado por `acumulado × monto` (monto es un
+    FACTOR en ese caso, p.ej. 1.2 para +20%, no un monto en dinero -- lo resuelve el
+    servicio según el componente). Piso $0 al final, igual que el motor anterior."""
+    acumulado = 0.0
+    traza = []
+    for p in sorted(pasos, key=lambda x: x.orden):
+        if p.operador == OPERADOR_SUMAR:
+            acumulado += p.monto
+        elif p.operador == OPERADOR_RESTAR:
+            acumulado -= p.monto
+        elif p.operador == OPERADOR_MULTIPLICAR:
+            acumulado *= p.monto
+        else:
+            raise ValueError(f"Operador de fórmula no soportado: {p.operador!r}")
+        traza.append({
+            "orden": p.orden, "componente": p.componente, "operador": p.operador,
+            "monto": round(p.monto, 4), "acumulado_tras_paso": round(acumulado, 4),
+        })
+    return ResultadoFormula(comision_final=round(max(0.0, acumulado), 4), pasos=tuple(traza))
+
+
+def calcular_base_lineas_venta(
+    lineas: list[LineaComisionable], matriz: list[ReglaCategoria], rangos_credito: list[RangoCredito],
+    config: ConfigComisionVariable,
+) -> tuple[float, tuple[DesgloseLinea, ...]]:
+    """Componente `base_lineas_venta` de la fórmula (auditoría 44 §2.2): la Σ de líneas
+    por margen/categoría que YA calculaba `calcular_comision_variable`, expuesta como
+    pieza reutilizable de la tubería declarativa en vez de estar sólo embebida en esa
+    función. `calcular_comision_variable` sigue siendo la ruta legacy (fórmula 'actual')
+    y no se modifica -- esta función se usa desde el motor de fórmula genérico
+    (`CommissionService._calcular_variable_formula`) cuando la fórmula vigente sea otra."""
+    desglose = tuple(_calcular_linea(l, matriz, rangos_credito, config) for l in lineas)
+    return round(sum(d.comision_linea for d in desglose), 4), desglose
+
+
+def es_vendedor_nuevo(fecha_ingreso: datetime.date | None, anio: int, mes: int, meses_umbral: int) -> bool:
+    """Mismo criterio que `GoalMLService._ajustar_meta_por_tipo`: un vendedor dentro de
+    sus primeros `meses_umbral` meses (`COMISION_VENDEDOR_NUEVO_MESES`) recibe una meta
+    sustituida por el promedio del equipo, no un múltiplo de su propio histórico -- por
+    eso no hay factor de tipo que revertir para él (ver `resolver_meta_sin_ajuste_tipo`)."""
+    if fecha_ingreso is None:
+        return False
+    meses_antiguedad = (anio - fecha_ingreso.year) * 12 + (mes - fecha_ingreso.month)
+    return 0 <= meses_antiguedad < meses_umbral
+
+
+def resolver_meta_sin_ajuste_tipo(
+    monto_meta_persistido: float,
+    tipo_vendedor: str | None,
+    fecha_ingreso: datetime.date | None,
+    anio: int,
+    mes: int,
+    meta_factor_externo: float,
+    meta_factor_interno: float,
+    vendedor_nuevo_meses: int,
+) -> float:
+    """Recupera la meta ANTES del ajuste por tipo de vendedor (auditoría: doble ajuste
+    por tipo en Comisiones Variables).
+
+    `GoalMLService._ajustar_meta_por_tipo` ya multiplicó la meta base por
+    `meta_factor_externo` (más dura, +10% por defecto) o `meta_factor_interno` (más
+    floja, -5% por defecto) al generarla -- ese es `monto_meta_persistido`. Si el
+    % de cumplimiento de la comisión variable (`venta_real / meta`) se calcula contra
+    ESA misma meta ya ajustada, el ajuste por tipo se aplica una SEGUNDA vez: un externo
+    con meta más dura cae más fácil al tramo "Lejos" (comisión en 0%, `piso_lejos`) y un
+    interno con meta más floja llega más fácil a "Excelente" (bono +20%,
+    `mult_excelente`) -- sumándose al descuento/premio que YA le aplica `factor_tipo`
+    sobre cada línea. Reportado en producción: en un mes reconstruido, todos los
+    externos con comisión en $0.00 y todos los internos con comisión elevada, aunque
+    su venta real no fuera tan distinta.
+
+    Esta función deshace el ajuste multiplicativo para que el tramo de cumplimiento se
+    decida sobre una vara neutral (la meta estadística real, sin favorecer ni castigar
+    por tipo). Un vendedor "nuevo" no tiene factor que revertir -- su meta fue
+    SUSTITUIDA por el promedio del equipo, no multiplicada por un factor de tipo."""
+    if monto_meta_persistido <= 0 or es_vendedor_nuevo(fecha_ingreso, anio, mes, vendedor_nuevo_meses):
+        return monto_meta_persistido
+    factor = meta_factor_interno if tipo_vendedor == "interno" else meta_factor_externo
+    return monto_meta_persistido / factor if factor > 0 else monto_meta_persistido
 
 
 def calcular_comision_variable(

@@ -38,8 +38,8 @@ class GoalsService:
         periods.sort(key=lambda x: (x["anio"], x["mes"]))
         return periods
 
-    def get_commission_tracking(self, anio: int, mes: int) -> list[dict]:
-        return self.goal_repo.get_commission_report(anio, mes)
+    def get_commission_tracking(self, anio: int, mes: int, vendedor: str | None = None) -> list[dict]:
+        return self.goal_repo.get_commission_report(anio, mes, vendedor=vendedor)
 
     def review_goal(
         self, goal_id: int, estado: str, approved_by_user_id: int,

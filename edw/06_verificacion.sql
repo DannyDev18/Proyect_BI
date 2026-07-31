@@ -27,7 +27,7 @@ WITH tablas_esperadas AS (
         'dim_estado_documento',
         -- Hechos (11)
         'fact_ventas_detalles', 'fact_ventas_detalle', 'fact_inventario_snapshot', 'fact_movimientos_inventario',
-        'fact_compras', 'fact_cobros_cxc', 'fact_pagos_cxp', 'fact_nomina', 
+        'fact_compras', 'fact_cobros_cxc', 'fact_cobros_cuotas', 'fact_pagos_cxp', 'fact_nomina',
         'fact_movimientos_caja', 'fact_metas_comerciales', 'fact_logs_auditoria',
         'fact_devoluciones', 'fact_transferencias', 'etl_control'
     ]) AS tabla

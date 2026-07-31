@@ -2,51 +2,78 @@ import { RotateCcw } from 'lucide-react';
 import { useBodegaFiltros } from '../../hooks/bodega';
 import { useBodegaFiltersStore } from '../../store/bodegaFiltersStore';
 import { Select } from '../ui/Select';
+import { ComboboxField } from '../ui/ComboboxField';
+import { DateField } from '../ui/DateField';
 import { FilterBar, FilterField } from '../ui/FilterBar';
-
-const dateCls =
-  'bg-slate-950 border border-slate-700 text-slate-200 text-sm rounded-md px-3 py-1.5 transition-colors cursor-pointer outline-none max-w-[180px] focus-ring';
 
 /** Filtros globales del dashboard de Bodega (§1.1): almacén, categoría, proveedor,
  * rango de fechas y tipo de movimiento de Kardex (RN validada en
  * docs/auditoria/02_reglas_negocio_validadas.md §3). Persisten en la sesión
- * (store con sessionStorage). */
+ * (store con sessionStorage).
+ *
+ * El selector de almacén ya viene pre-filtrado por el backend (RN-B10,
+ * `GET /analytics/bodega/filtros`): si el usuario se creó para una bodega específica
+ * solo ve esa (o esas), y solo ve el catálogo completo si se marcó
+ * `todos_los_almacenes` -- no hace falta filtrar de nuevo aquí.
+ *
+ * Filtros "inteligentes" (Fase 2 §2.2): `proveedor` depende de `categoria` -- al
+ * cambiar la categoría, el catálogo de proveedores se recarga desde el backend
+ * (`proveedores` restringido a los que realmente la suministran, `fact_compras`) y el
+ * proveedor elegido se limpia si ya no pertenece al nuevo catálogo, para no dejar
+ * seleccionada una combinación que no existe en los datos reales. */
 export const BodegaFilterBar = () => {
-  const { data: catalogos } = useBodegaFiltros();
   const f = useBodegaFiltersStore();
+  const { data: catalogos } = useBodegaFiltros(f.categoria);
+
+  const proveedoresDisponibles = catalogos?.proveedores ?? [];
+  const proveedorInvalido = f.proveedor !== null && !proveedoresDisponibles.includes(f.proveedor);
+
+  const handleCategoriaChange = (valor: string) => {
+    const nueva = valor === 'ALL' ? null : valor;
+    f.setCategoria(nueva);
+    f.setProveedor(null); // el proveedor elegido puede no pertenecer a la nueva categoría
+  };
 
   return (
     <FilterBar>
       <FilterField label="Almacén">
-        <Select className="max-w-[180px]" value={f.almacen ?? 'ALL'}
-          onChange={(e) => f.setAlmacen(e.target.value === 'ALL' ? null : e.target.value)}>
-          <option value="ALL">Todas las bodegas</option>
-          {catalogos?.almacenes.map((a) => <option key={a} value={a}>{a}</option>)}
-        </Select>
+        <ComboboxField
+          className="max-w-[180px]" aria-label="Almacén"
+          value={f.almacen} allLabel="Todas las bodegas"
+          options={catalogos?.almacenes ?? []}
+          onChange={f.setAlmacen}
+        />
       </FilterField>
 
       <FilterField label="Categoría">
-        <Select className="max-w-[180px]" value={f.categoria ?? 'ALL'}
-          onChange={(e) => f.setCategoria(e.target.value === 'ALL' ? null : e.target.value)}>
-          <option value="ALL">Todas las categorías</option>
-          {catalogos?.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
-        </Select>
+        <ComboboxField
+          className="max-w-[180px]" aria-label="Categoría"
+          value={f.categoria} allLabel="Todas las categorías"
+          options={catalogos?.categorias ?? []}
+          onChange={(v) => handleCategoriaChange(v ?? 'ALL')}
+        />
       </FilterField>
 
-      <FilterField label="Proveedor">
-        <Select className="max-w-[180px]" value={f.proveedor ?? 'ALL'}
-          onChange={(e) => f.setProveedor(e.target.value === 'ALL' ? null : e.target.value)}>
-          <option value="ALL">Todos los proveedores</option>
-          {catalogos?.proveedores.map((p) => <option key={p} value={p}>{p}</option>)}
-        </Select>
+      <FilterField
+        label="Proveedor"
+        helper={f.categoria && proveedoresDisponibles.length === 0
+          ? 'Sin proveedores registrados para esta categoría.' : undefined}
+      >
+        <ComboboxField
+          className="max-w-[180px]" aria-label="Proveedor"
+          value={proveedorInvalido ? null : f.proveedor} allLabel="Todos los proveedores"
+          options={proveedoresDisponibles}
+          disabled={!!f.categoria && proveedoresDisponibles.length === 0}
+          onChange={f.setProveedor}
+        />
       </FilterField>
 
       <FilterField label="Desde" htmlFor="bodega-fecha-desde">
-        <input id="bodega-fecha-desde" type="date" className={dateCls} value={f.fechaDesde ?? ''}
+        <DateField id="bodega-fecha-desde" value={f.fechaDesde ?? ''}
           onChange={(e) => f.setRangoFechas(e.target.value || null, f.fechaHasta)} />
       </FilterField>
       <FilterField label="Hasta" htmlFor="bodega-fecha-hasta">
-        <input id="bodega-fecha-hasta" type="date" className={dateCls} value={f.fechaHasta ?? ''}
+        <DateField id="bodega-fecha-hasta" value={f.fechaHasta ?? ''}
           onChange={(e) => f.setRangoFechas(f.fechaDesde, e.target.value || null)} />
       </FilterField>
 

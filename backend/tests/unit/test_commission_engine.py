@@ -1,9 +1,12 @@
 # backend/tests/unit/test_commission_engine.py
+import datetime
+
 import pytest
 
 from app.services.commission_engine import (
     ConfigComisionVariable, LineaComisionable, NivelCumplimiento, RangoCredito, ReglaCategoria,
-    calcular_comision, calcular_comision_variable, calcular_nivel,
+    calcular_comision, calcular_comision_variable, calcular_nivel, es_vendedor_nuevo,
+    resolver_meta_sin_ajuste_tipo,
 )
 
 
@@ -269,3 +272,92 @@ def test_bonos_se_suman_a_la_comision_final():
     )
     assert r.bonos_total == 55.0
     assert r.comision_final == pytest.approx(r.comision_post_cumplimiento + 55.0)
+
+
+# ── resolver_meta_sin_ajuste_tipo (doble ajuste por tipo, reportado en producción) ──
+def test_es_vendedor_nuevo_dentro_de_la_ventana():
+    assert es_vendedor_nuevo(datetime.date(2026, 5, 1), 2026, 6, meses_umbral=3) is True
+    assert es_vendedor_nuevo(datetime.date(2026, 5, 1), 2026, 8, meses_umbral=3) is False
+    assert es_vendedor_nuevo(None, 2026, 6, meses_umbral=3) is False
+
+
+def test_reversa_ajuste_de_meta_externo():
+    """Un externo tiene meta_persistida = meta_base * 1.10 -- revertir debe recuperar
+    meta_base exactamente."""
+    meta_base = 10000.0
+    meta_persistida = meta_base * 1.10
+    resultado = resolver_meta_sin_ajuste_tipo(
+        meta_persistida, "externo", None, 2026, 6,
+        meta_factor_externo=1.10, meta_factor_interno=0.95, vendedor_nuevo_meses=3,
+    )
+    assert resultado == pytest.approx(meta_base)
+
+
+def test_reversa_ajuste_de_meta_interno():
+    """Un interno tiene meta_persistida = meta_base * 0.95 -- revertir debe recuperar
+    meta_base exactamente, no seguir favoreciéndolo con la meta ya reducida."""
+    meta_base = 10000.0
+    meta_persistida = meta_base * 0.95
+    resultado = resolver_meta_sin_ajuste_tipo(
+        meta_persistida, "interno", None, 2026, 6,
+        meta_factor_externo=1.10, meta_factor_interno=0.95, vendedor_nuevo_meses=3,
+    )
+    assert resultado == pytest.approx(meta_base)
+
+
+def test_vendedor_nuevo_no_revierte_factor_porque_su_meta_fue_sustituida():
+    """La meta de un vendedor nuevo es el promedio del equipo (no meta_base * factor) --
+    no hay factor multiplicativo que revertir, la función debe devolverla intacta."""
+    meta_promedio_equipo_x_060 = 6000.0
+    resultado = resolver_meta_sin_ajuste_tipo(
+        meta_promedio_equipo_x_060, "externo", datetime.date(2026, 5, 15), 2026, 6,
+        meta_factor_externo=1.10, meta_factor_interno=0.95, vendedor_nuevo_meses=3,
+    )
+    assert resultado == meta_promedio_equipo_x_060
+
+
+def test_meta_cero_o_negativa_se_devuelve_intacta():
+    assert resolver_meta_sin_ajuste_tipo(0.0, "externo", None, 2026, 6, 1.10, 0.95, 3) == 0.0
+
+
+def test_externo_no_cae_a_cero_por_doble_ajuste_de_meta():
+    """Reproduce el hallazgo reportado en producción: un externo que vendió el 85% de
+    su meta estadística real (desempeño normal, tramo 'Cerca') caía a 'Lejos' --
+    comisión en $0.00 -- porque el tramo se comparaba contra la meta YA ajustada
+    (*1.10): 0.85/1.10 = 77.3% < 80%. Corregido: al revertir el ajuste antes de decidir
+    el tramo, su cumplimiento real (85%) sí cae en 'Cerca', pagando la fracción
+    correspondiente en vez de $0."""
+    meta_base = 10000.0
+    meta_persistida_externo = meta_base * 1.10  # lo que se generó y persistió
+    venta_real = meta_base * 0.85
+
+    fraccion_sin_corregir = venta_real / meta_persistida_externo
+    assert calcular_nivel(fraccion_sin_corregir) == NivelCumplimiento.LEJOS  # el bug: comisión $0
+
+    meta_corregida = resolver_meta_sin_ajuste_tipo(
+        meta_persistida_externo, "externo", None, 2026, 6,
+        meta_factor_externo=1.10, meta_factor_interno=0.95, vendedor_nuevo_meses=3,
+    )
+    fraccion_corregida = venta_real / meta_corregida
+    assert calcular_nivel(fraccion_corregida) == NivelCumplimiento.CERCA  # corregido: sí paga
+
+
+def test_interno_no_gana_excelente_solo_por_meta_floja():
+    """Un interno que vendió el 99% de su meta estadística real (desempeño normal,
+    tramo 'Meta') se inflaba a 'Excelente' -- bono +20% -- porque el tramo se comparaba
+    contra la meta YA reducida (*0.95): 0.99/0.95 = 104.2% >= 100%. Corregido: al
+    revertir el ajuste, su cumplimiento real (99%) cae en 'Meta', sin el bono que no
+    ganó de verdad."""
+    meta_base = 10000.0
+    meta_persistida_interno = meta_base * 0.95
+    venta_real = meta_base * 0.99
+
+    fraccion_sin_corregir = venta_real / meta_persistida_interno
+    assert calcular_nivel(fraccion_sin_corregir) == NivelCumplimiento.EXCELENTE  # el bug: bono no ganado
+
+    meta_corregida = resolver_meta_sin_ajuste_tipo(
+        meta_persistida_interno, "interno", None, 2026, 6,
+        meta_factor_externo=1.10, meta_factor_interno=0.95, vendedor_nuevo_meses=3,
+    )
+    fraccion_corregida = venta_real / meta_corregida
+    assert calcular_nivel(fraccion_corregida) == NivelCumplimiento.META  # corregido: sin bono falso

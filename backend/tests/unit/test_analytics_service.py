@@ -84,7 +84,7 @@ def test_get_sales_kpis_usa_periodo_vigente_sin_anio_mes():
     service.get_sales_kpis(sucursal="GYE")
 
     repo.get_latest_period.assert_called_once()
-    repo.get_sales_performance.assert_called_once_with(2026, 7, "GYE")
+    repo.get_sales_performance.assert_called_once_with(2026, 7, "GYE", None)
 
 
 def test_get_sales_kpis_usa_periodo_explicito_sin_consultar_el_vigente():
@@ -95,4 +95,17 @@ def test_get_sales_kpis_usa_periodo_explicito_sin_consultar_el_vigente():
     service.get_sales_kpis(sucursal="GYE", anio=2026, mes=3)
 
     repo.get_latest_period.assert_not_called()
-    repo.get_sales_performance.assert_called_once_with(2026, 3, "GYE")
+    repo.get_sales_performance.assert_called_once_with(2026, 3, "GYE", None)
+
+
+# ── auditoría A-0.3, decisión B-3 (docs/features/plan_correcciones_integrales_sistema.md) ──
+def test_get_sales_kpis_propaga_vendedor_al_repositorio():
+    """RLS real del rol `ventas`: `vendedor` reemplaza a `sucursal` (el 90.9% de los
+    vendedores activos transaccionan en 4-7 de las 7 sucursales reales del EDW)."""
+    repo = MagicMock()
+    repo.get_sales_performance.return_value = {"meta_mensual": 0, "cumplimiento_actual": 0, "meta_proyectada": 0, "ranking_vendedores": []}
+    service = AnalyticsService(repo)
+
+    service.get_sales_kpis(anio=2026, mes=3, vendedor="V001")
+
+    repo.get_sales_performance.assert_called_once_with(2026, 3, None, "V001")

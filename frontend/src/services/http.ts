@@ -20,8 +20,15 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      // Auditoría 43 (H43-8..H43-10): un 401 significa que el token ya no sirve (expiró
+      // o fue revocado por un logout) -- se limpia todo el estado de sesión, no solo el
+      // token. `window.location.href` (no `navigate` de React Router) fuerza una recarga
+      // completa de página, que por sí sola destruye la caché de TanStack Query y los
+      // stores Zustand en memoria; lo que SÍ sobrevive a una recarga es lo persistido en
+      // Web Storage, por eso se limpia explícitamente antes de redirigir.
       localStorage.removeItem('auth_token');
       localStorage.removeItem('auth_user');
+      sessionStorage.clear();
       if (window.location.pathname !== '/login') window.location.href = '/login';
     }
     return Promise.reject(error);

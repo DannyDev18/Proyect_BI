@@ -16,6 +16,7 @@ import { DashboardVentas } from '../pages/DashboardVentas.tsx';
 import { DashboardMetasVendedor } from '../pages/DashboardMetasVendedor.tsx';
 import { VentasCrossSelling } from '../pages/VentasCrossSelling.tsx';
 import { VentasCartera360 } from '../pages/VentasCartera360.tsx';
+import { VentasRuta } from '../pages/VentasRuta.tsx';
 import { AccessDenied } from '../pages/AccessDenied.tsx';
 import { Settings } from '../pages/Settings.tsx';
 import { NotFound } from '../pages/NotFound.tsx';
@@ -64,17 +65,18 @@ export const AppRouter = () => {
         <Route path="/" element={<Layout />}>
           <Route index element={<RoleBasedRedirect />} />
           
-          <Route path="admin" element={
-            <ProtectedRoute routeKey="admin">
-              <DashboardAdmin />
-            </ProtectedRoute>
-          } />
-
-          <Route path="users" element={
-            <ProtectedRoute routeKey="users">
-              <UsersManagement />
-            </ProtectedRoute>
-          } />
+          <Route path="admin">
+            <Route index element={
+              <ProtectedRoute routeKey="admin">
+                <DashboardAdmin />
+              </ProtectedRoute>
+            } />
+            <Route path="usuarios" element={
+              <ProtectedRoute routeKey="admin.usuarios">
+                <UsersManagement />
+              </ProtectedRoute>
+            } />
+          </Route>
 
           <Route path="gerencia">
             <Route index element={
@@ -126,6 +128,11 @@ export const AppRouter = () => {
             <Route path="cartera360" element={
               <ProtectedRoute routeKey="ventas.cartera360">
                 <VentasCartera360 />
+              </ProtectedRoute>
+            } />
+            <Route path="ruta" element={
+              <ProtectedRoute routeKey="ventas.ruta">
+                <VentasRuta />
               </ProtectedRoute>
             } />
           </Route>

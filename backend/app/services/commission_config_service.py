@@ -9,6 +9,7 @@ from app.core.exceptions import ValidationError
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.goal_repository import GoalRepository
+from app.services.commission_engine import COMPONENTES_FORMULA, PERFIL_EXTERNO, PERFIL_INTERNO, PERFIL_JEFE_AGENCIA
 
 
 class CommissionConfigService:
@@ -68,7 +69,7 @@ class CommissionConfigService:
         return [
             {
                 "id": f.id, "dias_desde": f.dias_desde, "dias_hasta": f.dias_hasta,
-                "factor": float(f.factor), "pct_al_facturar": float(f.pct_al_facturar),
+                "factor": float(f.factor),
                 "vigente_desde": f.vigente_desde, "vigente_hasta": f.vigente_hasta,
             }
             for f in self.commission_config_repo.get_factores_credito_vigentes()
@@ -84,7 +85,7 @@ class CommissionConfigService:
         resultado = [
             {
                 "id": f.id, "dias_desde": f.dias_desde, "dias_hasta": f.dias_hasta,
-                "factor": float(f.factor), "pct_al_facturar": float(f.pct_al_facturar),
+                "factor": float(f.factor),
                 "vigente_desde": f.vigente_desde, "vigente_hasta": f.vigente_hasta,
             }
             for f in nuevos
@@ -106,7 +107,7 @@ class CommissionConfigService:
             {
                 "id_vendedor_origen": v.id_vendedor_origen, "nombre_vendedor": nombres.get(v.id_vendedor_origen),
                 "tipo": v.tipo, "factor_tipo": float(v.factor_tipo),
-                "fecha_ingreso": v.fecha_ingreso, "activo": v.activo,
+                "fecha_ingreso": v.fecha_ingreso, "activo": v.activo, "agencia": v.agencia,
             }
             for v in configs
         ]
@@ -120,17 +121,131 @@ class CommissionConfigService:
 
     def upsert_config_vendedor(
         self, vendedor_origen: str, tipo: str, factor_tipo: float, fecha_ingreso, usuario_id: int | None = None,
+        agencia: str | None = None,
     ) -> dict:
-        v = self.commission_config_repo.upsert_config_vendedor(vendedor_origen, tipo, factor_tipo, fecha_ingreso)
+        # RN (auditoría 44): 'jefe_agencia' SIN agencia deja el componente
+        # 'contado_agencia' en 0 silenciosamente (ver CommissionService); se exige aquí
+        # para no dejar pasar un error de captura del formulario sin avisar.
+        if tipo == PERFIL_JEFE_AGENCIA and not agencia:
+            raise ValidationError("El perfil 'jefe_agencia' requiere indicar la agencia (establ).")
+        v = self.commission_config_repo.upsert_config_vendedor(
+            vendedor_origen, tipo, factor_tipo, fecha_ingreso, agencia=agencia,
+        )
         resultado = {
             "id_vendedor_origen": v.id_vendedor_origen, "tipo": v.tipo, "factor_tipo": float(v.factor_tipo),
-            "fecha_ingreso": v.fecha_ingreso, "activo": v.activo,
+            "fecha_ingreso": v.fecha_ingreso, "activo": v.activo, "agencia": v.agencia,
         }
         self.commission_config_repo.log_cambio_config(
             usuario_id=usuario_id, tabla="comision_config_vendedor", accion="upsert",
             detalle={k: str(v) for k, v in resultado.items()},
         )
         return resultado
+
+    # ── Tramos de comisión sobre COBROS (auditoría 44 §2.1) ──────────────────────
+    _PERFILES_TRAMO = (PERFIL_EXTERNO, PERFIL_INTERNO, PERFIL_JEFE_AGENCIA)
+
+    def get_todos_tramos_cobranza(self) -> dict:
+        vigentes = self.commission_config_repo.get_todos_tramos_cobranza_vigentes()
+        por_perfil: dict[str, list[dict]] = {p: [] for p in self._PERFILES_TRAMO}
+        for t in vigentes:
+            por_perfil.setdefault(t.perfil, []).append({
+                "id": t.id, "perfil": t.perfil, "dias_hasta": t.dias_hasta, "tasa_pct": float(t.tasa_pct),
+                "vigente_desde": t.vigente_desde, "vigente_hasta": t.vigente_hasta,
+            })
+        return por_perfil
+
+    def replace_tramos_cobranza(self, perfil: str, tramos: list[dict], usuario_id: int | None = None) -> list[dict]:
+        """Valida que los tramos entrantes tengan techos crecientes y sin duplicados
+        antes de reemplazar -- `resolver_tramo_cobranza` resuelve por el primer tramo que
+        cubre `dias_cobro` en orden de `dias_hasta`; techos duplicados o desordenados
+        dejarían un tramo inalcanzable sin que la UI lo advierta."""
+        self._validar_tramos_cobranza(tramos)
+        nuevos = self.commission_config_repo.replace_tramos_cobranza(perfil, tramos, creado_por=usuario_id)
+        resultado = [
+            {
+                "id": t.id, "perfil": t.perfil, "dias_hasta": t.dias_hasta, "tasa_pct": float(t.tasa_pct),
+                "vigente_desde": t.vigente_desde, "vigente_hasta": t.vigente_hasta,
+            }
+            for t in nuevos
+        ]
+        self.commission_config_repo.log_cambio_config(
+            usuario_id=usuario_id, tabla="comision_tramos_cobranza", accion="replace",
+            detalle={"perfil": perfil, "tramos": [{k: str(v) for k, v in t.items()} for t in resultado]},
+        )
+        return resultado
+
+    @staticmethod
+    def _validar_tramos_cobranza(tramos: list[dict]) -> None:
+        techos = [t.get("dias_hasta") for t in tramos]
+        if len(techos) != len(set(techos)):
+            raise ValidationError("Hay tramos de cobranza con el mismo 'dias_hasta' -- cada techo debe ser único.")
+        finitos = sorted(t for t in techos if t is not None)
+        if finitos and any(a >= b for a, b in zip(finitos, finitos[1:])):
+            raise ValidationError("Los tramos con 'dias_hasta' finito deben ser estrictamente crecientes.")
+
+    # ── Fórmula de comisión (auditoría 44 §2.2) ──────────────────────────────────
+    def get_formulas(self) -> dict:
+        formulas = self.commission_config_repo.get_todas_las_formulas()
+        return {
+            "formulas": [
+                {
+                    "id": f.id, "clave": f.clave, "nombre": f.nombre, "activa": f.activa,
+                    "componentes": [
+                        {
+                            "id": c.id, "orden": c.orden, "componente": c.componente,
+                            "operador": c.operador, "activo": c.activo, "parametros": c.parametros,
+                        }
+                        for c in componentes
+                    ],
+                }
+                for f, componentes in formulas
+            ],
+            "catalogo_componentes": sorted(COMPONENTES_FORMULA),
+        }
+
+    def reemplazar_componentes_formula(
+        self, formula_id: int, componentes: list[dict], usuario_id: int | None = None,
+    ) -> list[dict]:
+        self._validar_componentes_formula(componentes)
+        nuevos = self.commission_config_repo.reemplazar_componentes_formula(formula_id, componentes)
+        resultado = [
+            {
+                "id": c.id, "orden": c.orden, "componente": c.componente,
+                "operador": c.operador, "activo": c.activo, "parametros": c.parametros,
+            }
+            for c in nuevos
+        ]
+        self.commission_config_repo.log_cambio_config(
+            usuario_id=usuario_id, tabla="comision_formula", accion="reemplazar_componentes",
+            detalle={"formula_id": formula_id, "componentes": [{k: str(v) for k, v in c.items()} for c in resultado]},
+        )
+        return resultado
+
+    @staticmethod
+    def _validar_componentes_formula(componentes: list[dict]) -> None:
+        """Catálogo cerrado (R-4 del plan): NUNCA se acepta una clave de componente fuera
+        de `COMPONENTES_FORMULA` -- esto es lo que impide que la "fórmula editable" se
+        convierta en una superficie de ejecución de código arbitrario."""
+        if not componentes:
+            raise ValidationError("Una fórmula necesita al menos un componente.")
+        for c in componentes:
+            if c["componente"] not in COMPONENTES_FORMULA:
+                raise ValidationError(
+                    f"Componente de fórmula desconocido: {c['componente']!r}. "
+                    f"Catálogo válido: {sorted(COMPONENTES_FORMULA)}."
+                )
+        ordenes = [c["orden"] for c in componentes]
+        if len(ordenes) != len(set(ordenes)):
+            raise ValidationError("Hay componentes de la fórmula con el mismo 'orden'.")
+        activos = [c for c in componentes if c.get("activo", True)]
+        tiene_base = any(
+            c["componente"] in ("base_lineas_venta", "base_cobranza", "contado_agencia") for c in activos
+        )
+        if not tiene_base:
+            raise ValidationError(
+                "La fórmula necesita al menos un componente base activo "
+                "(base_lineas_venta, base_cobranza o contado_agencia)."
+            )
 
     @staticmethod
     def _validar_rangos_credito_sin_solape(factores: list[dict]) -> None:

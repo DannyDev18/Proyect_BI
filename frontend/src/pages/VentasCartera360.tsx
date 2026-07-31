@@ -5,8 +5,15 @@ import { DataTable } from '../components/ui/DataTable';
 import { Drawer } from '../components/ui/Drawer';
 import { Button } from '../components/ui/Button';
 import { useListaTrabajo, useDetalleCliente, useRegistrarGestion, useTasaRecuperacion } from '../hooks/cartera360';
-import type { ClienteListaTrabajo, EventoGestion } from '../types/cartera360';
+import type { ClienteListaTrabajo, EstadoCartera, EventoGestion } from '../types/cartera360';
+import { Badge } from '../components/ui/Badge';
 import { fmt, fmtMoney, pct } from '../utils/format';
+
+const ESTADO_CARTERA_BADGE: Record<EstadoCartera, { variant: 'success' | 'warning' | 'danger'; label: string }> = {
+  activo: { variant: 'success', label: 'Activo' },
+  potencial: { variant: 'warning', label: 'Potencial' },
+  inactivo: { variant: 'danger', label: 'Inactivo' },
+};
 
 export const VentasCartera360 = () => {
   const [clienteSeleccionado, setClienteSeleccionado] = useState<ClienteListaTrabajo | null>(null);
@@ -95,7 +102,15 @@ export const VentasCartera360 = () => {
                 </span>
               ),
             },
+            { key: 'ultima_compra', header: 'Última compra', render: (r) => r.ultima_compra ?? '—' },
             { key: 'dias_sin_comprar', header: 'Días sin comprar', numeric: true, render: (r) => r.dias_sin_comprar },
+            {
+              key: 'estado_cartera', header: 'Estado',
+              render: (r) => {
+                const badge = ESTADO_CARTERA_BADGE[r.estado_cartera];
+                return <Badge variant={badge.variant}>{badge.label}</Badge>;
+              },
+            },
             {
               key: 'frecuencia_promedio_dias', header: 'Frecuencia habitual', numeric: true,
               render: (r) => (r.frecuencia_promedio_dias ? `cada ${fmt(r.frecuencia_promedio_dias)} días` : '—'),
@@ -122,6 +137,16 @@ export const VentasCartera360 = () => {
           <p className="text-sm text-danger">{detalle.error}</p>
         ) : detalle.data ? (
           <div className="space-y-5">
+            {clienteSeleccionado && (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-400">
+                  Última compra: <span className="text-slate-200 font-medium">{clienteSeleccionado.ultima_compra ?? '—'}</span>
+                </span>
+                <Badge variant={ESTADO_CARTERA_BADGE[clienteSeleccionado.estado_cartera].variant}>
+                  {ESTADO_CARTERA_BADGE[clienteSeleccionado.estado_cartera].label}
+                </Badge>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="card p-3">
                 <p className="text-xs text-slate-500">Riesgo de fuga</p>

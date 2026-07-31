@@ -153,6 +153,12 @@ def commission_config_repo():
     repo.get_factores_credito_as_rangos.return_value = []
     repo.get_config_vendedor.return_value = None
     repo.get_liquidacion.return_value = None  # sin snapshot congelado previo por defecto
+    # Auditoría 44 (docs/features/plan_comisiones_sobre_cobros.md): sin fórmula activa
+    # configurada, `_calcular_variable` cae a la ruta legacy (`calcular_comision_variable`)
+    # -- que es la que estos tests ejercitan. Sin este default, un MagicMock() no
+    # configurado simula "hay una fórmula activa distinta de 'actual'" y desvía el
+    # cálculo hacia el motor de fórmula genérico, rompiendo estos tests preexistentes.
+    repo.get_formula_activa.return_value = None
     return repo
 
 

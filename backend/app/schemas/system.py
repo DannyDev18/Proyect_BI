@@ -30,3 +30,13 @@ class SystemHealthResponse(BaseModel):
     etl_detalle: list[EtlControlEntry]
     logins_fallidos_ventana_horas: int
     logins_fallidos_conteo: int
+
+
+class AdminResumenResponse(BaseModel):
+    """Fase 5 §5.5 (docs/features/plan_correcciones_integrales_sistema.md): métricas
+    reales del dashboard de Admin -- `public.usuarios` + EDW (`dim_vendedor`/
+    `dim_almacen`), nunca placeholders."""
+    usuarios_activos: int
+    usuarios_inactivos: int
+    total_vendedores_activos: int
+    total_almacenes: int

@@ -4,9 +4,7 @@ import {
   getAlmacenes, getSalesPrediction,
 } from '../services/gerencia';
 import { qk } from '../constants/queryKeys';
-
-const errorMessage = (error: unknown): string | null =>
-  error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
+import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 type GerenciaKpiParams = Parameters<typeof getGerenciaKPIs>[0];
 type RevenueByCategoryParams = Parameters<typeof getRevenueByCategory>[0];

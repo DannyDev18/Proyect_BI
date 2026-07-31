@@ -32,6 +32,7 @@ from app.services.commission_config_service import CommissionConfigService
 from app.services.commission_service import CommissionService
 from app.services.commission_simulation_service import CommissionSimulationService
 from app.services.cross_sell_engine_service import CrossSellEngineService
+from app.services.gestion_service import GestionService
 from app.services.goal_ml_service import GoalMLService
 from app.services.goals_service import GoalsService
 from app.services.notification_service import NotificationService
@@ -40,6 +41,7 @@ from app.services.role_service import RoleService
 from app.services.system_service import SystemService
 from app.services.training_service import TrainingService
 from app.services.user_service import UserService
+from app.services.vendor_dashboard_service import VendorDashboardService
 from app.services.warehouse_service import WarehouseService
 
 
@@ -68,8 +70,28 @@ def get_dataset_repository(db: SessionDep) -> DatasetRepository:
     return DatasetRepository(db)
 
 
-def get_warehouse_repository(db: SessionDep) -> WarehouseRepository:
-    return WarehouseRepository(db)
+# ── RLS por bodega (RN-B10, docs/features/plan_correcciones_integrales_sistema.md
+# Fase 1.b) ─────────────────────────────────────────────────────────────────────
+def resolve_almacenes_filter(current_user: CurrentUserDep) -> list[str] | None:
+    """Restricción de seguridad -- NO confundir con el filtro `almacen` que el usuario
+    elige en la barra de filtros del dashboard. Esta lista viene de lo que el admin le
+    asignó a la cuenta (public.usuario_almacenes) y `WarehouseRepository` la intersecta
+    con lo que el usuario pida, nunca la deja ampliar el conjunto (H-1, fuga de datos
+    entre bodegas). `None` = sin restricción (gerencia/administrador, o rol bodega con
+    `todos_los_almacenes=True`); `[]` = rol bodega sin ninguna bodega asignada (no debe
+    ver ningún dato, no "todos" -- ver B-2 del plan)."""
+    if current_user.role.nombre != "bodega":
+        return None
+    if current_user.todos_los_almacenes:
+        return None
+    return current_user.codalms
+
+
+def get_warehouse_repository(
+    db: SessionDep,
+    almacenes_permitidos: Annotated[list[str] | None, Depends(resolve_almacenes_filter)],
+) -> WarehouseRepository:
+    return WarehouseRepository(db, almacenes_permitidos=almacenes_permitidos)
 
 
 def get_catalog_repository(db: SessionDep) -> CatalogRepository:
@@ -203,6 +225,17 @@ def get_cross_sell_engine_service(
     return CrossSellEngineService(cartera360_repo, catalog_repo, prediction_service)
 
 
+def get_gestion_service(
+    cartera360_repo: Annotated[Cartera360Repository, Depends(get_cartera360_repository)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
+) -> GestionService:
+    """"Mi Ruta Inteligente de Ventas" (docs/features/plan_refactor_cartera360_ruta_
+    inteligente.md §2.1): escritura/trazabilidad de gestión, separado de
+    `Cartera360Service` (lectura/priorización) -- mismo patrón de división que
+    `CrossSellEngineService` vs. `PredictionService`."""
+    return GestionService(cartera360_repo, catalog_repo)
+
+
 def get_commission_simulation_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
     commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
@@ -272,11 +305,14 @@ def get_anomalia_revision_service(
 def get_system_service(
     system_repo: Annotated[SystemRepository, Depends(get_system_repository)],
     model_loader: ModelLoaderDep,
+    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
 ) -> SystemService:
     """Procedencia de datos (docs/auditoria/33_actualizacion_modulo_gerencia.md, H4):
     compone `SystemRepository` (última carga del DW) + `ModelLoader` (estado real de
-    los 6 modelos, mismo patrón que `admin_ml.py`)."""
-    return SystemService(system_repo, model_loader)
+    los 6 modelos, mismo patrón que `admin_ml.py`). Fase 5 §5.5 suma `UserRepository`/
+    `CatalogRepository` para el resumen de métricas del dashboard de Admin."""
+    return SystemService(system_repo, model_loader, user_repo, catalog_repo)
 
 
 def get_commission_service(
@@ -298,6 +334,19 @@ def get_commission_config_service(
     return CommissionConfigService(commission_config_repo, goal_repo, catalog_repo)
 
 
+def get_vendor_dashboard_service(
+    analytics_service: Annotated[AnalyticsService, Depends(get_analytics_service)],
+    commission_service: Annotated[CommissionService, Depends(get_commission_service)],
+    cartera360_service: Annotated[Cartera360Service, Depends(get_cartera360_service)],
+    gestion_service: Annotated[GestionService, Depends(get_gestion_service)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
+) -> VendorDashboardService:
+    """Dashboard "Mi Negocio" del vendedor (auditoría 43, Fase 5): compone servicios ya
+    existentes -- sin lógica de negocio nueva de comisiones ni de cartera, mismo criterio
+    de composición por inyección que `CrossSellEngineService`/`Cartera360Service`."""
+    return VendorDashboardService(analytics_service, commission_service, cartera360_service, gestion_service, catalog_repo)
+
+
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 RoleServiceDep = Annotated[RoleService, Depends(get_role_service)]
 AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)]
@@ -307,6 +356,7 @@ GoalMLServiceDep = Annotated[GoalMLService, Depends(get_goal_ml_service)]
 CommissionServiceDep = Annotated[CommissionService, Depends(get_commission_service)]
 CommissionSimulationServiceDep = Annotated[CommissionSimulationService, Depends(get_commission_simulation_service)]
 CommissionConfigServiceDep = Annotated[CommissionConfigService, Depends(get_commission_config_service)]
+VendorDashboardServiceDep = Annotated[VendorDashboardService, Depends(get_vendor_dashboard_service)]
 CommissionConfigRepositoryDep = Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)]
 WarehouseServiceDep = Annotated[WarehouseService, Depends(get_warehouse_service)]
 AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
@@ -314,6 +364,7 @@ AnomaliaRevisionServiceDep = Annotated[AnomaliaRevisionService, Depends(get_anom
 CatalogRepositoryDep = Annotated[CatalogRepository, Depends(get_catalog_repository)]
 Cartera360ServiceDep = Annotated[Cartera360Service, Depends(get_cartera360_service)]
 CrossSellEngineServiceDep = Annotated[CrossSellEngineService, Depends(get_cross_sell_engine_service)]
+GestionServiceDep = Annotated[GestionService, Depends(get_gestion_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 SystemServiceDep = Annotated[SystemService, Depends(get_system_service)]
 

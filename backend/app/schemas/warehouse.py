@@ -148,7 +148,11 @@ class ProductoStockReorden(BaseModel):
     salida_diaria: float
     dias_inventario: Optional[float] = None
     dias_hasta_reorden: Optional[float] = None
-    estado: str  # Crítico | Cerca | Seguro | Exceso
+    estado: str  # Crítico | Cerca | Seguro | Exceso | Inmovilizado
+    # Fase 6.1 (H-2/RN-B11): caso "El Rey" -- "0 días de stock" con una salida_diaria
+    # marginal (< BODEGA_MIN_SALIDA_CONFIABLE) no es la misma urgencia que un artículo
+    # de alta rotación, aunque el cálculo dé el mismo número.
+    dias_inventario_baja_confianza: bool = False
 
 
 # ── §1.3 Gráfico 6 / §3.3: necesidad de compra ───────────────────────────────
@@ -277,6 +281,10 @@ class ReporteBodegaResponse(BaseModel):
     resumen_ejecutivo: List[KpiResumenEjecutivo]
     interpretacion: str  # frase de una línea: "Se recomienda comprar 42 artículos por $12.400; 8 son críticos"
     secciones: List[SeccionReporte]
+    # Auditoría 43 (H43-1..H43-4): declara la ventana real de kardex disponible y la fuente del
+    # stock cuando el reporte deriva esos valores del histórico del EDW (hoy solo "sin-venta") --
+    # `None` en el resto de reportes, que no tienen esta limitación de ventana.
+    nota_cobertura_datos: Optional[str] = None
 
 
 # ── Predicción de compras del próximo mes por categoría (docs/auditoria/24) ──

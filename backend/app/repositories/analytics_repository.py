@@ -321,18 +321,42 @@ class AnalyticsRepository:
         return "WHERE " + " AND ".join(filtros), params
 
     # ── Bodega: alertas de inventario reales (antes mock) ─────────────────
-    def get_inventory_alerts(self, sucursal: str | None = None) -> dict[str, Any]:
+    def get_inventory_alerts(self, almacenes_permitidos: list[str] | None = None) -> dict[str, Any]:
         """Usa `edw.fact_inventario_snapshot` de la fecha más reciente disponible
         (es una foto diaria; sumar todo el histórico duplicaría conteos). Columnas
         confirmadas en `edw/03_hechos.sql`: alerta_desabastecimiento, alerta_sobrestock,
         stock_actual. NO existen `dias_abastecimiento_cob`/`inmovilizado_flag` que
         menciona docs/features/dashboards.md -- son campos deseados a futuro, requieren
-        cambios de ETL, no se inventan aquí."""
+        cambios de ETL, no se inventan aquí.
+
+        `almacenes_permitidos` (docs/auditoria/42_..., hallazgo Bodega-sucursal): RLS real
+        del rol `bodega` -- reemplaza el filtro por `sucursal` que este endpoint legado
+        tenía antes. `edw.dim_sucursal` agrupa varios `codalm` muy distintos bajo el mismo
+        nombre (ej. "PRINCIPAL: MATRIZ" agrupa 8 almacenes, incluidas camionetas de
+        vendedores individuales y bodegas de consignación) -- filtrar por sucursal no es
+        la unidad de acceso real del rol bodega (esa es `usuario_almacenes`, por `codalm`),
+        y forzarla producía 0 filas para cualquier usuario cuyo `usuarios.sucursal` no
+        calzara textualmente con `dim_sucursal.nombre_sucursal`."""
         params: dict[str, Any] = {}
-        filtro_suc = ""
-        if sucursal:
-            filtro_suc = "AND su.nombre_sucursal = :sucursal"
-            params["sucursal"] = sucursal
+        filtro_alm = ""
+        filtro_transfer = ""
+        if almacenes_permitidos is not None:
+            if not almacenes_permitidos:
+                filtro_alm = "AND 1 = 0"
+                filtro_transfer = "AND 1 = 0"
+            else:
+                placeholders = ", ".join(f":alm_{i}" for i in range(len(almacenes_permitidos)))
+                for i, codalm in enumerate(almacenes_permitidos):
+                    params[f"alm_{i}"] = codalm
+                filtro_alm = f"AND al.codalm IN ({placeholders})"
+                placeholders_o = ", ".join(f":alm_o_{i}" for i in range(len(almacenes_permitidos)))
+                placeholders_d = ", ".join(f":alm_d_{i}" for i in range(len(almacenes_permitidos)))
+                for i, codalm in enumerate(almacenes_permitidos):
+                    params[f"alm_o_{i}"] = codalm
+                    params[f"alm_d_{i}"] = codalm
+                filtro_transfer = (
+                    f"AND (al_origen.codalm IN ({placeholders_o}) OR al_destino.codalm IN ({placeholders_d}))"
+                )
 
         query_counts = f"""
             WITH ultimo_snapshot AS (SELECT MAX(fecha_sk) AS fecha_sk FROM edw.fact_inventario_snapshot)
@@ -341,17 +365,17 @@ class AnalyticsRepository:
                 COUNT(*) FILTER (WHERE s.alerta_desabastecimiento) as items_riesgo_desabasto
             FROM edw.fact_inventario_snapshot s
             JOIN ultimo_snapshot u ON s.fecha_sk = u.fecha_sk
-            JOIN edw.dim_sucursal su ON s.sucursal_sk = su.sucursal_sk
-            WHERE 1=1 {filtro_suc}
+            JOIN edw.dim_almacen al ON s.almacen_sk = al.almacen_sk
+            WHERE 1=1 {filtro_alm}
         """
         query_transfers = f"""
             WITH ultimo_snapshot AS (SELECT MAX(fecha_sk) AS fecha_sk FROM edw.fact_inventario_snapshot),
             inv AS (
-                SELECT s.producto_sk, s.sucursal_sk, s.stock_actual, s.alerta_desabastecimiento, s.alerta_sobrestock
+                SELECT s.producto_sk, s.sucursal_sk, s.almacen_sk, s.stock_actual, s.alerta_desabastecimiento, s.alerta_sobrestock
                 FROM edw.fact_inventario_snapshot s JOIN ultimo_snapshot u ON s.fecha_sk = u.fecha_sk
             ),
-            faltantes AS (SELECT producto_sk, sucursal_sk AS sucursal_destino_sk FROM inv WHERE alerta_desabastecimiento = TRUE),
-            sobrantes AS (SELECT producto_sk, sucursal_sk AS sucursal_origen_sk, stock_actual AS stock_origen FROM inv WHERE alerta_sobrestock = TRUE)
+            faltantes AS (SELECT producto_sk, sucursal_sk AS sucursal_destino_sk, almacen_sk AS almacen_destino_sk FROM inv WHERE alerta_desabastecimiento = TRUE),
+            sobrantes AS (SELECT producto_sk, sucursal_sk AS sucursal_origen_sk, almacen_sk AS almacen_origen_sk, stock_actual AS stock_origen FROM inv WHERE alerta_sobrestock = TRUE)
             SELECT
                 p.nombre_articulo, so_suc.nombre_sucursal AS origen, sd_suc.nombre_sucursal AS destino,
                 ROUND(so.stock_origen * 0.3) AS cantidad_sugerida
@@ -360,7 +384,9 @@ class AnalyticsRepository:
             JOIN edw.dim_producto p ON sd.producto_sk = p.producto_sk
             JOIN edw.dim_sucursal so_suc ON so.sucursal_origen_sk = so_suc.sucursal_sk
             JOIN edw.dim_sucursal sd_suc ON sd.sucursal_destino_sk = sd_suc.sucursal_sk
-            {("WHERE so_suc.nombre_sucursal = :sucursal OR sd_suc.nombre_sucursal = :sucursal") if sucursal else ""}
+            JOIN edw.dim_almacen al_origen ON so.almacen_origen_sk = al_origen.almacen_sk
+            JOIN edw.dim_almacen al_destino ON sd.almacen_destino_sk = al_destino.almacen_sk
+            WHERE 1=1 {filtro_transfer}
             LIMIT 10
         """
         counts = self.db.execute(text(query_counts), params).fetchone()
@@ -397,25 +423,39 @@ class AnalyticsRepository:
         now = datetime.datetime.now()
         return now.year, now.month
 
-    def get_sales_performance(self, anio: int, mes: int, sucursal: str | None = None) -> dict[str, Any]:
+    def get_sales_performance(
+        self, anio: int, mes: int, sucursal: str | None = None, vendedor: str | None = None,
+    ) -> dict[str, Any]:
         """`sucursal` (docs/auditoria/34_actualizacion_modulo_ventas.md, H-V8): antes
         `query_meta` filtraba por `m.sucursal`, una columna que NO existe en
         `public.metas_comerciales_operativas` -- el grano de esa tabla es
         `(anio, mes, id_vendedor_origen)`, nunca sucursal (regla de negocio 10,
-        `edw.dim_vendedor` no tiene sucursal propia). Esto hacía que este endpoint
-        (el KPI principal del dashboard de Ventas) devolviera SIEMPRE un 500 para
-        cualquier usuario `ventas` real, porque `resolve_sucursal_filter(allow_override=False)`
-        fuerza su propia sucursal en cada request. Se resuelve restringiendo las metas a
-        los vendedores que efectivamente vendieron en esa sucursal en el período (mismo
-        criterio ya usado por `query_ranking`), no por una columna inexistente.
-        `query_ranking` tampoco filtraba por sucursal en absoluto (mostraba el ranking
-        global de la empresa incluso con un filtro de sucursal activo) -- se corrige con
-        el mismo join que ya usaba `query_actual`."""
+        `edw.dim_vendedor` no tiene sucursal propia). Se resuelve restringiendo las
+        metas a los vendedores que efectivamente vendieron en esa sucursal en el
+        período, no por una columna inexistente. `sucursal` queda como filtro
+        OPCIONAL para gerencia (vista exploratoria por sucursal, `ai-summary`).
+
+        `vendedor` (auditoría A-0.3, docs/features/plan_correcciones_integrales_
+        sistema.md, decisión B-3, 2026-07-29): filtro real para el rol `ventas` --
+        `sucursal` se retira como discriminador de RLS porque el `SELECT` de A-0.3
+        contra el EDW real mostró que el 90.9% de los vendedores activos (10 de 11 en
+        los últimos 12 meses) transaccionan en 4 a 7 de las 7 sucursales totales
+        (promedio 5.18); forzar la sucursal asignada al usuario le ocultaba al propio
+        vendedor la mayoría de sus ventas reales. `vendedor` filtra por
+        `id_vendedor_origen`/`dim_vendedor.codven` -- el mismo grano ya usado por
+        `mi-comision`, `meta-sugerida`, `churn-risk`, etc. en este módulo (regla 10).
+        Cuando se pasa `vendedor`, `query_ranking` se omite (comparar un vendedor
+        contra sí mismo no aporta nada, y esta vista es personal, no comparativa) --
+        `ranking_vendedores` vuelve `[]`, coherente con que ningún consumidor del
+        panel del vendedor lo usa (solo `ai-summary`, de gerencia, sigue pidiéndolo
+        sin `vendedor`)."""
         params: dict[str, Any] = {"anio": anio, "mes": mes}
         filtro_vendedores_sucursal = ""
         filtro_suc_v = ""
         filtro_suc_r = ""
-        if sucursal:
+        if vendedor:
+            params["vendedor"] = vendedor
+        elif sucursal:
             filtro_vendedores_sucursal = """
                 AND m.id_vendedor_origen IN (
                     SELECT DISTINCT v2.codven
@@ -437,37 +477,44 @@ class AnalyticsRepository:
         query_meta = f"""
             SELECT COALESCE(SUM(m.monto_meta), 0)
             FROM public.metas_comerciales_operativas m
-            WHERE m.anio = :anio AND m.mes = :mes {filtro_vendedores_sucursal}
+            WHERE m.anio = :anio AND m.mes = :mes
+              {"AND m.id_vendedor_origen = :vendedor" if vendedor else filtro_vendedores_sucursal}
         """
         query_actual = f"""
             SELECT COALESCE(SUM(f.subtotal_neto), 0)
             FROM edw.fact_ventas_detalle f
             JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
-            JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
             JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
-            WHERE d.anio = :anio AND d.mes = :mes AND ed.estado_documento_sk <> -1 {filtro_suc_v}
-        """
-        query_ranking = f"""
-            SELECT v.nombre_vendedor,
-                   COALESCE(SUM(f.subtotal_neto), 0) as ventas,
-                   COALESCE(MAX(m.monto_meta), 0) as meta
-            FROM edw.dim_vendedor v
-            LEFT JOIN edw.fact_ventas_detalle f ON f.vendedor_sk = v.vendedor_sk
-                AND f.fecha_sk IN (SELECT fecha_sk FROM edw.dim_fecha WHERE anio = :anio AND mes = :mes)
-            LEFT JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
-            LEFT JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
-                AND ed.estado_documento_sk <> -1
-            LEFT JOIN public.metas_comerciales_operativas m ON m.id_vendedor_origen = v.codven
-                AND m.anio = :anio AND m.mes = :mes
-            WHERE 1=1 {filtro_suc_r}
-            GROUP BY v.nombre_vendedor
-            HAVING COALESCE(SUM(f.subtotal_neto), 0) > 0
-            ORDER BY ventas DESC
-            LIMIT 15
+            {"JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk" if vendedor else
+             "JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk"}
+            WHERE d.anio = :anio AND d.mes = :mes AND ed.estado_documento_sk <> -1
+              {"AND v.codven = :vendedor" if vendedor else filtro_suc_v}
         """
         meta_mensual = float(self.db.execute(text(query_meta), params).scalar() or 0.0)
         cumplimiento_actual = float(self.db.execute(text(query_actual), params).scalar() or 0.0)
-        ranking = self.db.execute(text(query_ranking), params).fetchall()
+
+        if vendedor:
+            ranking: list[Any] = []
+        else:
+            query_ranking = f"""
+                SELECT v.nombre_vendedor,
+                       COALESCE(SUM(f.subtotal_neto), 0) as ventas,
+                       COALESCE(MAX(m.monto_meta), 0) as meta
+                FROM edw.dim_vendedor v
+                LEFT JOIN edw.fact_ventas_detalle f ON f.vendedor_sk = v.vendedor_sk
+                    AND f.fecha_sk IN (SELECT fecha_sk FROM edw.dim_fecha WHERE anio = :anio AND mes = :mes)
+                LEFT JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
+                LEFT JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                    AND ed.estado_documento_sk <> -1
+                LEFT JOIN public.metas_comerciales_operativas m ON m.id_vendedor_origen = v.codven
+                    AND m.anio = :anio AND m.mes = :mes
+                WHERE 1=1 {filtro_suc_r}
+                GROUP BY v.nombre_vendedor
+                HAVING COALESCE(SUM(f.subtotal_neto), 0) > 0
+                ORDER BY ventas DESC
+                LIMIT 15
+            """
+            ranking = self.db.execute(text(query_ranking), params).fetchall()
 
         import datetime
         # Proyección lineal simple: ritmo de venta transcurrido extrapolado a 30 días.
@@ -491,3 +538,96 @@ class AnalyticsRepository:
                 for row in ranking
             ],
         }
+
+    # ── Dashboard "Mi Negocio" del vendedor (auditoría 43, Fase 5) ────────────────
+    def get_evolucion_mensual_vendedor(self, codven: str, meses: int = 6) -> list[dict[str, Any]]:
+        """Venta neta real vs. meta configurada, mes a mes, para UN vendedor -- grano
+        `(anio, mes, id_vendedor_origen)` (regla 10). Usa la definición canónica de
+        **Venta Neta** (G-02, `app/services/metricas/venta_neta.py`: venta bruta con
+        líneas positivas menos devoluciones, filtrando `estado_factura` -- no solo el
+        centinela) para que coincida con `GoalRepository.get_vendor_net_sales_period`
+        (la cifra que ya muestra "Mi Meta y Comisión"); una versión anterior de este
+        método sumaba `subtotal_neto` sin restar devoluciones y sin el filtro de estado,
+        y difería de esa cifra en miles de dólares en datos reales (auditoría 43,
+        validado en vivo: VEN02 mostraba $47.559,92 aquí contra $54.976,83 en el panel
+        de comisión para el mismo mes). `meses` cuenta desde el mes actual hacia atrás,
+        incluyéndolo."""
+        rows = self.db.execute(
+            text(
+                f"""
+                WITH meses_base AS (
+                    SELECT DISTINCT d.anio, d.mes
+                    FROM edw.dim_fecha d
+                    WHERE d.fecha_completa <= CURRENT_DATE
+                      AND d.fecha_completa >= CURRENT_DATE - (:meses || ' months')::interval
+                ),
+                ventas_brutas AS (
+                    SELECT d.anio, d.mes, {SQL_VENTA_BRUTA} AS venta_bruta
+                    FROM edw.fact_ventas_detalle f
+                    JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                    JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                    JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                    WHERE v.codven = :codven AND {FILTRO_ESTADO_VALIDO}
+                      AND d.fecha_completa <= CURRENT_DATE
+                      AND d.fecha_completa >= CURRENT_DATE - (:meses || ' months')::interval
+                    GROUP BY d.anio, d.mes
+                ),
+                devoluciones AS (
+                    SELECT d.anio, d.mes, COALESCE(SUM(fd.total_linea_devolucion), 0.0) AS devolucion
+                    FROM edw.fact_devoluciones fd
+                    JOIN edw.dim_vendedor v ON fd.vendedor_sk = v.vendedor_sk
+                    JOIN edw.dim_fecha d ON fd.fecha_sk = d.fecha_sk
+                    WHERE v.codven = :codven
+                      AND d.fecha_completa <= CURRENT_DATE
+                      AND d.fecha_completa >= CURRENT_DATE - (:meses || ' months')::interval
+                    GROUP BY d.anio, d.mes
+                )
+                SELECT mb.anio, mb.mes,
+                       COALESCE(vb.venta_bruta, 0) - COALESCE(dv.devolucion, 0) AS venta,
+                       COALESCE(m.monto_meta, 0) AS meta
+                FROM meses_base mb
+                LEFT JOIN ventas_brutas vb ON vb.anio = mb.anio AND vb.mes = mb.mes
+                LEFT JOIN devoluciones dv ON dv.anio = mb.anio AND dv.mes = mb.mes
+                LEFT JOIN public.metas_comerciales_operativas m
+                    ON m.anio = mb.anio AND m.mes = mb.mes AND m.id_vendedor_origen = :codven
+                ORDER BY mb.anio, mb.mes
+                """
+            ),
+            {"codven": codven, "meses": meses, "estado_valido": settings.ESTADO_DOCUMENTO_VALIDO},
+        ).fetchall()
+        return [
+            {"anio": int(r[0]), "mes": int(r[1]), "venta_real": float(r[2]), "meta": float(r[3])}
+            for r in rows
+        ]
+
+    def get_top_productos_vendedor(self, codven: str, meses: int = 3, limit: int = 5) -> list[dict[str, Any]]:
+        """Productos más vendidos POR este vendedor (no del catálogo general), últimos
+        `meses` -- mismo filtro de estado que la definición canónica de Venta Neta
+        (líneas positivas, `estado_factura` válido); sin restar devoluciones por
+        producto porque `fact_devoluciones` no tiene ese grano (mismo criterio
+        documentado en `venta_neta.py`)."""
+        rows = self.db.execute(
+            text(
+                f"""
+                SELECT p.codart, MAX(p.nombre_articulo) AS nombre,
+                       {SQL_VENTA_BRUTA} AS venta,
+                       SUM(CASE WHEN f.subtotal_neto > 0 THEN f.cantidad ELSE 0 END) AS unidades
+                FROM edw.fact_ventas_detalle f
+                JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+                WHERE v.codven = :codven AND {FILTRO_ESTADO_VALIDO}
+                  AND p.producto_sk <> -1
+                  AND d.fecha_completa >= CURRENT_DATE - (:meses || ' months')::interval
+                GROUP BY p.codart
+                ORDER BY venta DESC
+                LIMIT :limit
+                """
+            ),
+            {"codven": codven, "meses": meses, "limit": limit, "estado_valido": settings.ESTADO_DOCUMENTO_VALIDO},
+        ).fetchall()
+        return [
+            {"codart": str(r[0]), "nombre": r[1] or "", "venta": float(r[2] or 0), "unidades": float(r[3] or 0)}
+            for r in rows
+        ]

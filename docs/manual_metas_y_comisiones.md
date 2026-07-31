@@ -175,13 +175,14 @@ Componente: `frontend/src/components/goals/CommissionConfigPanel.tsx`. Todo lo q
 |---|---|---|---|---|
 | Input número "Desde (días)" | `dias_desde` | int, `min=0` | El inicio del tramo de plazo de crédito (ej. `0` para contado, `31` para el tramo que empieza después de 30 días). | `ge=0` |
 | Input número "Hasta (días)" | `dias_hasta` | int, nullable, `min=0` | El fin del tramo. Dejarlo vacío significa "sin tope" — el último tramo abierto (ej. 90+ días) normalmente se deja así. | `ge=0` (si se informa) |
-| Input número "Factor" | `factor` | `step=0.01`, `min=0`, `max=1.5` | El multiplicador que reduce (o en teoría podría aumentar) la comisión de esa línea según el plazo de crédito. Ej. contado = `1.0` (sin penalización), 30 días = `0.85` (15% menos de comisión) — refleja que vender a crédito le cuesta más financieramente a la empresa que vender de contado. | `ge=0, le=1.5` |
-| Input número "% al facturar" | `pct_al_facturar` | `step=1`, `min=0`, `max=100` | **Campo reservado, aún no usado por el motor real.** Pensado para una fase futura donde la comisión se reparta entre el momento de facturar y el momento de cobrar (ej. 70% al facturar, 30% al cobrar) — hoy el motor aplica el `factor` completo de una sola vez al facturar, sin split. Ver limitación en §2.9. | `ge=0, le=100` |
+| Input número "Factor" | `factor` | `step=0.01`, `min=0`, `max=2.0` | El multiplicador que reduce (o aumenta) la comisión de esa línea según el plazo de crédito. Ej. contado = `1.0` (sin penalización), 30 días = `0.85` (15% menos de comisión) — refleja que vender a crédito le cuesta más financieramente a la empresa que vender de contado. Tope ampliado a `2.0` (antes `1.5`) para permitir premiar, no solo penalizar. | `ge=0, le=2.0` |
 | Botón "Agregar tramo" | — | acción, UI | Añade una fila vacía a la tabla para definir un nuevo rango de días. | — |
 | Botón "Quitar" (por fila) | — | acción, UI | Elimina un tramo de la tabla **en memoria** — no se persiste hasta "Guardar matriz de crédito". | — |
 | Botón "Guardar matriz de crédito" | — | acción → `PUT commission-config/credito` | Envía el arreglo completo de tramos y **reemplaza toda la configuración de crédito de una sola vez** (a diferencia de la matriz de categorías, aquí no se guarda tramo por tramo — es un PUT de todo el conjunto). | — |
 
 > ⚠️ Cobertura real de datos: solo hay tráfico histórico real para los tramos de **0 días** (contado) y **30 días**. Los tramos de 45/60/90 días se pueden configurar pero no tienen historial de ventas que los respalde en el EDW actual (auditoría 30, H4).
+
+> **`pct_al_facturar` eliminado (migración `0010_eliminar_pct_al_facturar`):** este campo reservado ("% al facturar") nunca llegó a usarse por el motor real -- la necesidad que intentaba cubrir (repartir la comisión entre el momento de facturar y el momento de cobrar) ya la resuelve, con datos reales, la Comisión sobre Cobros (auditoría 44, §18 RN-CM14). Se retiró de la tabla/API/base de datos en vez de mantenerlo como placeholder muerto.
 
 ---
 

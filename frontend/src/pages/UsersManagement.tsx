@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
   Users, UserPlus, Search, Edit2, ShieldAlert, Building,
-  CheckCircle2, XCircle, KeyRound,
+  CheckCircle2, XCircle, KeyRound, Trash2,
 } from 'lucide-react';
-import { getUsers, createUser, updateUser, deactivateUser, activateUser, getRoles, getAlmacenes } from '../services/users';
+import {
+  getUsers, createUser, updateUser, deactivateUser, activateUser, deleteUserPermanente, getRoles, getAlmacenes,
+} from '../services/users';
 import type { UserData, RoleData, AlmacenOption } from '../types/admin';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
@@ -12,6 +14,8 @@ import { FormField } from '../components/ui/FormField';
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { Drawer } from '../components/ui/Drawer';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { Pagination } from '../components/ui/Pagination';
+import { usePagination } from '../hooks/usePagination';
 import { useToast } from '../store/toastStore';
 
 const roleBadge: Record<string, string> = {
@@ -27,7 +31,7 @@ const emptyForm = {
   rol_id: 0,
   sucursal: '',
   id_vendedor_origen: '',
-  codalm: '',
+  codalms: [] as string[],
   todos_los_almacenes: false,
 };
 
@@ -40,12 +44,15 @@ const ROL_DEFAULT_NOMBRE = 'ventas';
 
 export const UsersManagement = () => {
   const [users, setUsers] = useState<UserData[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [roles, setRoles] = useState<RoleData[]>([]);
   const [almacenes, setAlmacenes] = useState<AlmacenOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const toast = useToast();
+  const pagination = usePagination(searchTerm);
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create');
@@ -56,16 +63,26 @@ export const UsersManagement = () => {
   const [toToggle, setToToggle] = useState<UserData | null>(null);
   const [toggling, setToggling] = useState(false);
 
+  const [toDelete, setToDelete] = useState<UserData | null>(null);
+  const [deleteConsent, setDeleteConsent] = useState(false);
+  const [deleteEmailConfirm, setDeleteEmailConfirm] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
   useEffect(() => {
     fetchData();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagination.query.page, pagination.query.page_size]);
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setLoadError('');
-      const [usersRes, rolesRes, almacenesRes] = await Promise.all([getUsers(), getRoles(), getAlmacenes()]);
-      setUsers(usersRes.data);
+      const [usersRes, rolesRes, almacenesRes] = await Promise.all([
+        getUsers(pagination.query), getRoles(), getAlmacenes(),
+      ]);
+      setUsers(usersRes.data.items);
+      setTotal(usersRes.data.total);
+      setTotalPages(usersRes.data.total_pages);
       setRoles(rolesRes.data);
       setAlmacenes(almacenesRes.data);
     } catch (error) {
@@ -88,8 +105,8 @@ export const UsersManagement = () => {
         rol_id: user.role.id,
         sucursal: user.sucursal || '',
         id_vendedor_origen: user.id_vendedor_origen || '',
-        codalm: user.codalm || '',
-        todos_los_almacenes: user.role.nombre === 'bodega' && !user.codalm,
+        codalms: user.codalms || [],
+        todos_los_almacenes: user.todos_los_almacenes,
       });
     } else {
       const rolDefault = roles.find((r) => r.nombre === ROL_DEFAULT_NOMBRE) ?? roles[0];
@@ -112,14 +129,14 @@ export const UsersManagement = () => {
         rol_id: formData.rol_id,
         sucursal: null,
         id_vendedor_origen: null,
-        codalm: null,
+        codalms: [],
       };
 
       if (selectedRoleNombre === 'ventas') {
         payload.id_vendedor_origen = formData.id_vendedor_origen || null;
       } else if (selectedRoleNombre === 'bodega') {
         payload.todos_los_almacenes = formData.todos_los_almacenes;
-        payload.codalm = formData.todos_los_almacenes ? null : (formData.codalm || null);
+        payload.codalms = formData.todos_los_almacenes ? [] : formData.codalms;
       } else {
         payload.sucursal = formData.sucursal || null;
       }
@@ -212,7 +229,10 @@ export const UsersManagement = () => {
           )}
           {u.role.nombre === 'bodega' && (
             <span className="flex items-center text-xs text-slate-400">
-              <Building size={12} className="mr-1" /> {u.codalm ? `Almacén ${u.codalm}` : 'Todos los almacenes'}
+              <Building size={12} className="mr-1" />
+              {u.todos_los_almacenes
+                ? 'Todos los almacenes'
+                : u.codalms.length > 0 ? `Almacenes: ${u.codalms.join(', ')}` : 'Sin almacén asignado'}
             </span>
           )}
         </div>
@@ -238,12 +258,37 @@ export const UsersManagement = () => {
     {
       key: 'acciones', header: 'Acciones',
       render: (u) => (
-        <Button variant="ghost" size="sm" icon={<Edit2 size={14} />} onClick={() => handleOpenDrawer('edit', u)}>
-          Editar
-        </Button>
+        <div className="flex gap-1.5">
+          <Button variant="ghost" size="sm" icon={<Edit2 size={14} />} onClick={() => handleOpenDrawer('edit', u)}>
+            Editar
+          </Button>
+          <Button
+            variant="ghost" size="sm" icon={<Trash2 size={14} />}
+            onClick={() => { setToDelete(u); setDeleteConsent(false); setDeleteEmailConfirm(''); }}
+            className="text-danger hover:text-danger"
+          >
+            Eliminar
+          </Button>
+        </div>
       ),
     },
   ];
+
+  const confirmDeletePermanente = async () => {
+    if (!toDelete) return;
+    setDeleting(true);
+    try {
+      await deleteUserPermanente(toDelete.id);
+      toast(`Usuario ${toDelete.nombre} eliminado permanentemente.`, 'success');
+      setToDelete(null);
+      fetchData();
+    } catch (error: any) {
+      console.error('Error deleting user:', error);
+      toast(error.response?.data?.detail || 'No se pudo eliminar el usuario.', 'error');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -284,6 +329,14 @@ export const UsersManagement = () => {
         emptyDescription="Ajusta la búsqueda o crea el primer usuario del sistema."
         maxHeight="max-h-none"
         responsive
+      />
+      <Pagination
+        page={pagination.page}
+        pageSize={pagination.pageSize}
+        total={total}
+        totalPages={totalPages}
+        onPageChange={pagination.setPage}
+        onPageSizeChange={pagination.setPageSize}
       />
 
       <Drawer open={isDrawerOpen} onClose={() => setIsDrawerOpen(false)} title={modalMode === 'create' ? 'Crear nuevo usuario' : 'Editar usuario'}>
@@ -367,19 +420,24 @@ export const UsersManagement = () => {
                 </label>
                 {!formData.todos_los_almacenes && (
                   <FormField
-                    label="Almacén asignado"
-                    htmlFor="user-almacen"
+                    label="Almacenes asignados"
+                    htmlFor="user-almacenes"
                     required
-                    helper="La cuenta solo podrá ver el almacén seleccionado."
+                    helper="La cuenta solo podrá ver los almacenes seleccionados (Ctrl/Cmd + clic para elegir varios)."
                   >
                     <Select
-                      id="user-almacen"
+                      id="user-almacenes"
                       required
-                      className="w-full"
-                      value={formData.codalm}
-                      onChange={(e) => setFormData({ ...formData, codalm: e.target.value })}
+                      multiple
+                      className="w-full min-h-[8rem]"
+                      value={formData.codalms}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          codalms: Array.from(e.target.selectedOptions, (o) => o.value),
+                        })
+                      }
                     >
-                      <option value="">Seleccionar almacén…</option>
                       {almacenes.map((a) => (
                         <option key={a.codalm} value={a.codalm}>{a.nombre_almacen} ({a.codalm})</option>
                       ))}
@@ -419,6 +477,47 @@ export const UsersManagement = () => {
         loading={toggling}
         onConfirm={confirmToggleStatus}
         onCancel={() => setToToggle(null)}
+      />
+
+      {/* Eliminación permanente (Fase 5 §5.3): doble confirmación -- checkbox de
+          consentimiento + escritura exacta del email, antes de habilitar el botón
+          destructivo. Distinto de desactivar (baja lógica, reversible arriba). */}
+      <ConfirmDialog
+        open={toDelete != null}
+        title="Eliminar usuario permanentemente"
+        confirmLabel="Eliminar definitivamente"
+        loading={deleting}
+        confirmDisabled={!deleteConsent || deleteEmailConfirm !== toDelete?.email}
+        onConfirm={confirmDeletePermanente}
+        onCancel={() => setToDelete(null)}
+        message={
+          <div className="space-y-3">
+            <p>
+              Esta acción es <strong className="text-danger">irreversible</strong>. Se eliminará por completo la cuenta de{' '}
+              <strong className="text-slate-300">{toDelete?.nombre}</strong> ({toDelete?.email}), no solo se desactivará.
+            </p>
+            <label className="flex items-start gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={deleteConsent}
+                onChange={(e) => setDeleteConsent(e.target.checked)}
+                className="mt-0.5 rounded border-slate-700 bg-slate-950 text-danger focus-ring"
+              />
+              Entiendo que esta acción no se puede deshacer.
+            </label>
+            <div>
+              <label htmlFor="delete-email-confirm" className="text-xs text-slate-500 block mb-1">
+                Escribe <span className="font-mono text-slate-400">{toDelete?.email}</span> para confirmar
+              </label>
+              <Input
+                id="delete-email-confirm" type="text"
+                value={deleteEmailConfirm}
+                onChange={(e) => setDeleteEmailConfirm(e.target.value)}
+                placeholder="email del usuario"
+              />
+            </div>
+          </div>
+        }
       />
     </div>
   );

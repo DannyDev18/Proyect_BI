@@ -1,10 +1,4 @@
-export interface VentasKPIs {
-  meta_mensual: number;
-  ventas_actuales: number;
-  cumplimiento_pct: number;
-  clientes_activos: number;
-  churn_promedio?: number;
-}
+import type { ClienteRuta, EfectividadComercial, ProximaAccion } from './cartera360';
 
 export interface ChurnResponse {
   cliente_id: string;
@@ -32,8 +26,14 @@ export interface SegmentacionResponse {
 
 /** Forma real de la respuesta de GET /analytics/ventas/goals (VPKPIVentas en el backend,
  * ver backend/app/schemas/analytics.py y backend/app/repositories/analytics_repository.py
- * ::get_sales_performance). No confundir con `VentasKPIs` (arriba), que no coincide con
- * el contrato real del backend. */
+ * ::get_sales_performance). `cumplimiento_actual` es venta real acumulada del período en
+ * dólares (no un porcentaje pese al nombre) -- el % se deriva en el frontend dividiendo
+ * por `meta_mensual` (auditoría A-0.4, docs/features/plan_correcciones_integrales_
+ * sistema.md §2.4: un tipo `VentasKPIs` con campos inventados -- `ventas_actuales`,
+ * `cumplimiento_pct`, `clientes_activos` -- que nunca existieron en el backend real
+ * estaba siendo consumido por `DashboardVentas.tsx`, rompiendo 3 de 4 KPI cards del
+ * dashboard principal de Ventas; corregido para usar este tipo, el único que coincide
+ * con el contrato real). */
 export interface RankingVendedorItem {
   nombre: string;
   ventas: number;
@@ -67,6 +67,10 @@ export interface MetaSugerida {
   meses_historico_usados: number;
   valores_atipicos_excluidos: number;
   meses_atipicos_ml_detectados: number;
+  componente_estacional: number | null;
+  componente_tendencia: number;
+  factor_tendencia_aplicado: number;
+  coeficiente_variacion: number;
 }
 
 export interface RecomendacionComercialItem {
@@ -101,6 +105,10 @@ export interface MiComision {
   comision_variable?: number | null;
   nivel_variable?: NivelComision | null;
   desglose_variable?: DesgloseComisionVariable | null;
+  // Auditoría 43 (H43-15): modo real de COMISION_MODO ('plana' | 'sombra' | 'variable')
+  // -- el badge/texto del panel dual se deriva de esto, nunca de un texto fijo asumiendo
+  // "sombra".
+  modo_comision: 'plana' | 'sombra' | 'variable';
 }
 
 export interface DesgloseLineaComision {
@@ -136,4 +144,69 @@ export interface PostGoalInvoiceItem {
 
 export interface PostGoalInvoicesResponse {
   facturas: PostGoalInvoiceItem[];
+}
+
+// ── Dashboard "Mi Negocio" del vendedor (auditoría 43, Fase 5) ──────────────────────
+
+export interface CuotaVendedor {
+  meta_mensual: number;
+  venta_actual: number;
+  pct_cumplimiento: number;
+  nivel: NivelComision;
+}
+
+export interface ComisionResumenVendedor {
+  comision_devengada: number;
+  tasa_aplicada_pct: number;
+  bono_aplicado: number;
+  dias_restantes_mes: number;
+  comision_variable: number | null;
+  modo_comision: 'plana' | 'sombra' | 'variable';
+}
+
+export interface MetaDiariaVendedor {
+  objetivo_diario: number | null;
+  venta_hoy: number;
+}
+
+export interface RankingVendedor {
+  posicion: number;
+  total: number;
+}
+
+export interface EvolucionMensualPunto {
+  anio: number;
+  mes: number;
+  venta_real: number;
+  meta: number;
+}
+
+export interface ComparativoMesAnterior {
+  venta_mes_actual: number;
+  venta_mes_anterior: number;
+  variacion_pct: number;
+}
+
+export interface ProductoVendedor {
+  codart: string;
+  nombre: string;
+  venta: number;
+  unidades: number;
+}
+
+export interface MiNegocio {
+  vendedor_origen: string;
+  anio: number;
+  mes: number;
+  cuota: CuotaVendedor;
+  comision: ComisionResumenVendedor;
+  meta_diaria: MetaDiariaVendedor;
+  ranking: RankingVendedor | null;
+  evolucion_mensual: EvolucionMensualPunto[];
+  comparativo_mes_anterior: ComparativoMesAnterior | null;
+  top_productos: ProductoVendedor[];
+  clientes_en_riesgo: ClienteRuta[];
+  pipeline: ClienteRuta[];
+  proximas_acciones: ProximaAccion[];
+  efectividad_comercial: EfectividadComercial;
 }

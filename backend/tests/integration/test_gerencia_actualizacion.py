@@ -86,7 +86,7 @@ def test_roi_ya_no_es_el_margen_por_una_constante(client, auth_headers):
         assert abs(body["roi_real"] - body["margen_utilidad_neta"] * 1.15) > 0.01
 
 
-# ── Fase 2 Gerencia: export Excel/PDF del dashboard (docs/features/plan_correcciones_pendientes.md §3) ──
+# ── Fase 2 Gerencia: export Excel del dashboard (docs/features/plan_correcciones_pendientes.md §3) ──
 def test_reporte_dashboard_devuelve_contrato_tipado(client, auth_headers):
     r = client.get("/api/v1/analytics/gerencia/reportes/dashboard", headers=auth_headers("gerencia"))
     assert r.status_code == 200

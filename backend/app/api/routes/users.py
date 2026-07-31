@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import CatalogRepositoryDep, UserServiceDep
 from app.core.deps import CurrentUserDep, PermissionChecker
+from app.schemas.pagination import Page, PaginationParams, pagination_params
 from app.schemas.user import UserChangePassword, UserCreate, UserMe, UserOut, UserUpdate
 
 router = APIRouter()
@@ -50,12 +51,21 @@ def create_user(user_in: UserCreate, user_service: UserServiceDep) -> UserOut:
 
 
 @router.get(
-    "/", response_model=list[UserOut], summary="Listar todos los usuarios",
+    "/", response_model=Page[UserOut], summary="Listar usuarios (paginado)",
     dependencies=[Depends(only_admin)],
 )
-def list_users(user_service: UserServiceDep, skip: int = 0, limit: int = 100) -> list[UserOut]:
-    """Lista todos los usuarios del sistema con su información de rol. **Acceso:** solo `administrador`."""
-    return user_service.get_all(skip=skip, limit=limit)
+def list_users(
+    user_service: UserServiceDep, pagination: PaginationParams = Depends(pagination_params),
+) -> Page[UserOut]:
+    """Lista paginada de usuarios con su información de rol (Fase 5 §5.1,
+    docs/features/plan_correcciones_integrales_sistema.md -- antes `list[UserOut]` sin
+    paginación real). **Acceso:** solo `administrador`."""
+    items, total = user_service.get_all_paginated(pagination)
+    total_pages = -(-total // pagination.page_size) if total else 0
+    return Page(
+        items=[UserOut.model_validate(u) for u in items],
+        total=total, page=pagination.page, page_size=pagination.page_size, total_pages=total_pages,
+    )
 
 
 @router.get(
@@ -105,6 +115,23 @@ def deactivate_user(user_id: int, user_service: UserServiceDep, current_user: Cu
     user_service.deactivate(user)
     logger.warning(f"AUDIT: Administrador '{current_user.email}' desactivó al usuario ID={user_id} ({user.email}).")
     return {"message": f"El usuario '{user.email}' ha sido desactivado exitosamente.", "user_id": user_id}
+
+
+@router.delete(
+    "/{user_id}/permanente", status_code=status.HTTP_200_OK, summary="Eliminar usuario permanentemente",
+    dependencies=[Depends(only_admin)],
+)
+def delete_user_permanente(user_id: int, user_service: UserServiceDep, current_user: CurrentUserDep) -> dict:
+    """Borrado duro real (Fase 5 §5.3, docs/features/plan_correcciones_integrales_
+    sistema.md) -- distinto de `DELETE /{user_id}` (baja lógica). Requiere doble
+    confirmación en el frontend antes de llegar aquí. **Acceso:** solo `administrador`."""
+    user = user_service.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No se encontró el usuario con ID {user_id}.")
+    email = user.email
+    user_service.delete_permanente(user, current_user)
+    logger.warning(f"AUDIT: Administrador '{current_user.email}' eliminó permanentemente al usuario ID={user_id} ({email}).")
+    return {"message": f"El usuario '{email}' fue eliminado permanentemente.", "user_id": user_id}
 
 
 @router.post(

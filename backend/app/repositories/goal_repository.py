@@ -58,6 +58,16 @@ class CommissionLineRow(NamedTuple):
     dias_plazo: int
 
 
+class CobroRow(NamedTuple):
+    """Un cobro a grano `fact_cobros_cuotas` (auditoría 44,
+    docs/features/plan_comisiones_sobre_cobros.md), insumo de
+    `commission_engine.CobroComisionable`. `dias_cobro` ya viene con piso en 0 desde el
+    ETL (H-9); se excluyen las notas de débito (`es_nota_debito`) en la consulta, no aquí,
+    para que la exclusión sea explícita y auditable en el SQL."""
+    valor_cobrado: float
+    dias_cobro: int
+
+
 class VendorRecentSales(NamedTuple):
     """Un vendedor con actividad en el mes anterior al objetivo -- insumo mínimo de
     `GoalMLService.generate_proposals` para saber a quién generarle una meta y cuántas
@@ -148,9 +158,9 @@ class GoalRepository:
             return int(row[0]), int(row[1])
         return None
 
-    def get_commission_report(self, anio: int, mes: int) -> list[dict]:
+    def get_commission_report(self, anio: int, mes: int, vendedor: str | None = None) -> list[dict]:
         rows = self.db.execute(
-            text("""
+            text(f"""
                 SELECT
                     MAX(v.nombre_vendedor) AS vendedor, m.monto_meta AS meta_monto,
                     m.comision_base_pct, m.bono_sobrecumplimiento, m.id AS id_meta, m.estado,
@@ -158,10 +168,11 @@ class GoalRepository:
                 FROM public.metas_comerciales_operativas m
                 LEFT JOIN edw.dim_vendedor v ON m.id_vendedor_origen = v.codven
                 WHERE m.anio = :anio AND m.mes = :mes
+                {"AND v.nombre_vendedor = :vendedor" if vendedor else ""}
                 GROUP BY m.id, m.monto_meta, m.comision_base_pct, m.bono_sobrecumplimiento, m.estado, m.id_vendedor_origen
                 ORDER BY MAX(v.nombre_vendedor) ASC
             """),
-            {"anio": anio, "mes": mes},
+            {"anio": anio, "mes": mes, **({"vendedor": vendedor} if vendedor else {})},
         ).fetchall()
         return [
             {
@@ -172,7 +183,7 @@ class GoalRepository:
         ]
 
     # ── Liquidación de comisiones (docs/modulo_metas.md, docs/auditoria/17_/19_...) ────
-    def get_commission_tracking_rows(self, anio: int, mes: int) -> list[dict]:
+    def get_commission_tracking_rows(self, anio: int, mes: int, vendedor: str | None = None) -> list[dict]:
         """Una fila por meta configurada en el período (grano vendedor, ver
         docs/auditoria/19_...md), con su **Venta Neta** real (ventas - devoluciones de
         TODAS las sucursales del vendedor) ya resuelta -- a diferencia de
@@ -214,11 +225,14 @@ class GoalRepository:
             LEFT JOIN VentasBrutas vb ON m.id_vendedor_origen = vb.vendedor_origen
             LEFT JOIN Devoluciones dv ON m.id_vendedor_origen = dv.vendedor_origen
             WHERE m.anio = :anio AND m.mes = :mes
+            {"AND v.nombre_vendedor = :vendedor" if vendedor else ""}
             GROUP BY m.id, m.id_vendedor_origen, m.monto_meta, m.comision_base_pct,
                      m.bono_sobrecumplimiento, m.estado
             ORDER BY vendedor ASC
         """)
-        rows = self.db.execute(query, {"anio": anio, "mes": mes}).fetchall()
+        rows = self.db.execute(
+            query, {"anio": anio, "mes": mes, **({"vendedor": vendedor} if vendedor else {})},
+        ).fetchall()
         return [
             {
                 "id": int(r[0]), "id_vendedor_origen": r[1], "vendedor": str(r[2]),
@@ -491,6 +505,49 @@ class GoalRepository:
             )
             for r in rows
         ]
+
+    def get_cobros_periodo(self, vendedor_origen: str, anio: int, mes: int) -> list[CobroRow]:
+        """Cobros del vendedor (todas sus sucursales) DEVENGADOS en el período -- grano
+        central de la comisión sobre cobros (auditoría 44). El período se decide por
+        `fecha_sk` = `banfec` (efectivización, RN-CM8), NO por la fecha de emisión de la
+        factura ni por la de registro del cobro: un cheque postfechado recibido en
+        diciembre y cobrado en febrero comisiona en FEBRERO. `es_nota_debito` se excluye
+        explícitamente aquí (RN-CM12), replicando el filtro `substring(numcco,1,2)<>'ND'`
+        del reporte del ERP."""
+        query = text("""
+            SELECT c.valor_cobrado, c.dias_cobro
+            FROM edw.fact_cobros_cuotas c
+            JOIN edw.dim_fecha d ON c.fecha_sk = d.fecha_sk
+            JOIN edw.dim_vendedor v ON c.vendedor_sk = v.vendedor_sk
+            WHERE v.codven = :vendedor AND d.anio = :anio AND d.mes = :mes
+              AND c.es_nota_debito = FALSE
+        """)
+        rows = self.db.execute(query, {"vendedor": vendedor_origen, "anio": anio, "mes": mes}).fetchall()
+        return [CobroRow(valor_cobrado=float(r[0]), dias_cobro=int(r[1])) for r in rows]
+
+    def get_ventas_contado_agencia(self, vendedor_origen: str, agencia: str, anio: int, mes: int) -> float:
+        """Ventas de CONTADO del vendedor EN SU AGENCIA -- componente "1% de ventas de
+        contado" de los jefes de agencia (auditoría 44 §1). Contado = `dim_formapago.
+        codforpag = 'E'` (verificado contra Producción: 0/1493 facturas 'E' generan
+        cuentas por cobrar, 786/786 'C' sí -- RN-CM11, contraintuitivo: 'E' es CONTADO,
+        'C' es CRÉDITO). `agencia` filtra por `dim_sucursal.establ`, no por el vendedor
+        solo -- la regla es "de esa agencia", no "de ese vendedor en cualquier agencia"."""
+        query = text("""
+            SELECT COALESCE(SUM(f.subtotal_neto), 0.0)
+            FROM edw.fact_ventas_detalle f
+            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+            JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
+            JOIN edw.dim_formapago fp ON f.formapago_sk = fp.formapago_sk
+            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+            WHERE ed.estado_documento_sk <> -1
+              AND v.codven = :vendedor AND s.establ = :agencia
+              AND d.anio = :anio AND d.mes = :mes AND fp.codforpag = 'E'
+        """)
+        row = self.db.execute(
+            query, {"vendedor": vendedor_origen, "agencia": agencia, "anio": anio, "mes": mes}
+        ).fetchone()
+        return float(row[0]) if row and row[0] is not None else 0.0
 
     def get_margin_profile_by_category(self, meses: int = 24) -> list[dict]:
         """Perfil de margen por categoría (`clase`/`subclase`), agregado con

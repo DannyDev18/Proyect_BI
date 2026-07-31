@@ -1,11 +1,12 @@
 import { api } from './http';
 import type {
-  VentasKPIs, VentasGoalsTracking, ChurnResponse, RecomendacionResponse, SegmentacionResponse,
+  VentasGoalsTracking, ChurnResponse, RecomendacionResponse, SegmentacionResponse,
   ForecastCierre, MetaSugerida, RecomendacionesComerciales, MiComision, PostGoalInvoicesResponse,
+  MiNegocio,
 } from '../types/ventas';
 
 export const getSalesGoals = (anio?: number, mes?: number) =>
-  api.get<VentasKPIs>('/api/v1/analytics/ventas/goals', { params: { anio, mes } });
+  api.get<VentasGoalsTracking>('/api/v1/analytics/ventas/goals', { params: { anio, mes } });
 
 /** Mismo endpoint que `getSalesGoals`, tipado según el contrato real del backend
  * (`VentasGoalsTracking`) -- usado por el dashboard vendedor. */
@@ -44,3 +45,8 @@ export const getRecommendations = (cliente_id: string) =>
 
 export const getCustomerSegment = (cliente_cod: string) =>
   api.get<SegmentacionResponse>(`/api/v1/analytics/ventas/clientes/${cliente_cod}/segmento`);
+
+/** Dashboard "Mi Negocio" del vendedor (auditoría 43, Fase 5): una sola llamada que
+ * compone cuota/comisión, ranking, tendencia, cartera en riesgo y agenda. */
+export const getMiNegocio = () =>
+  api.get<MiNegocio>('/api/v1/analytics/ventas/mi-negocio');

@@ -3,14 +3,14 @@ import {
   getMatrizCategorias, upsertMatrizCategoria, deleteMatrizCategoria, getFactoresCredito, replaceFactoresCredito,
   getConfigVendedores, upsertConfigVendedor, postCommissionSimulation, getPerfilCategorias, getLineasSinCosto,
   getComisionConfigAuditoria, searchClasesProducto, searchVendedoresComision,
+  getTramosCobranza, replaceTramosCobranza, getFormulas, replaceFormulaComponentes,
 } from '../services/commissionConfig';
 import { qk } from '../constants/queryKeys';
 import type {
   ComisionConfigAuditoriaEntrada, ConfigVendedor, FactorCredito, LineaSinCosto, MatrizCategoria, PerfilCategoria,
+  SimulacionComisionPayload, TipoVendedor, TodosTramosCobranza, FormulaComponentePayload, Formulas,
 } from '../types/commissionConfig';
-
-const errorMessage = (error: unknown): string | null =>
-  error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
+import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 const EMPTY_MATRIZ: MatrizCategoria[] = [];
 const EMPTY_CREDITO: FactorCredito[] = [];
@@ -85,7 +85,7 @@ export const useConfigVendedores = () => {
 export const useUpsertConfigVendedor = () => {
   const queryClient = useQueryClient();
   const mutation = useMutation({
-    mutationFn: ({ vendedorOrigen, ...payload }: { vendedorOrigen: string; tipo: 'externo' | 'interno'; factor_tipo: number; fecha_ingreso?: string | null }) =>
+    mutationFn: ({ vendedorOrigen, ...payload }: { vendedorOrigen: string; tipo: TipoVendedor; factor_tipo: number; fecha_ingreso?: string | null; agencia?: string | null }) =>
       upsertConfigVendedor(vendedorOrigen, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.commissionConfig.vendedores() });
@@ -100,13 +100,13 @@ export const useUpsertConfigVendedor = () => {
  * consulta potencialmente pesada sobre el EDW (N meses x M vendedores, grano de línea). */
 export const useCommissionSimulation = () => {
   const mutation = useMutation({
-    mutationFn: (mesesHistorico: 3 | 6) => postCommissionSimulation(mesesHistorico).then((r) => r.data),
+    mutationFn: (payload: SimulacionComisionPayload) => postCommissionSimulation(payload).then((r) => r.data),
   });
   return {
     data: mutation.data ?? null,
     loading: mutation.isPending,
     error: errorMessage(mutation.error),
-    simulate: (mesesHistorico: 3 | 6) => mutation.mutateAsync(mesesHistorico),
+    simulate: (payload: SimulacionComisionPayload) => mutation.mutateAsync(payload),
   };
 };
 
@@ -155,4 +155,52 @@ export const useSearchVendedoresComision = (q: string) => {
     enabled: q.trim().length >= 2,
   });
   return { data: query.data ?? null, loading: query.isLoading };
+};
+
+// ── Comisión sobre COBROS (auditoría 44, docs/features/plan_comisiones_sobre_cobros.md) ──
+const EMPTY_TRAMOS: TodosTramosCobranza = { externo: [], interno: [], jefe_agencia: [] };
+const EMPTY_FORMULAS: Formulas = { formulas: [], catalogo_componentes: [] };
+
+export const useTramosCobranza = () => {
+  const query = useQuery({
+    queryKey: qk.commissionConfig.tramosCobranza(),
+    queryFn: () => getTramosCobranza().then((r) => r.data),
+  });
+  return { data: query.data ?? EMPTY_TRAMOS, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
+};
+
+export const useReplaceTramosCobranza = () => {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: replaceTramosCobranza,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.tramosCobranza() });
+      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.auditoria() });
+    },
+  });
+  return { replace: mutation.mutateAsync, loading: mutation.isPending };
+};
+
+/** Fórmulas de comisión variable (estructura editable, no quemada en código -- ver
+ * backend/app/services/commission_engine.py::evaluar_formula) y el catálogo cerrado de
+ * componentes que el editor del frontend debe usar para poblar el selector. */
+export const useFormulas = () => {
+  const query = useQuery({
+    queryKey: qk.commissionConfig.formulas(),
+    queryFn: () => getFormulas().then((r) => r.data),
+  });
+  return { data: query.data ?? EMPTY_FORMULAS, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
+};
+
+export const useReplaceFormulaComponentes = () => {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: ({ formulaId, componentes }: { formulaId: number; componentes: FormulaComponentePayload[] }) =>
+      replaceFormulaComponentes(formulaId, componentes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.formulas() });
+      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.auditoria() });
+    },
+  });
+  return { replace: mutation.mutateAsync, loading: mutation.isPending };
 };

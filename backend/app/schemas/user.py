@@ -32,7 +32,8 @@ class UserOut(BaseModel):
     email: EmailStr
     sucursal: Optional[str] = None
     id_vendedor_origen: Optional[str] = None
-    codalm: Optional[str] = None
+    codalms: list[str] = []
+    todos_los_almacenes: bool = False
     es_activo: bool
     created_at: datetime
     updated_at: datetime
@@ -51,7 +52,8 @@ class UserMe(BaseModel):
     email: EmailStr
     sucursal: Optional[str] = None
     id_vendedor_origen: Optional[str] = None
-    codalm: Optional[str] = None
+    codalms: list[str] = []
+    todos_los_almacenes: bool = False
     es_activo: bool
     role: RoleOut
 
@@ -63,11 +65,12 @@ class UserMe(BaseModel):
 class UserCreate(BaseModel):
     """Schema para crear un nuevo usuario. Solo el administrador puede usarlo.
 
-    Enlace automático por rol (UserService._validate_role_link):
+    Enlace automático por rol (UserService._resolve_role_link):
     - rol "ventas": `id_vendedor_origen` (codven) es obligatorio y se valida contra
       edw.Dim_Vendedor -- debe existir y estar `activo`.
-    - rol "bodega": `codalm` es obligatorio y se valida contra edw.Dim_Almacen,
-      salvo que `todos_los_almacenes=True` (acceso a todos los almacenes, `codalm=NULL`).
+    - rol "bodega": `codalms` (una o varias) es obligatorio y cada código se valida
+      contra edw.Dim_Almacen, salvo que `todos_los_almacenes=True` (acceso a todas las
+      bodegas -- decisión del usuario 2026-07-29: N:N, no 1:1, ver B-2 del plan).
     """
     nombre: str
     email: EmailStr
@@ -75,7 +78,7 @@ class UserCreate(BaseModel):
     rol_id: int
     sucursal: Optional[str] = None
     id_vendedor_origen: Optional[str] = None
-    codalm: Optional[str] = None
+    codalms: list[str] = []
     todos_los_almacenes: Optional[bool] = False
     es_activo: Optional[bool] = True
 
@@ -86,14 +89,15 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    """Schema para actualizar un usuario (todos los campos son opcionales)."""
+    """Schema para actualizar un usuario (todos los campos son opcionales).
+    `codalms=None` deja las bodegas asignadas sin cambios; `codalms=[]` las vacía."""
     nombre: Optional[str] = None
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     rol_id: Optional[int] = None
     sucursal: Optional[str] = None
     id_vendedor_origen: Optional[str] = None
-    codalm: Optional[str] = None
+    codalms: Optional[list[str]] = None
     todos_los_almacenes: Optional[bool] = None
     es_activo: Optional[bool] = None
 

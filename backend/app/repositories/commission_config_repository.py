@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.models.commission_config import (
-    ComisionConfigAuditoria, ComisionConfigVendedor, ComisionFactorCredito, ComisionLiquidacion,
-    ComisionMatrizCategoria,
+    ComisionConfigAuditoria, ComisionConfigVendedor, ComisionFactorCredito, ComisionFormula,
+    ComisionFormulaComponente, ComisionLiquidacion, ComisionMatrizCategoria, ComisionTramoCobranza,
 )
 from app.models.user import User
-from app.services.commission_engine import RangoCredito, ReglaCategoria
+from app.services.commission_engine import RangoCredito, ReglaCategoria, TramoCobranza
 
 
 class CommissionConfigRepository:
@@ -118,7 +118,7 @@ class CommissionConfigRepository:
         nuevas = [
             ComisionFactorCredito(
                 dias_desde=f["dias_desde"], dias_hasta=f.get("dias_hasta"), factor=f["factor"],
-                pct_al_facturar=f.get("pct_al_facturar", 100.0), vigente_desde=hoy,
+                vigente_desde=hoy,
             )
             for f in factores
         ]
@@ -159,10 +159,16 @@ class CommissionConfigRepository:
 
     def upsert_config_vendedor(
         self, vendedor_origen: str, tipo: str, factor_tipo: float, fecha_ingreso: datetime.date | None,
+        agencia: str | None = None,
     ) -> ComisionConfigVendedor:
         """Cierra la vigencia activa del vendedor si existe, e inserta la nueva -- nunca
         hace UPDATE de una fila vigente (mismo patrón que `upsert_regla_categoria`),
-        para preservar lo que las liquidaciones ya congeladas usaron al calcularse."""
+        para preservar lo que las liquidaciones ya congeladas usaron al calcularse.
+
+        `agencia` (auditoría 44): solo tiene sentido para el perfil `jefe_agencia`
+        (componente `contado_agencia` de la fórmula); se acepta para cualquier perfil sin
+        validar aquí -- la validación de negocio (perfil-agencia coherente) vive en el
+        servicio, no en el repositorio."""
         hoy = datetime.date.today()
         activa = (
             self.db.query(ComisionConfigVendedor)
@@ -177,12 +183,125 @@ class CommissionConfigRepository:
 
         nuevo = ComisionConfigVendedor(
             id_vendedor_origen=vendedor_origen, tipo=tipo, factor_tipo=factor_tipo,
-            fecha_ingreso=fecha_ingreso, vigente_desde=hoy,
+            fecha_ingreso=fecha_ingreso, agencia=agencia, vigente_desde=hoy,
         )
         self.db.add(nuevo)
         self.db.commit()
         self.db.refresh(nuevo)
         return nuevo
+
+    # ── Tramos de comisión sobre cobros (auditoría 44, RN-CM8/RN-CM9) ───────────
+    def get_tramos_cobranza_vigentes(
+        self, perfil: str, fecha: datetime.date | None = None,
+    ) -> list[ComisionTramoCobranza]:
+        fecha = fecha or datetime.date.today()
+        return (
+            self.db.query(ComisionTramoCobranza)
+            .filter(
+                ComisionTramoCobranza.perfil == perfil,
+                ComisionTramoCobranza.vigente_desde <= fecha,
+                (ComisionTramoCobranza.vigente_hasta.is_(None)) | (ComisionTramoCobranza.vigente_hasta >= fecha),
+            )
+            .order_by(ComisionTramoCobranza.dias_hasta.asc().nulls_last())
+            .all()
+        )
+
+    def get_todos_tramos_cobranza_vigentes(self, fecha: datetime.date | None = None) -> list[ComisionTramoCobranza]:
+        """Los 3 perfiles a la vez -- para el panel de configuración de gerencia."""
+        fecha = fecha or datetime.date.today()
+        return (
+            self.db.query(ComisionTramoCobranza)
+            .filter(
+                ComisionTramoCobranza.vigente_desde <= fecha,
+                (ComisionTramoCobranza.vigente_hasta.is_(None)) | (ComisionTramoCobranza.vigente_hasta >= fecha),
+            )
+            .order_by(ComisionTramoCobranza.perfil, ComisionTramoCobranza.dias_hasta.asc().nulls_last())
+            .all()
+        )
+
+    def get_tramos_cobranza_as_rangos(self, perfil: str, fecha: datetime.date | None = None) -> list[TramoCobranza]:
+        return [
+            TramoCobranza(dias_hasta=t.dias_hasta, tasa_pct=float(t.tasa_pct))
+            for t in self.get_tramos_cobranza_vigentes(perfil, fecha)
+        ]
+
+    def replace_tramos_cobranza(self, perfil: str, tramos: list[dict], creado_por: int | None) -> list[ComisionTramoCobranza]:
+        """Reemplaza los tramos vigentes de UN perfil (edición atómica desde el panel):
+        cierra las filas vigentes de ese perfil e inserta las nuevas -- mismo patrón que
+        `replace_factores_credito`. Los otros perfiles no se tocan."""
+        hoy = datetime.date.today()
+        vigentes = self.get_tramos_cobranza_vigentes(perfil, hoy)
+        for t in vigentes:
+            t.vigente_hasta = hoy - datetime.timedelta(days=1)
+
+        nuevos = [
+            ComisionTramoCobranza(
+                perfil=perfil, dias_hasta=t.get("dias_hasta"), tasa_pct=t["tasa_pct"],
+                vigente_desde=hoy, creado_por=creado_por,
+            )
+            for t in tramos
+        ]
+        self.db.add_all(nuevos)
+        self.db.commit()
+        for n in nuevos:
+            self.db.refresh(n)
+        return nuevos
+
+    # ── Fórmula de comisión (auditoría 44: estructura editable, no quemada en código) ──
+    def get_formula_activa(self) -> tuple[ComisionFormula, list[ComisionFormulaComponente]] | None:
+        formula = self.db.query(ComisionFormula).filter(ComisionFormula.activa.is_(True)).first()
+        if formula is None:
+            return None
+        componentes = (
+            self.db.query(ComisionFormulaComponente)
+            .filter(ComisionFormulaComponente.formula_id == formula.id, ComisionFormulaComponente.activo.is_(True))
+            .order_by(ComisionFormulaComponente.orden)
+            .all()
+        )
+        return formula, componentes
+
+    def get_todas_las_formulas(self) -> list[tuple[ComisionFormula, list[ComisionFormulaComponente]]]:
+        formulas = self.db.query(ComisionFormula).order_by(ComisionFormula.clave).all()
+        resultado = []
+        for f in formulas:
+            componentes = (
+                self.db.query(ComisionFormulaComponente)
+                .filter(ComisionFormulaComponente.formula_id == f.id)
+                .order_by(ComisionFormulaComponente.orden)
+                .all()
+            )
+            resultado.append((f, componentes))
+        return resultado
+
+    def reemplazar_componentes_formula(
+        self, formula_id: int, componentes: list[dict],
+    ) -> list[ComisionFormulaComponente]:
+        """Reemplaza TODA la tubería de una fórmula (borra los pasos existentes e
+        inserta los nuevos) -- a diferencia de la matriz de categorías o los tramos de
+        cobranza, una fórmula no tiene "historial de vigencia" propio: es la definición
+        estructural vigente en el momento en que se calcula cada mes en curso; los
+        períodos ya cerrados quedan protegidos por el snapshot congelado de
+        `comision_liquidaciones` (salvaguarda 6), no por vigencia de la fórmula misma."""
+        formula = self.db.query(ComisionFormula).filter(ComisionFormula.id == formula_id).first()
+        if formula is None:
+            raise NotFoundError(f"No existe una fórmula con id={formula_id}.")
+
+        self.db.query(ComisionFormulaComponente).filter(
+            ComisionFormulaComponente.formula_id == formula_id
+        ).delete(synchronize_session=False)
+
+        nuevos = [
+            ComisionFormulaComponente(
+                formula_id=formula_id, orden=c["orden"], componente=c["componente"],
+                operador=c["operador"], activo=c.get("activo", True), parametros=c.get("parametros") or {},
+            )
+            for c in componentes
+        ]
+        self.db.add_all(nuevos)
+        self.db.commit()
+        for n in nuevos:
+            self.db.refresh(n)
+        return nuevos
 
     # ── Snapshots de liquidación (piloto en sombra / cierre oficial) ───────────
     def get_liquidacion(

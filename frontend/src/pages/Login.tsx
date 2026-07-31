@@ -43,7 +43,9 @@ export const Login = () => {
         name: me.nombre,
         email: me.email,
         role: me.role.nombre,
-        sucursalId: me.sucursal
+        sucursalId: me.sucursal,
+        codalms: me.codalms,
+        todosLosAlmacenes: me.todos_los_almacenes,
       }, token);
 
       navigate('/');

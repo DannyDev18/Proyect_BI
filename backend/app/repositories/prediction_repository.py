@@ -153,30 +153,80 @@ class PredictionRepository:
         facturas, no días -- H-14 parcialmente cerrado). recency queda relativa a
         `now()` porque este endpoint sirve el estado ACTUAL del cliente, a diferencia
         del entrenamiento que usa el máximo del dataset histórico -- esa diferencia es
-        esperable en un sistema en vivo, no un bug."""
+        esperable en un sistema en vivo, no un bug.
+
+        Auditoría 41 (Fase 2 del refactor Cartera 360, hallazgo encontrado durante la
+        medición de latencia de `get_ruta_hoy`): la versión anterior agregaba
+        `compras_por_dia` por `(cliente_sk, fecha)` para TODOS los clientes de
+        `fact_ventas_detalle` (525k filas) antes de filtrar por el cliente pedido --
+        un `Seq Scan` completo en cada llamada, usada por este método (`get_customer_
+        segment`, consumido también por `/analytics/ventas/clientes/{id}/segmento` y el
+        detalle de Cartera 360). Resolver `cliente_sk` primero y filtrar el CTE por él
+        permite usar `idx_fvd_cli` -- medido: 366.2 ms -> 19.1 ms de ejecución."""
         query = """
-            WITH compras_por_dia AS (
-                SELECT
-                    v.cliente_sk,
-                    f.fecha_completa,
-                    SUM(v.subtotal_neto) AS total_dia
+            WITH cliente AS (
+                SELECT c.cliente_sk
+                FROM edw.dim_cliente c
+                JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
+                WHERE l.id_cliente_transaccional = :cliente_id
+            ),
+            compras_por_dia AS (
+                SELECT f.fecha_completa, SUM(v.subtotal_neto) AS total_dia
                 FROM edw.fact_ventas_detalle v
                 JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
                 JOIN edw.dim_estado_documento ed ON v.estado_documento_sk = ed.estado_documento_sk
+                JOIN cliente cl ON v.cliente_sk = cl.cliente_sk
                 WHERE ed.estado_documento_sk <> -1
-                GROUP BY v.cliente_sk, f.fecha_completa
+                GROUP BY f.fecha_completa
             )
             SELECT
-                COALESCE(EXTRACT(DAY FROM (now() - MAX(cd.fecha_completa))), 365) AS recency,
-                COUNT(DISTINCT cd.fecha_completa) AS frequency,
-                COALESCE(SUM(cd.total_dia), 0) AS monetary_value
-            FROM compras_por_dia cd
-            JOIN edw.dim_cliente c ON cd.cliente_sk = c.cliente_sk
-            JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
-            WHERE l.id_cliente_transaccional = :cliente_id
-            GROUP BY l.id_cliente_transaccional;
+                COALESCE(EXTRACT(DAY FROM (now() - MAX(fecha_completa))), 365) AS recency,
+                COUNT(DISTINCT fecha_completa) AS frequency,
+                COALESCE(SUM(total_dia), 0) AS monetary_value
+            FROM compras_por_dia;
         """
         res = self.db.execute(text(query), {"cliente_id": cliente_id}).fetchone()
-        if not res:
+        # frequency == 0: cliente sin ninguna compra registrada (o id inexistente) --
+        # el agregado sobre 0 filas de compras_por_dia igual devuelve 1 fila (COUNT=0,
+        # SUM=NULL->0), a diferencia del JOIN del query anterior que producía 0 filas.
+        # Se preserva la semántica original: "sin historial" -> None.
+        if not res or res[1] == 0:
             return None
         return RfmFeatures(recency=float(res[0]), frequency=float(res[1]), monetary_value=float(res[2]))
+
+    def get_rfm_features_batch(self, cliente_ids: list[str]) -> pd.DataFrame:
+        """Mismas features de `get_rfm_features`, para un lote en UNA sola consulta --
+        mismo criterio anti N+1 que `get_churn_features_batch` (auditoría 41, Fase 2 del
+        refactor Cartera 360: `get_ruta_hoy` enriquece hasta `CARTERA360_RUTA_TOP_N`
+        clientes por request, una consulta por cliente para RFM/segmentación era
+        evitable con el mismo patrón ya usado para churn)."""
+        if not cliente_ids:
+            return pd.DataFrame(columns=["cliente_id", "recency", "frequency", "monetary_value"])
+        query = text("""
+            WITH clientes AS (
+                SELECT c.cliente_sk, l.id_cliente_transaccional AS cliente_id
+                FROM edw.dim_cliente c
+                JOIN public.cliente_lookup l ON c.hash_anonimo = l.hash_anonimo
+                WHERE l.id_cliente_transaccional IN :cliente_ids
+            ),
+            compras_por_dia AS (
+                SELECT cl.cliente_id, f.fecha_completa, SUM(v.subtotal_neto) AS total_dia
+                FROM edw.fact_ventas_detalle v
+                JOIN edw.dim_fecha f ON v.fecha_sk = f.fecha_sk
+                JOIN edw.dim_estado_documento ed ON v.estado_documento_sk = ed.estado_documento_sk
+                JOIN clientes cl ON v.cliente_sk = cl.cliente_sk
+                WHERE ed.estado_documento_sk <> -1
+                GROUP BY cl.cliente_id, f.fecha_completa
+            )
+            SELECT
+                cliente_id,
+                COALESCE(EXTRACT(DAY FROM (now() - MAX(fecha_completa))), 365) AS recency,
+                COUNT(DISTINCT fecha_completa) AS frequency,
+                COALESCE(SUM(total_dia), 0) AS monetary_value
+            FROM compras_por_dia
+            GROUP BY cliente_id
+        """).bindparams(bindparam("cliente_ids", expanding=True))
+        df = pd.read_sql(query, self.db.connection(), params={"cliente_ids": cliente_ids})
+        for col in ("recency", "frequency", "monetary_value"):
+            df[col] = df[col].astype(float)
+        return df

@@ -120,6 +120,16 @@ class Settings(BaseSettings):
     # Barrido G-01 (auditoría 39): margen sobre el punto de reorden a partir del cual el
     # estado deja de ser "seguro" y pasa a "cerca del reorden". Antes `reorden * 1.5` literal.
     BODEGA_FACTOR_CERCA_REORDEN: float = float(os.getenv("BODEGA_FACTOR_CERCA_REORDEN", "1.5"))
+    # Fase 6.1 (docs/features/plan_correcciones_integrales_sistema.md, H-2/RN-B11):
+    # ventana para clasificar "Inmovilizado" (stock > 0, cero salidas en la ventana) --
+    # distinta de la ventana de 30 días que ya usa `_salida_diaria` para el punto de
+    # reorden, porque "sin salidas en 30 días" es demasiado agresivo para declarar un
+    # artículo estancado (estacionalidad). Salida diaria por debajo de este umbral se
+    # marca como "de baja confianza" en "días de stock" (caso "El Rey": 0.1 uds/día no
+    # es lo mismo que una venta real y frecuente, aunque matemáticamente ambos den
+    # "0 días" de cobertura).
+    BODEGA_DIAS_VENTANA_INMOVILIZADO: int = int(os.getenv("BODEGA_DIAS_VENTANA_INMOVILIZADO", "90"))
+    BODEGA_MIN_SALIDA_CONFIABLE: float = float(os.getenv("BODEGA_MIN_SALIDA_CONFIABLE", "0.5"))
     # RN-B9 (docs/auditoria/32_actualizacion_modulo_bodega.md): justificación estadística
     # de transferencias. Costo logístico estimado como % del valor transferido (a costo
     # unitario del destino) -- sin dato real de flete en el EDW, se declara como estimación
@@ -127,6 +137,14 @@ class Settings(BaseSettings):
     # en los últimos 6 meses para emitir la sugerencia (evita mover stock a una bodega sin
     # historial real de venta del artículo).
     BODEGA_COSTO_LOGISTICO_PCT: float = float(os.getenv("BODEGA_COSTO_LOGISTICO_PCT", "5.0"))
+    # Auditoría 43 (H43-1/H43-2/H43-3, docs/auditoria/43_correcciones_sesion_ventas_y_datos.md):
+    # `fact_movimientos_inventario` solo tiene kardex desde `FECHA_DESDE` del ETL (por defecto
+    # 2020-01-01, ver etl/config/settings.py) -- no hay fila de saldo de apertura previa. El
+    # stock/última venta calculados en el reporte "productos sin movimiento" se derivan sumando
+    # ese kardex, así que pueden diferir de la existencia real de Producción para artículos con
+    # historia anterior a esta fecha. Se declara aquí (informativo, NO se usa como filtro) para
+    # que el reporte exponga la ventana real de datos en vez de divergir en silencio.
+    BODEGA_KARDEX_HISTORICO_DESDE: str = os.getenv("BODEGA_KARDEX_HISTORICO_DESDE", "2020-01-01")
     BODEGA_MIN_MESES_VENTA: int = int(os.getenv("BODEGA_MIN_MESES_VENTA", "2"))
     # Umbrales de confianza (alta/media/baja) del coeficiente de variación de la demanda
     # diaria del destino, recalibrados contra la distribución real del EDW (docs/auditoria/
@@ -194,6 +212,14 @@ class Settings(BaseSettings):
     COMISION_META_FACTOR_INTERNO: float = float(os.getenv("COMISION_META_FACTOR_INTERNO", "0.95"))
     COMISION_VENDEDOR_NUEVO_MESES: int = int(os.getenv("COMISION_VENDEDOR_NUEVO_MESES", "3"))
     COMISION_VENDEDOR_NUEVO_FACTOR: float = float(os.getenv("COMISION_VENDEDOR_NUEVO_FACTOR", "0.60"))
+    # ── Comisión sobre COBROS (docs/auditoria/44_comisiones_sobre_cobros.md,
+    # docs/features/plan_comisiones_sobre_cobros.md) -- configuración adicional del
+    # esquema Variable, activable reemplazando la fórmula vigente por 'cobranza' (ver
+    # public.comision_formula), sin tocar COMISION_MODO. Perfil por defecto cuando un
+    # vendedor no tiene fila en comision_config_vendedor (mismo criterio que
+    # COMISION_FACTOR_EXTERNO_DEFAULT: se asume el perfil menos favorable de castigar a
+    # nadie por configuración faltante).
+    COMISION_PERFIL_COBRANZA_DEFAULT: str = os.getenv("COMISION_PERFIL_COBRANZA_DEFAULT", "externo")
 
     # ── Módulo Ventas: Cartera de Clientes 360 (docs/features/propuesta_nuevos_modulos_roi.md
     # §4, auditoría 32) ─────────────────────────────────────────────────────────
@@ -253,6 +279,50 @@ class Settings(BaseSettings):
     # negocio de "una gestión por día" (un vendedor sí puede loggear el mismo tipo de
     # evento en días distintos), solo protección contra el doble-click accidental.
     CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS: int = int(os.getenv("CARTERA360_DEDUPE_DOBLE_CLICK_SEGUNDOS", "10"))
+
+    # ── "Mi Ruta Inteligente de Ventas" (docs/features/plan_refactor_cartera360_ruta_
+    # inteligente.md, auditoría 41-refactor). Feature flag: apagado por defecto hasta la
+    # Fase 7 (rollback §9 del plan -- mismo patrón que COMISION_MODO, apagar es cambiar
+    # esta env var, sin tocar código). En "false" el Sidebar apunta a la página vieja
+    # (/ventas/cartera360) y los endpoints /ruta/* devuelven 404.
+    CARTERA360_RUTA_INTELIGENTE_ENABLED: bool = os.getenv("CARTERA360_RUTA_INTELIGENTE_ENABLED", "false").lower() == "true"
+    # Tamaño de la ruta diaria mostrada al vendedor (criterio de aceptación 1 del plan:
+    # "≤10 clientes priorizados, sin scroll ni filtros previos"). Distinto de
+    # VENTAS360_MAX_CARTERA (100): ese es el tope de la lista completa /cartera360
+    # heredada, este es el subconjunto reducido de /ruta/hoy con oferta+motivo enriquecidos.
+    CARTERA360_RUTA_TOP_N: int = int(os.getenv("CARTERA360_RUTA_TOP_N", "10"))
+    # Rotación de la ruta (hallazgo post-Fase 3, feedback de usuario): sin esto, los
+    # mismos CARTERA360_RUTA_TOP_N clientes de mayor score reaparecerían todos los días
+    # -- valor_historico/probabilidad_abandono no cambian de un día a otro solo porque
+    # el vendedor ya los gestionó. Pool de candidatos (del shortlist ya rerankeado) sobre
+    # el que se filtran los ya gestionados HOY o con seguimiento agendado a futuro, antes
+    # de tomar los CARTERA360_RUTA_TOP_N finales -- debe ser mayor a TOP_N para que
+    # sobren candidatos tras filtrar.
+    CARTERA360_RUTA_POOL_FILTRADO: int = int(os.getenv("CARTERA360_RUTA_POOL_FILTRADO", "50"))
+    # "Riesgo crítico" (§4.4 del plan) = riesgo_alto Y valor_historico en el top decil de
+    # la cartera del vendedor (percentil real de SU cartera, no un monto fijo -- una
+    # cartera pequeña y una de 31k no comparten escala de "top decil").
+    CARTERA360_PERCENTIL_VALOR_CRITICO: float = float(os.getenv("CARTERA360_PERCENTIL_VALOR_CRITICO", "0.90"))
+    # Bajo este número de gestiones registradas, el panel de Efectividad Comercial
+    # muestra estado vacío explicativo en vez de una tasa (RN-CS5: nunca ceros/ejemplos
+    # con muestra insuficiente -- D-1 del plan: hoy hay 0 filas).
+    CARTERA360_MIN_GESTIONES_EFECTIVIDAD: int = int(os.getenv("CARTERA360_MIN_GESTIONES_EFECTIVIDAD", "5"))
+    # Cupos del planificador semanal (§4.9, "plan sugerido" determinista, no aprendido):
+    # cuántos clientes de la ruta se asignan por día lunes-viernes. Suma configurable,
+    # nunca hardcodeada en el frontend.
+    CARTERA360_PLAN_CUPO_LUNES: int = int(os.getenv("CARTERA360_PLAN_CUPO_LUNES", "10"))
+    CARTERA360_PLAN_CUPO_MARTES: int = int(os.getenv("CARTERA360_PLAN_CUPO_MARTES", "10"))
+    CARTERA360_PLAN_CUPO_MIERCOLES: int = int(os.getenv("CARTERA360_PLAN_CUPO_MIERCOLES", "10"))
+    CARTERA360_PLAN_CUPO_JUEVES: int = int(os.getenv("CARTERA360_PLAN_CUPO_JUEVES", "10"))
+    CARTERA360_PLAN_CUPO_VIERNES: int = int(os.getenv("CARTERA360_PLAN_CUPO_VIERNES", "10"))
+
+    # Estado de cartera del panel /cartera360 heredado (Fase 4 §4.2,
+    # docs/features/plan_correcciones_integrales_sistema.md): "activo/inactivo/potencial"
+    # derivado de `dias_sin_comprar` real (recency), nunca hardcodeado en el frontend.
+    # <= DIAS_ACTIVO: activo. > DIAS_INACTIVO: inactivo. Entre medio: potencial (todavía
+    # recuperable, no perdido).
+    CARTERA360_DIAS_ACTIVO: int = int(os.getenv("CARTERA360_DIAS_ACTIVO", "60"))
+    CARTERA360_DIAS_INACTIVO: int = int(os.getenv("CARTERA360_DIAS_INACTIVO", "180"))
 
     model_config = SettingsConfigDict(case_sensitive=True)
 

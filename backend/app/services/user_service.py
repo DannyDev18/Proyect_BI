@@ -8,9 +8,12 @@ from app.models.user import User
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.user_repository import UserRepository
+from app.schemas.pagination import PaginationParams
 from app.schemas.user import UserCreate, UserUpdate
 
 logger = logging.getLogger(__name__)
+
+_SIN_CAMBIO = object()  # marca "no se tocaron las bodegas" en update() -- distinto de [] (vaciar)
 
 
 class UserService:
@@ -32,14 +35,15 @@ class UserService:
         return role
 
     def _resolve_role_link(
-        self, role: Role, id_vendedor_origen: str | None, codalm: str | None, todos_los_almacenes: bool,
-    ) -> tuple[str | None, str | None]:
+        self, role: Role, id_vendedor_origen: str | None, codalms: list[str], todos_los_almacenes: bool,
+    ) -> tuple[str | None, list[str]]:
         """Enlace automático cuenta↔EDW según el rol (panel Administrador):
         - "ventas": exige `id_vendedor_origen` (codven) y lo valida activo en
           edw.Dim_Vendedor -- la cuenta queda enlazada a ese vendedor.
-        - "bodega": exige `codalm` válido en edw.Dim_Almacen, salvo que el admin
-          marque "todos los almacenes" (`codalm=None`).
-        - Otros roles (gerencia, administrador): sin enlace, ambos campos en None.
+        - "bodega": exige una o varias `codalms` válidas en edw.Dim_Almacen (N:N,
+          decisión del usuario 2026-07-29 -- B-2 del plan), salvo que el admin marque
+          "todos los almacenes" (`todos_los_almacenes=True`).
+        - Otros roles (gerencia, administrador): sin enlace.
         """
         if role.nombre == "ventas":
             if not id_vendedor_origen:
@@ -53,21 +57,23 @@ class UserService:
                 raise ValidationError(
                     f"El vendedor '{id_vendedor_origen}' existe pero está inactivo; no se puede enlazar la cuenta."
                 )
-            return id_vendedor_origen, None
+            return id_vendedor_origen, []
 
         if role.nombre == "bodega":
             if todos_los_almacenes:
-                return None, None
-            if not codalm:
+                return None, []
+            if not codalms:
                 raise ValidationError(
-                    "El rol 'bodega' requiere un código de almacén (codalm), o marcar 'acceso a todos los almacenes'."
+                    "El rol 'bodega' requiere al menos un código de almacén (codalms), "
+                    "o marcar 'acceso a todos los almacenes'."
                 )
-            almacen = self.catalog_repo.get_almacen(codalm)
-            if not almacen:
-                raise ValidationError(f"El código de almacén '{codalm}' no existe en el sistema.")
-            return None, codalm
+            codalms_dedup = list(dict.fromkeys(codalms))
+            for codalm in codalms_dedup:
+                if not self.catalog_repo.get_almacen(codalm):
+                    raise ValidationError(f"El código de almacén '{codalm}' no existe en el sistema.")
+            return None, codalms_dedup
 
-        return None, None
+        return None, []
 
     def get_by_email(self, email: str) -> User | None:
         return self.user_repo.get_by_email(email)
@@ -77,6 +83,17 @@ class UserService:
 
     def get_all(self, skip: int = 0, limit: int = 100) -> list[User]:
         return self.user_repo.get_all(skip=skip, limit=limit)
+
+    def get_all_paginated(self, pagination: PaginationParams) -> tuple[list[User], int]:
+        """Fase 5 §5.1 (docs/features/plan_correcciones_integrales_sistema.md):
+        paginación real vía SQL (`OFFSET`/`LIMIT` + `COUNT(*)` ya en `UserRepository`),
+        no en memoria. Devuelve `(items, total)` -- el router arma el `Page[UserOut]`
+        (no se anota `Page[User]` aquí: `User` es un modelo ORM, no serializable como
+        parámetro genérico de un `BaseModel` de Pydantic)."""
+        skip = (pagination.page - 1) * pagination.page_size
+        items = self.user_repo.get_all(skip=skip, limit=pagination.page_size)
+        total = self.user_repo.count()
+        return items, total
 
     def registrar_intento_fallido(self, email: str, ip: str | None) -> None:
         self.user_repo.registrar_intento_fallido(email, ip)
@@ -100,8 +117,8 @@ class UserService:
                 f"El código de vendedor '{user_in.id_vendedor_origen}' ya está enlazado a otra cuenta."
             )
         role = self._validate_role_exists(user_in.rol_id)
-        id_vendedor_origen, codalm = self._resolve_role_link(
-            role, user_in.id_vendedor_origen, user_in.codalm, bool(user_in.todos_los_almacenes)
+        id_vendedor_origen, codalms = self._resolve_role_link(
+            role, user_in.id_vendedor_origen, user_in.codalms, bool(user_in.todos_los_almacenes)
         )
 
         db_user = self.user_repo.create(
@@ -111,14 +128,15 @@ class UserService:
             rol_id=user_in.rol_id,
             sucursal=user_in.sucursal,
             id_vendedor_origen=id_vendedor_origen,
-            codalm=codalm,
+            todos_los_almacenes=bool(user_in.todos_los_almacenes) if role.nombre == "bodega" else False,
             es_activo=user_in.es_activo if user_in.es_activo is not None else True,
+            codalms=codalms,
         )
         return self.user_repo.get_by_id(db_user.id)
 
     def update(self, db_user: User, user_in: UserUpdate) -> User:
         update_data = user_in.model_dump(exclude_unset=True)
-        todos_los_almacenes = update_data.pop("todos_los_almacenes", False)
+        codalms_in = update_data.pop("codalms", None)  # None = no se tocaron las bodegas
 
         if "email" in update_data and update_data["email"].lower() != db_user.email.lower():
             update_data["email"] = update_data["email"].lower()
@@ -142,23 +160,42 @@ class UserService:
 
         # Solo re-resuelve el enlace rol↔EDW si el cambio toca el rol o los campos
         # de enlace -- evita bloquear ediciones no relacionadas (p.ej. renombrar).
-        if {"rol_id", "id_vendedor_origen", "codalm"} & update_data.keys():
+        codalms_a_guardar = _SIN_CAMBIO
+        if {"rol_id", "id_vendedor_origen", "todos_los_almacenes"} & update_data.keys() or codalms_in is not None:
             id_vendedor_origen = update_data.get("id_vendedor_origen", db_user.id_vendedor_origen)
-            codalm = update_data.get("codalm", db_user.codalm)
-            update_data["id_vendedor_origen"], update_data["codalm"] = self._resolve_role_link(
-                role, id_vendedor_origen, codalm, bool(todos_los_almacenes)
+            codalms = codalms_in if codalms_in is not None else db_user.codalms
+            todos_los_almacenes = update_data.get("todos_los_almacenes", db_user.todos_los_almacenes)
+            update_data["id_vendedor_origen"], codalms_a_guardar = self._resolve_role_link(
+                role, id_vendedor_origen, codalms, bool(todos_los_almacenes)
             )
 
         if "password" in update_data:
             update_data["hashed_password"] = get_password_hash(update_data.pop("password"))
 
-        self.user_repo.update(db_user, **update_data)
+        extra = {} if codalms_a_guardar is _SIN_CAMBIO else {"codalms": codalms_a_guardar}
+        self.user_repo.update(db_user, **extra, **update_data)
         return self.user_repo.get_by_id(db_user.id)
 
     def change_password(self, db_user: User, current_password: str, new_password: str) -> User:
         if not verify_password(current_password, db_user.hashed_password):
             raise ValidationError("La contraseña actual es incorrecta.")
         return self.user_repo.update(db_user, hashed_password=get_password_hash(new_password))
+
+    def delete_permanente(self, db_user: User, current_user: User) -> None:
+        """Fase 5 §5.3 (docs/features/plan_correcciones_integrales_sistema.md): borrado
+        duro real, distinto de `deactivate` (baja lógica). Viable porque cada FK hacia
+        `public.usuarios` ya declara `ondelete` explícito (`SET NULL` en
+        `Goal.approved_by`/`GestionCartera`/`CommissionConfig`/etc., `CASCADE` en
+        `notificaciones`/`usuario_almacenes`) -- verificado contra los modelos, ningún
+        `RESTRICT` que bloquee el borrado."""
+        if db_user.id == current_user.id:
+            raise ValidationError("No puedes eliminar tu propia cuenta de administrador.")
+        if db_user.role.nombre == "administrador" and db_user.es_activo:
+            if self.user_repo.count_administradores_activos() <= 1:
+                raise ValidationError(
+                    "No se puede eliminar al último administrador activo del sistema."
+                )
+        self.user_repo.delete(db_user)
 
     def deactivate(self, db_user: User) -> User:
         if not db_user.es_activo:

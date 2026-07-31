@@ -33,6 +33,21 @@ class CatalogRepository:
             return None
         return {"codalm": str(row[0]), "nombre_almacen": row[1]}
 
+    def count_vendedores_activos(self) -> int:
+        """Fase 5 §5.5 (dashboard de Admin, métricas reales): total real desde el EDW,
+        excluye el centinela -1 (regla 12)."""
+        row = self.db.execute(text(
+            "SELECT COUNT(*) FROM edw.dim_vendedor WHERE vendedor_sk <> -1 AND activo"
+        )).fetchone()
+        return int(row[0]) if row else 0
+
+    def count_almacenes(self) -> int:
+        """Fase 5 §5.5: total real desde edw.dim_almacen, excluye el centinela -1."""
+        row = self.db.execute(text(
+            "SELECT COUNT(*) FROM edw.dim_almacen WHERE almacen_sk <> -1"
+        )).fetchone()
+        return int(row[0]) if row else 0
+
     def list_almacenes(self) -> list[dict[str, Any]]:
         """Catálogo de almacenes (codalm + nombre) para poblar el selector del
         formulario de creación de usuarios bodega en el panel Administrador."""
@@ -198,7 +213,9 @@ class CatalogRepository:
         """), {"codven": codven, "cliente_id": cliente_id}).fetchone()
         return row is not None
 
-    def search_clientes(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+    def search_clientes(
+        self, query: str, limit: int = 10, codven_restriccion: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Autocompletar cliente por cédula/RUC (`id_cliente_transaccional`) o nombre
         para el asistente de Venta Cruzada. El EDW (`edw.dim_cliente`) es la fuente
         oficial y ancla la consulta -- filtra vigencia SCD2 (`es_vigente`) y excluye el
@@ -209,6 +226,16 @@ class CatalogRepository:
         `hash_anonimo`, nunca texto plano, así que esos dos campos concretos deben salir
         de ahí; el join se hace sobre el EDW, no al revés.
 
+        `codven_restriccion` (RLS de cartera, mismo criterio que
+        `cliente_pertenece_a_vendedor`/`_verificar_pertenencia_cartera`): si el llamador
+        es un vendedor (rol `ventas`, sin override), el autocompletar solo debe ofrecer
+        clientes a los que ESE vendedor le haya vendido alguna vez -- antes esta función
+        buscaba en TODO el catálogo de clientes sin importar quién preguntara, así que
+        cualquier vendedor podía encontrar y luego consultar (vía los demás endpoints,
+        que sí validan pertenencia) el perfil/riesgo de churn/recomendaciones de un
+        cliente ajeno con solo teclear su nombre. Gerencia/administrador pasan `None` y
+        siguen viendo el catálogo completo.
+
         Enriquecida (Fase 1, docs/features/plan_refactor_venta_cruzada_ia.md CAMBIO 1):
         `ciudad` (`dim_cliente`, sin dimensión geográfica separada -- `dim_geografia`
         está vacía, hallazgo abierto de la auditoría 05), y `ultima_compra`/
@@ -218,14 +245,26 @@ class CatalogRepository:
         consulta barata apta para dispararse en cada tecla. Sin modelos ML: el
         autocompletar no puede esperar una inferencia."""
         like = f"%{query}%"
-        rows = self.db.execute(text(
+        params: dict[str, Any] = {"like": like, "limit": limit}
+        filtro_cartera = ""
+        if codven_restriccion is not None:
+            filtro_cartera = """
+                  AND EXISTS (
+                      SELECT 1 FROM edw.fact_ventas_detalle fv
+                      JOIN edw.dim_vendedor v ON fv.vendedor_sk = v.vendedor_sk
+                      WHERE fv.cliente_sk = c.cliente_sk AND v.codven = :codven_restriccion
+                  )
             """
+            params["codven_restriccion"] = codven_restriccion
+        rows = self.db.execute(text(
+            f"""
             WITH candidatos AS (
                 SELECT c.cliente_sk, l.id_cliente_transaccional, l.nombre_cliente, c.ciudad
                 FROM edw.dim_cliente c
                 JOIN public.cliente_lookup l ON l.hash_anonimo = c.hash_anonimo
                 WHERE c.es_vigente AND c.cliente_sk <> -1
                   AND (l.id_cliente_transaccional ILIKE :like OR l.nombre_cliente ILIKE :like)
+                  {filtro_cartera}
                 ORDER BY l.nombre_cliente
                 LIMIT :limit
             ),
@@ -251,7 +290,7 @@ class CatalogRepository:
             LEFT JOIN historial h ON h.cliente_sk = c.cliente_sk
             ORDER BY c.nombre_cliente
             """
-        ), {"like": like, "limit": limit}).fetchall()
+        ), params).fetchall()
         return [
             {
                 "cliente_id": str(r[0]), "nombre": r[1] or "", "ciudad": r[2],

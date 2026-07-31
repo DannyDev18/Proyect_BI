@@ -15,7 +15,7 @@ from app.schemas.analytics import (
     AnomaliaResponse, AnomaliaRevisionResponse, AnomaliaRevisionUpdate, AuditLogEntryResponse,
 )
 from app.schemas.pagination import Page, PaginationParams, pagination_params
-from app.schemas.system import SystemHealthResponse
+from app.schemas.system import AdminResumenResponse, SystemHealthResponse
 
 router = APIRouter()
 
@@ -82,6 +82,16 @@ def actualizar_anomalia_revision(
     return anomalia_revision_service.actualizar(
         revision_id, estado=payload.estado, revisor_id=current_user.id, nota=payload.nota,
     )
+
+
+@router.get(
+    "/resumen", response_model=AdminResumenResponse, dependencies=[Depends(admin_only)],
+)
+def get_admin_resumen(system_service: SystemServiceDep) -> AdminResumenResponse:
+    """Métricas reales del dashboard de Admin (Fase 5 §5.5, docs/features/
+    plan_correcciones_integrales_sistema.md): usuarios activos/inactivos, vendedores y
+    bodegas vigentes del EDW."""
+    return AdminResumenResponse(**system_service.get_admin_resumen())
 
 
 @router.get(

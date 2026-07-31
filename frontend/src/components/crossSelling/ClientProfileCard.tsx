@@ -23,20 +23,13 @@ const MetricSkeleton = () => (
 
 /** Fase 1 de docs/features/plan_refactor_venta_cruzada_ia.md (CAMBIO 1): perfil 360
  * del cliente seleccionado, con skeleton por sección y estado vacío real cuando el
- * cliente no tiene historial suficiente -- nunca ceros que se lean como "sin valor". */
-export const ClientProfileCard = ({ cliente }: { cliente: ClienteBusqueda | null }) => {
-  const perfil = usePerfilCliente(cliente?.cliente_id ?? null);
-
-  if (!cliente) {
-    return (
-      <div className="card p-6">
-        <EmptyState
-          title="Busca un cliente para empezar"
-          description="El perfil, el historial y las sugerencias de venta cruzada se personalizan según el cliente que elijas."
-        />
-      </div>
-    );
-  }
+ * cliente no tiene historial suficiente -- nunca ceros que se lean como "sin valor".
+ * No renderiza nada sin cliente (el padre, `VentasCrossSelling`, ya no monta este
+ * componente hasta que hay uno elegido) -- feedback de usuario 2026-07-28: mostrar aquí
+ * un segundo bloque "Busca un cliente para empezar" duplicaba el buscador que ya vive
+ * dentro de `SaleAssistant`, dando la impresión de dos puntos de búsqueda distintos. */
+export const ClientProfileCard = ({ cliente }: { cliente: ClienteBusqueda }) => {
+  const perfil = usePerfilCliente(cliente.cliente_id);
 
   if (perfil.loading) {
     return (

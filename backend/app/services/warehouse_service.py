@@ -97,11 +97,40 @@ _COLS_RESUMEN_CATEGORIA = [
     _columna("categoria", "Categoría"), _columna("productos", "Artículos", "numero"),
     _columna("valor", "Valor a comprar", "moneda"),
 ]
+# Fase 6.2 (H-9): "Artículos sin movimiento en ventas por almacén" -- un solo reporte
+# parametrizado por `solo_con_stock` (reemplaza QUERY_PRODUCTOS_SIN_VENTA/
+# QUERY_ARTICULOS_ESTANCADOS). Sin columna `Cliente` (§6.0 del plan, decisión del
+# usuario) -- FechaUltimaVenta/NumeroFactura sí se conservan, responden la pregunta de
+# negocio real sin exponer PII.
+_COLS_SIN_VENTA = [
+    _columna("codart", "Código"), _columna("nombre", "Producto"), _columna("categoria", "Categoría"),
+    _columna("almacen", "Almacén"), _columna("stock_actual", "Stock actual", "numero"),
+    _columna("valor_inmovilizado", "Valor inmovilizado", "moneda"),
+    _columna("dias_desde_ultima_venta", "Días desde última venta", "numero"),
+    _columna("fecha_ultima_venta", "Última venta", "fecha"), _columna("numero_factura", "Última factura"),
+]
+# Fase 6.7 (H-11): migración de QUERY_KARDEX_MOVIMIENTOS -- grano de movimiento
+# individual (no agregado). "Existencia global (kardex)" declara explícitamente su
+# fuente en la etiqueta: es una derivación (suma del kardex completo por producto en
+# TODOS los almacenes), no el `exiact` de Producción, que el EDW no almacena (H-11).
+_COLS_KARDEX = [
+    _columna("fecha", "Fecha", "fecha"), _columna("almacen", "Almacén"),
+    _columna("codart", "Código"), _columna("nombre", "Producto"), _columna("categoria", "Categoría"),
+    _columna("tipo_movimiento", "Tipo"), _columna("direccion", "Dirección", "badge"),
+    _columna("cantidad", "Cantidad", "numero"), _columna("numero_documento", "Documento"),
+    _columna("existencia_global", "Existencia global (kardex, todos los almacenes)", "numero"),
+]
 
 ESTADO_CRITICO = "Crítico"
 ESTADO_CERCA = "Cerca"
 ESTADO_SEGURO = "Seguro"
 ESTADO_EXCESO = "Exceso"
+# Fase 6.1 (H-2, RN-B11, docs/features/plan_correcciones_integrales_sistema.md): antes
+# un artículo con stock > 0 y CERO salidas caía en "Seguro" (peor caso posible de
+# sobre-stock, nunca detectado) porque `_dias_inventario` devuelve None sin salidas y la
+# rama de "Exceso" es matemáticamente inalcanzable con `dias_inv=None`. Estado nuevo,
+# distinto de "Exceso" (que sí rota, solo que muy lento).
+ESTADO_INMOVILIZADO = "Inmovilizado"
 
 
 class WarehouseService:
@@ -186,7 +215,16 @@ class WarehouseService:
         salida_diaria = self._salida_diaria(row["salidas_periodo"], dias_periodo)
         reorden = self._punto_reorden_efectivo(row.get("punto_reorden_config", 0), salida_diaria)
         dias_inv = self._dias_inventario(row["stock_actual"], salida_diaria)
-        estado = self._estado_stock(row["stock_actual"], reorden, dias_inv)
+        # Fase 6.1 (H-2): "Inmovilizado" se decide con una ventana más amplia
+        # (BODEGA_DIAS_VENTANA_INMOVILIZADO, default 90 días) que la de `salida_diaria`
+        # (30 días) -- evita marcar como estancado un artículo que solo tuvo un mes
+        # flojo. Tiene prioridad sobre el resto de estados: un artículo sin salidas en
+        # 90 días es el peor caso de sobre-stock posible, no debe caer en "Seguro".
+        sin_movimiento_prolongado = row.get("salidas_ventana_inmovilizado", row["salidas_periodo"]) <= 0
+        if row["stock_actual"] > 0 and sin_movimiento_prolongado:
+            estado = ESTADO_INMOVILIZADO
+        else:
+            estado = self._estado_stock(row["stock_actual"], reorden, dias_inv)
         dias_hasta_reorden = None
         if salida_diaria > 0 and row["stock_actual"] > reorden:
             dias_hasta_reorden = round((row["stock_actual"] - reorden) / salida_diaria, 1)
@@ -199,13 +237,24 @@ class WarehouseService:
             "dias_inventario": dias_inv,
             "estado": estado,
             "dias_hasta_reorden": dias_hasta_reorden,
+            # Caso "El Rey" (§6.1): "0 días de stock" con una salida diaria marginal no
+            # es la misma urgencia que un artículo de alta rotación -- se marca baja
+            # confianza en vez de fingir precisión que los datos no sostienen.
+            "dias_inventario_baja_confianza": (
+                dias_inv is not None and 0 < salida_diaria < settings.BODEGA_MIN_SALIDA_CONFIABLE
+            ),
         }
 
     # ── Filtros globales (§1.1) ──────────────────────────────────────────────
-    def get_filtros(self, analytics_repo_catalogos: dict[str, list[str]]) -> dict[str, Any]:
+    def get_filtros(
+        self, analytics_repo_catalogos: dict[str, list[str]], categoria: str | None = None,
+    ) -> dict[str, Any]:
+        """`categoria` (Fase 2, filtros "inteligentes"): si el usuario ya eligió una
+        categoría, `proveedores` se restringe a los que realmente la suministran --
+        evita ofrecer combinaciones inexistentes en el catálogo real."""
         return {
             **analytics_repo_catalogos,
-            "proveedores": self.repo.get_proveedores(),
+            "proveedores": self.repo.get_proveedores(categoria),
             "tipos_movimiento": TIPOS_MOVIMIENTO,
         }
 
@@ -758,7 +807,7 @@ class WarehouseService:
                 proveedor=proveedor, tipo_movimiento=tipo_movimiento,
             )
         ]
-        orden_estado = {ESTADO_CRITICO: 0, ESTADO_CERCA: 1, ESTADO_SEGURO: 2, ESTADO_EXCESO: 3}
+        orden_estado = {ESTADO_CRITICO: 0, ESTADO_CERCA: 1, ESTADO_SEGURO: 2, ESTADO_EXCESO: 3, ESTADO_INMOVILIZADO: 4}
         productos.sort(key=lambda p: (orden_estado.get(p["estado"], 9), p["dias_hasta_reorden"] or 1e9))
         if solo_criticos:
             productos = [p for p in productos if p["estado"] == ESTADO_CRITICO]
@@ -768,6 +817,8 @@ class WarehouseService:
                 "stock_actual": p["stock_actual"], "punto_reorden": p["punto_reorden"],
                 "salida_diaria": p["salida_diaria"], "dias_inventario": p["dias_inventario"],
                 "dias_hasta_reorden": p["dias_hasta_reorden"], "estado": p["estado"],
+                "dias_inventario_baja_confianza": p["dias_inventario_baja_confianza"],
+                "costo_unitario": p["costo_unitario"],
             }
             for p in productos
         ]
@@ -907,18 +958,25 @@ class WarehouseService:
                 "codart": f["codart"], "nombre": f["nombre"], "categoria": f["categoria"],
                 "stock_por_almacen": {}, "stock_total": 0.0,
                 "salidas_periodo": 0.0, "punto_reorden_config": 0.0,
+                "salidas_ventana_inmovilizado": 0.0,
             })
             item["stock_por_almacen"][f["almacen"]] = f["stock_actual"]
             item["stock_total"] += f["stock_actual"]
             item["salidas_periodo"] += f["salidas_periodo"]
             item["punto_reorden_config"] += f["punto_reorden_config"]
+            item["salidas_ventana_inmovilizado"] += f["salidas_ventana_inmovilizado"]
 
         productos = []
         for item in por_producto.values():
             salida_diaria = self._salida_diaria(item["salidas_periodo"])
             reorden = self._punto_reorden_efectivo(item["punto_reorden_config"], salida_diaria)
             dias_inv = self._dias_inventario(item["stock_total"], salida_diaria)
-            item_estado = self._estado_stock(item["stock_total"], reorden, dias_inv)
+            # Fase 6.1 (H-2): mismo criterio de `_enriquecer_producto` -- stock > 0 sin
+            # salidas en la ventana amplia es "Inmovilizado", no "Seguro".
+            if item["stock_total"] > 0 and item["salidas_ventana_inmovilizado"] <= 0:
+                item_estado = ESTADO_INMOVILIZADO
+            else:
+                item_estado = self._estado_stock(item["stock_total"], reorden, dias_inv)
             productos.append({
                 "codart": item["codart"], "nombre": item["nombre"], "categoria": item["categoria"],
                 "stock_por_almacen": item["stock_por_almacen"],
@@ -929,8 +987,10 @@ class WarehouseService:
             })
         if estado:
             productos = [p for p in productos if p["estado"] == estado]
-        productos.sort(key=lambda p: ({ESTADO_CRITICO: 0, ESTADO_CERCA: 1, ESTADO_EXCESO: 2, ESTADO_SEGURO: 3}
-                                      .get(p["estado"], 9), -p["stock_total"]))
+        productos.sort(key=lambda p: (
+            {ESTADO_CRITICO: 0, ESTADO_CERCA: 1, ESTADO_EXCESO: 2, ESTADO_INMOVILIZADO: 3, ESTADO_SEGURO: 4}
+            .get(p["estado"], 9), -p["stock_total"],
+        ))
         return {"almacenes": almacenes, "productos": productos}
 
     def get_inventario_matriz(
@@ -1021,6 +1081,46 @@ class WarehouseService:
         }
         return justificacion, confianza
 
+    def _motivo_transferencia(
+        self, origen: dict[str, Any], destino: dict[str, Any], cantidad: float, justificacion: dict[str, Any],
+    ) -> str:
+        """Fase 6.6 (§6.4 del plan): texto accionable con solo datos ya calculados en
+        `_justificacion_transferencia` -- días sin movimiento/cobertura en origen (con el
+        valor inmovilizado), demanda observada en destino y la acción concreta (cuántas
+        unidades y cuántos meses de demanda cubre). Reemplaza el motivo anterior, que solo
+        listaba "días de stock" y "uds/día" en ambos lados sin decir qué hacer con eso."""
+        valor_origen = round(origen["stock_actual"] * origen["costo_unitario"], 2)
+        if origen["salida_diaria"] > 0:
+            origen_txt = (
+                f"{origen['dias_inv']:.0f} días de stock en {origen['almacen']} "
+                f"({origen['stock_actual']:.0f} uds, ${valor_origen:,.0f})"
+            )
+        else:
+            origen_txt = (
+                f"Sin salidas en los últimos {self._VENTANA_JUSTIFICACION_DIAS} días en {origen['almacen']} "
+                f"({origen['stock_actual']:.0f} uds, ${valor_origen:,.0f} inmovilizados)"
+            )
+
+        demanda_media = justificacion["demanda_media_destino"]
+        meses_venta = justificacion["meses_con_venta_destino"]
+        cobertura_destino = destino["dias_inv"] or 0
+        demanda_mensual = round(demanda_media * 30, 1) if demanda_media else None
+        if demanda_mensual and meses_venta:
+            destino_txt = (
+                f"{destino['almacen']} vendió {demanda_mensual:.0f} uds/mes en los últimos {meses_venta} meses "
+                f"y tiene {cobertura_destino:.0f} días de cobertura"
+            )
+        else:
+            destino_txt = f"{destino['almacen']} tiene {cobertura_destino:.0f} días de cobertura"
+
+        if demanda_mensual:
+            meses_cobertura = round(cantidad / demanda_mensual, 1)
+            accion_txt = f"Transferir {cantidad:.0f} uds cubre {meses_cobertura} meses de su demanda."
+        else:
+            accion_txt = f"Transferir {cantidad:.0f} uds."
+
+        return f"{origen_txt}. {destino_txt}. {accion_txt}"
+
     # ── Panel §3.2 (RN-B3/RN-B9): transferencias inteligentes ────────────────
     def _transferencias_completo(
         self, sucursal: str | None = None, categoria: str | None = None,
@@ -1097,10 +1197,7 @@ class WarehouseService:
                         or justificacion["meses_con_venta_destino"] < settings.BODEGA_MIN_MESES_VENTA
                     ):
                         continue
-                    dias_origen_txt = (
-                        f"{origen['dias_inv']:.0f} días de stock" if origen["dias_inv"] is not None
-                        else "stock sin salidas registradas"
-                    )
+                    motivo = self._motivo_transferencia(origen, destino, cantidad, justificacion)
                     sugerencias.append({
                         "codart": codart,
                         "nombre": destino["nombre"],
@@ -1115,12 +1212,7 @@ class WarehouseService:
                         "dias_inv_destino_post": dias_dest_post,
                         "prioridad": prioridad,
                         "ahorro_estimado": round(cantidad * destino["costo_unitario"], 2),
-                        "motivo": (
-                            f"En {origen['almacen']} tiene {dias_origen_txt} "
-                            f"(salidas {origen['salida_diaria']:.1f} uds/día); en {destino['almacen']} "
-                            f"tiene {(destino['dias_inv'] or 0):.0f} días de stock "
-                            f"(salidas {destino['salida_diaria']:.1f} uds/día)."
-                        ),
+                        "motivo": motivo,
                         "justificacion": justificacion,
                         "confianza": confianza,
                         "beneficio_neto_estimado": justificacion["beneficio_neto_estimado"],
@@ -1356,6 +1448,139 @@ class WarehouseService:
             ],
         }
 
+    def get_reporte_sin_venta(
+        self, sucursal: str | None = None, almacen: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None,
+        fecha_desde: str | None = None, fecha_hasta: str | None = None,
+        solo_con_stock: bool = True, busqueda: str | None = None,
+    ) -> dict[str, Any]:
+        """Fase 6.2 (H-9, docs/features/plan_correcciones_integrales_sistema.md): un
+        solo reporte parametrizado ("estancados" = `solo_con_stock=True`, "sin venta"
+        completo = `False`) sobre el contrato ya existente `ReporteBodegaResponse`."""
+        desde, hasta, _, _ = self._defaults_rango(fecha_desde, fecha_hasta)
+        filas_repo = self.repo.get_articulos_sin_venta(
+            fecha_desde=desde, fecha_hasta=hasta, sucursal=sucursal, almacen=almacen,
+            categoria=categoria, proveedor=proveedor, solo_con_stock=solo_con_stock, busqueda=busqueda,
+        )
+        hoy = datetime.date.today()
+        filas = []
+        for f in filas_repo:
+            dias_desde_ultima = None
+            if f["fecha_ultima_venta"]:
+                dias_desde_ultima = (hoy - datetime.date.fromisoformat(f["fecha_ultima_venta"])).days
+            filas.append({
+                **f,
+                "valor_inmovilizado": round(f["stock_actual"] * f["costo_unitario"], 2),
+                "dias_desde_ultima_venta": dias_desde_ultima,
+            })
+
+        valor_total = sum(f["valor_inmovilizado"] for f in filas)
+        nunca_vendidos = sum(1 for f in filas if f["fecha_ultima_venta"] is None)
+        titulo = "Artículos estancados (con stock)" if solo_con_stock else "Artículos sin venta"
+        resumen_ejecutivo = [
+            _kpi("Artículos sin venta en el rango", f"{len(filas)} artículos"),
+            _kpi("Valor inmovilizado" if solo_con_stock else "Valor en riesgo", _moneda(valor_total)),
+            _kpi("Nunca vendidos (sin historial de venta)", f"{nunca_vendidos} artículos"),
+        ]
+        interpretacion = (
+            f"{len(filas)} artículos no registraron ninguna venta entre {desde} y {hasta}"
+            + (f", con {_moneda(valor_total)} en stock inmovilizado" if solo_con_stock else "")
+            + f". {nunca_vendidos} de ellos no tienen ninguna venta registrada en todo el histórico del EDW."
+        )
+        # Auditoría 43 (H43-1..H43-4): el stock/última venta de este reporte se derivan del
+        # kardex del EDW, que solo tiene datos desde `BODEGA_KARDEX_HISTORICO_DESDE` -- un
+        # artículo con historia real anterior a esa fecha puede mostrar un stock o una "nunca
+        # vendido" distintos de lo que reporta Producción. Se declara aquí en vez de divergir
+        # en silencio (docs/auditoria/43_correcciones_sesion_ventas_y_datos.md).
+        nota_cobertura_datos = (
+            f"El stock y la última venta de este reporte se calculan sumando el histórico de "
+            f"movimientos disponible en el EDW, que arranca el {settings.BODEGA_KARDEX_HISTORICO_DESDE}. "
+            f"Un artículo cuyo último movimiento real en el ERP sea anterior a esa fecha puede "
+            f"mostrar un stock distinto al de Producción, o aparecer como \"nunca vendido\" sin "
+            f"serlo."
+        )
+
+        return {
+            "tipo": "sin-venta",
+            "titulo": titulo,
+            "generado_en": datetime.datetime.now().isoformat(timespec="seconds"),
+            "nota_cobertura_datos": nota_cobertura_datos,
+            "filtros_aplicados": {
+                k: v for k, v in {
+                    "sucursal": sucursal, "almacen": almacen, "categoria": categoria, "proveedor": proveedor,
+                    "fecha_desde": desde, "fecha_hasta": hasta, "solo_con_stock": solo_con_stock, "busqueda": busqueda,
+                }.items() if v
+            },
+            "resumen_ejecutivo": resumen_ejecutivo,
+            "interpretacion": interpretacion,
+            "secciones": [
+                _seccion(
+                    titulo, _COLS_SIN_VENTA, filas,
+                    descripcion=(
+                        "Incluye solo artículos con existencia -- estancados, no agotados."
+                        if solo_con_stock else
+                        "Incluye artículos con stock cero o negativo (ya no están en la bodega)."
+                    ),
+                ),
+            ],
+        }
+
+    def get_reporte_kardex(
+        self, sucursal: str | None = None, almacen: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None,
+        tipo_movimiento: str | None = None, fecha_desde: str | None = None,
+        fecha_hasta: str | None = None, busqueda: str | None = None,
+    ) -> dict[str, Any]:
+        """Fase 6.7 (H-11, docs/features/plan_correcciones_integrales_sistema.md):
+        migración de `QUERY_KARDEX_MOVIMIENTOS` -- listado de movimientos individuales
+        de kardex (no un agregado), sobre el contrato ya existente
+        `ReporteBodegaResponse`. `direccion` deriva de `es_entrada`/`es_salida` (regla
+        3, corrige H-7 automáticamente frente a la query original de Producción, que
+        ignoraba los ajustes `AC`/`AD`)."""
+        desde, hasta, _, _ = self._defaults_rango(fecha_desde, fecha_hasta)
+        filas = self.repo.get_movimientos_kardex(
+            fecha_desde=desde, fecha_hasta=hasta, sucursal=sucursal, almacen=almacen,
+            categoria=categoria, proveedor=proveedor, tipo_movimiento=tipo_movimiento, busqueda=busqueda,
+        )
+        entradas = sum(f["cantidad"] for f in filas if f["direccion"] == "Entrada")
+        salidas = sum(f["cantidad"] for f in filas if f["direccion"] == "Salida")
+        resumen_ejecutivo = [
+            _kpi("Movimientos en el rango", f"{len(filas)}"),
+            _kpi("Unidades de entrada", f"{entradas:,.0f}", "positivo" if entradas > 0 else "neutral"),
+            _kpi("Unidades de salida", f"{salidas:,.0f}", "negativo" if salidas > 0 else "neutral"),
+        ]
+        interpretacion = (
+            f"{len(filas)} movimientos de kardex entre {desde} y {hasta} "
+            f"({entradas:,.0f} unidades de entrada, {salidas:,.0f} de salida). "
+            "La \"Existencia global\" es una derivación calculada sumando todo el kardex "
+            "histórico del artículo en todos los almacenes -- el EDW no almacena la "
+            "columna de existencia global que usa Producción (H-11)."
+        )
+
+        return {
+            "tipo": "kardex",
+            "titulo": "Movimientos de Kardex",
+            "generado_en": datetime.datetime.now().isoformat(timespec="seconds"),
+            "filtros_aplicados": {
+                k: v for k, v in {
+                    "sucursal": sucursal, "almacen": almacen, "categoria": categoria, "proveedor": proveedor,
+                    "tipo_movimiento": tipo_movimiento, "fecha_desde": desde, "fecha_hasta": hasta,
+                    "busqueda": busqueda,
+                }.items() if v
+            },
+            "resumen_ejecutivo": resumen_ejecutivo,
+            "interpretacion": interpretacion,
+            "secciones": [
+                _seccion(
+                    "Movimientos de Kardex", _COLS_KARDEX, filas,
+                    descripcion=(
+                        "Un movimiento por fila (grano de fact_movimientos_inventario). "
+                        "Máximo 1.000 filas más recientes del rango -- el Excel incluye todas."
+                    ),
+                ),
+            ],
+        }
+
     def get_reporte_analisis_mensual(
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
@@ -1369,10 +1594,22 @@ class WarehouseService:
         filtros_stock = dict(sucursal=sucursal, almacen=almacen, categoria=categoria,
                              proveedor=proveedor, tipo_movimiento=tipo_movimiento)
         kpis = self.get_kpis(**filtros_stock, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
-        stock = self._stock_reorden_filas(**filtros_stock)[:50]
+        # Fase 6.1 (H-2, RN-B11): el truncado a 50 se aplica DESPUÉS de separar por
+        # estado, no antes -- truncar primero (como hacía la versión anterior) sesga
+        # hacia "Crítico" (siempre el primero en `orden_estado`) y puede dejar el reporte
+        # de exceso vacío aunque existan artículos reales en exceso/inmovilizados más
+        # abajo en la lista completa (bug real encontrado al validar esta fase en vivo).
+        stock_completo = self._stock_reorden_filas(**filtros_stock)
         compra = self._necesidad_compra_completo(**filtros_stock)
-        criticos = [p for p in stock if p["estado"] == ESTADO_CRITICO]
-        exceso = [p for p in stock if p["estado"] == ESTADO_EXCESO]
+        criticos = [p for p in stock_completo if p["estado"] == ESTADO_CRITICO][:50]
+        # "Exceso de stock" ahora incluye Exceso ∪ Inmovilizado (el peor caso de
+        # sobre-stock -- cero salidas -- ya no queda invisible), ordenado por capital
+        # inmovilizado (stock × costo unitario) descendente, que es la pregunta de
+        # negocio real ("¿dónde está el dinero parado?").
+        exceso = sorted(
+            (p for p in stock_completo if p["estado"] in (ESTADO_EXCESO, ESTADO_INMOVILIZADO)),
+            key=lambda p: p["stock_actual"] * p["costo_unitario"], reverse=True,
+        )[:50]
 
         variacion_valor = kpis["valor_inventario"]["tendencia_pct"]
         resumen_ejecutivo = [
@@ -1398,7 +1635,8 @@ class WarehouseService:
         interpretacion = (
             f"El inventario cerró con {kpis['total_articulos']['skus_activos']} artículos activos por "
             f"{_moneda(kpis['valor_inventario']['valor_total'])}; {len(criticos)} productos están en estado "
-            f"crítico y {len(exceso)} tienen exceso de stock. El plan de compras sugiere invertir "
+            f"crítico y {len(exceso)} tienen exceso de stock o están inmovilizados (sin salidas en "
+            f"{settings.BODEGA_DIAS_VENTANA_INMOVILIZADO} días). El plan de compras sugiere invertir "
             f"{_moneda(compra['valor_total_compra'])} en el próximo horizonte."
         )
 
@@ -1411,7 +1649,10 @@ class WarehouseService:
             "interpretacion": interpretacion,
             "secciones": [
                 _seccion("Productos críticos", _COLS_STOCK, criticos, resaltar_key="estado"),
-                _seccion("Productos en exceso de stock", _COLS_STOCK, exceso, resaltar_key="estado"),
+                _seccion(
+                    "Productos en exceso de stock", _COLS_STOCK, exceso, resaltar_key="estado",
+                    descripcion="Exceso (rota lento) ∪ Inmovilizado (sin salidas), ordenados por capital inmovilizado.",
+                ),
                 _seccion(
                     "Plan de compras (recomendados)", _COLS_COMPRA, compra["recomendados"],
                     resaltar_key="prioridad",

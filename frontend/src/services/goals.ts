@@ -1,12 +1,17 @@
 import { api } from './http';
 import type { GoalPeriod, GoalProposal, GoalsAISummary, MetaSugeridaDesglose, VendorCommissionRow } from '../types/goals';
 
+const clean = (params: object) =>
+  Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
+
 export const getGoalPeriods = () =>
   api.get<GoalPeriod[]>('/api/v1/gerencia/goals/periods');
 
-export const getGoalsTracking = (anio: number, mes: number) =>
+/** `vendedor` opcional (Fase 3 §3.1): sin selección, vista agregada de todos los
+ * vendedores (comportamiento previo intacto). */
+export const getGoalsTracking = (anio: number, mes: number, vendedor?: string | null) =>
   api.get<{ reporte_cumplimiento: GoalProposal[] }>('/api/v1/gerencia/goals/tracking', {
-    params: { anio, mes },
+    params: clean({ anio, mes, vendedor }),
   });
 
 export const generateGoals = (anio: number, mes: number, pressure_factor: number) =>
@@ -25,9 +30,9 @@ export const getGoalsAISummary = () =>
 /** Comisiones (docs/modulo_metas.md): cumplimiento real (Venta Neta) y comisión
  * devengada por vendedor en el período -- cierra el hallazgo R-1 de
  * docs/auditoria/14_...md (antes solo se mostraba la meta configurada). */
-export const getCommissionTracking = (anio: number, mes: number) =>
+export const getCommissionTracking = (anio: number, mes: number, vendedor?: string | null) =>
   api.get<{ comisiones: VendorCommissionRow[] }>('/api/v1/gerencia/goals/commissions', {
-    params: { anio, mes },
+    params: clean({ anio, mes, vendedor }),
   });
 
 /** Desglose del motor estadístico IQR para el drawer de revisión de gerencia

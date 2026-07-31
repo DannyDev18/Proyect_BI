@@ -116,24 +116,36 @@ class AnalyticsService:
     def get_almacenes(self) -> list[str]:
         return self.repo.get_almacenes()
 
-    def get_warehouse_kpis(self, sucursal: str | None = None) -> dict[str, Any]:
+    def get_warehouse_kpis(self, almacenes_permitidos: list[str] | None = None) -> dict[str, Any]:
         """Caso de Uso 3 (Bodega): Alertas de Desabastecimiento -- implementación real
         contra `edw.fact_inventario_snapshot` (antes esta función devolvía datos
-        hardcodeados)."""
-        return self.repo.get_inventory_alerts(sucursal)
+        hardcodeados). `almacenes_permitidos` (docs/auditoria/42_...): RLS real del rol
+        `bodega` -- reemplaza el filtro por `sucursal`, ver docstring de
+        `AnalyticsRepository.get_inventory_alerts`."""
+        return self.repo.get_inventory_alerts(almacenes_permitidos)
 
     def get_sales_kpis(
         self, sucursal: str | None = None, anio: int | None = None, mes: int | None = None,
+        vendedor: str | None = None,
     ) -> dict[str, Any]:
         """Caso de Uso 4 (Ventas): Cumplimiento de metas de vendedor -- implementación
         real combinando `edw.fact_ventas_detalle` y `public.metas_comerciales_operativas`.
         Por defecto el período vigente (antes esta función devolvía datos hardcodeados);
         `anio`/`mes` explícitos permiten consultar un período anterior (docs/auditoria/
-        34_actualizacion_modulo_ventas.md, H-V3 -- antes el vendedor no podía ver meses
-        cerrados, solo el período vigente)."""
+        34_actualizacion_modulo_ventas.md, H-V3). `vendedor` (auditoría A-0.3, decisión
+        B-3): RLS real del rol `ventas`, reemplaza `sucursal` -- ver docstring de
+        `AnalyticsRepository.get_sales_performance`."""
         if anio is None or mes is None:
             anio, mes = self.repo.get_latest_period()
-        return self.repo.get_sales_performance(anio, mes, sucursal)
+        return self.repo.get_sales_performance(anio, mes, sucursal, vendedor)
+
+    def get_evolucion_mensual_vendedor(self, codven: str, meses: int = 6) -> list[dict[str, Any]]:
+        """Auditoría 43, Fase 5 (dashboard "Mi Negocio" del vendedor)."""
+        return self.repo.get_evolucion_mensual_vendedor(codven, meses)
+
+    def get_top_productos_vendedor(self, codven: str, meses: int = 3, limit: int = 5) -> list[dict[str, Any]]:
+        """Auditoría 43, Fase 5."""
+        return self.repo.get_top_productos_vendedor(codven, meses, limit)
 
     def get_dashboard_report(
         self, kpis: dict[str, Any], revenue_by_category: list[dict[str, Any]],

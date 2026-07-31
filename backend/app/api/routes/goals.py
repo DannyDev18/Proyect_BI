@@ -8,16 +8,18 @@ from app.api.dependencies import (
     GoalMLServiceDep, GoalsServiceDep, resolve_sucursal_filter,
 )
 from app.core.deps import CurrentUserDep, PermissionChecker
+from app.core.exceptions import ValidationError
 from app.schemas.commission import (
     CommissionTrackingResponse, CumplimientoMetaPeriodoResponse, VendorCommissionRowResponse,
 )
 from app.schemas.commission_config import (
     ClaseBusqueda, ComisionConfigAuditoriaListResponse, ComisionConfigAuditoriaResponse,
     ConfigVendedorPayload, ConfigVendedoresResponse, ConfigVendedorResponse, FactorCreditoResponse,
-    FactoresCreditoPayload, FactoresCreditoResponse, LineasSinCostoResponse, LineaSinCostoResponse,
-    MatrizCategoriaPayload, MatrizCategoriaResponse, MatrizCategoriasResponse, PerfilCategoriaResponse,
-    PerfilCategoriasResponse, ProyeccionComisionRequest, ProyeccionComisionResponse, ProyeccionVendedorResponse,
-    VendedorBusqueda,
+    FactoresCreditoPayload, FactoresCreditoResponse, FormulaComponentesPayload, FormulaResponse, FormulasResponse,
+    LineasSinCostoResponse, LineaSinCostoResponse, MatrizCategoriaPayload, MatrizCategoriaResponse,
+    MatrizCategoriasResponse, PerfilCategoriaResponse, PerfilCategoriasResponse, ProyeccionComisionRequest,
+    ProyeccionComisionResponse, ProyeccionVendedorResponse, TodosTramosCobranzaResponse, TramoCobranzaResponse,
+    TramosCobranzaPayload, VendedorBusqueda,
 )
 from app.schemas.analytics import MetaSugeridaResponse
 from app.schemas.goal import (
@@ -35,8 +37,10 @@ sucursal_gerencia = resolve_sucursal_filter(allow_override=True)
     "/tracking", response_model=GoalTrackingResponse, summary="Obtiene metas y seguimiento del periodo",
     dependencies=[Depends(only_management)],
 )
-def get_goals_tracking(anio: int, mes: int, goals_service: GoalsServiceDep) -> GoalTrackingResponse:
-    reporte = goals_service.get_commission_tracking(anio=anio, mes=mes)
+def get_goals_tracking(
+    anio: int, mes: int, goals_service: GoalsServiceDep, vendedor: str | None = None,
+) -> GoalTrackingResponse:
+    reporte = goals_service.get_commission_tracking(anio=anio, mes=mes, vendedor=vendedor)
     return GoalTrackingResponse(reporte_cumplimiento=reporte)
 
 
@@ -110,11 +114,16 @@ def get_goals_ai_summary(
     "/commissions", response_model=CommissionTrackingResponse, dependencies=[Depends(only_management)],
     summary="Cumplimiento real (Venta Neta) y comisión devengada por vendedor en el período",
 )
-def get_commissions(anio: int, mes: int, commission_service: CommissionServiceDep) -> CommissionTrackingResponse:
+def get_commissions(
+    anio: int, mes: int, commission_service: CommissionServiceDep, vendedor: str | None = None,
+) -> CommissionTrackingResponse:
     """Cierra el hallazgo R-1 (`docs/auditoria/14_...md`): `/tracking` solo muestra la
     meta configurada; este endpoint agrega la venta real del período y el tramo de
-    comisión resultante (`commission_engine.calcular_comision`)."""
-    filas = commission_service.get_commission_tracking(anio=anio, mes=mes)
+    comisión resultante (`commission_engine.calcular_comision`). Fase 3 §3.1
+    (`docs/features/plan_correcciones_integrales_sistema.md`): `vendedor` opcional --
+    sin selección devuelve la vista agregada de todos los vendedores (comportamiento
+    previo, intacto); con selección, progreso individual de un solo vendedor."""
+    filas = commission_service.get_commission_tracking(anio=anio, mes=mes, vendedor=vendedor)
     return CommissionTrackingResponse(comisiones=[VendorCommissionRowResponse(**f.__dict__) for f in filas])
 
 
@@ -233,9 +242,64 @@ def upsert_config_vendedor(
 ) -> ConfigVendedorResponse:
     v = commission_config_service.upsert_config_vendedor(
         vendedor_origen=vendedor_origen, tipo=payload.tipo, factor_tipo=payload.factor_tipo,
-        fecha_ingreso=payload.fecha_ingreso, usuario_id=current_user.id,
+        fecha_ingreso=payload.fecha_ingreso, usuario_id=current_user.id, agencia=payload.agencia,
     )
     return ConfigVendedorResponse(**v)
+
+
+# ── Comisión sobre COBROS (auditoría 44, docs/features/plan_comisiones_sobre_cobros.md) ──
+@router.get(
+    "/commission-config/tramos-cobranza", response_model=TodosTramosCobranzaResponse,
+    dependencies=[Depends(only_management)],
+    summary="Tramos de comisión sobre cobros por perfil (externo/interno/jefe de agencia)",
+)
+def get_tramos_cobranza(commission_config_service: CommissionConfigServiceDep) -> TodosTramosCobranzaResponse:
+    por_perfil = commission_config_service.get_todos_tramos_cobranza()
+    return TodosTramosCobranzaResponse(
+        externo=[TramoCobranzaResponse(**t) for t in por_perfil["externo"]],
+        interno=[TramoCobranzaResponse(**t) for t in por_perfil["interno"]],
+        jefe_agencia=[TramoCobranzaResponse(**t) for t in por_perfil["jefe_agencia"]],
+    )
+
+
+@router.put(
+    "/commission-config/tramos-cobranza", response_model=list[TramoCobranzaResponse],
+    dependencies=[Depends(only_management)],
+    summary="Reemplaza los tramos de comisión sobre cobros de UN perfil",
+)
+def put_tramos_cobranza(
+    payload: TramosCobranzaPayload, commission_config_service: CommissionConfigServiceDep, current_user: CurrentUserDep,
+) -> list[TramoCobranzaResponse]:
+    nuevos = commission_config_service.replace_tramos_cobranza(
+        perfil=payload.perfil, tramos=[t.model_dump() for t in payload.tramos], usuario_id=current_user.id,
+    )
+    return [TramoCobranzaResponse(**t) for t in nuevos]
+
+
+@router.get(
+    "/commission-config/formula", response_model=FormulasResponse, dependencies=[Depends(only_management)],
+    summary="Fórmulas de comisión variable (estructura editable) + catálogo de componentes válidos",
+)
+def get_formulas(commission_config_service: CommissionConfigServiceDep) -> FormulasResponse:
+    return FormulasResponse(**commission_config_service.get_formulas())
+
+
+@router.put(
+    "/commission-config/formula/{formula_id}/componentes", response_model=FormulaResponse,
+    dependencies=[Depends(only_management)],
+    summary="Reemplaza la tubería de componentes de una fórmula",
+)
+def put_formula_componentes(
+    formula_id: int, payload: FormulaComponentesPayload, commission_config_service: CommissionConfigServiceDep,
+    current_user: CurrentUserDep,
+) -> FormulaResponse:
+    componentes = commission_config_service.reemplazar_componentes_formula(
+        formula_id=formula_id, componentes=[c.model_dump() for c in payload.componentes], usuario_id=current_user.id,
+    )
+    formulas = commission_config_service.get_formulas()["formulas"]
+    formula = next(f for f in formulas if f["id"] == formula_id)
+    return FormulaResponse(**{**formula, "componentes": componentes})
+
 
 
 @router.get(
@@ -277,17 +341,29 @@ def get_commission_config_auditoria(
 
 @router.post(
     "/commission-simulation", response_model=ProyeccionComisionResponse, dependencies=[Depends(only_management)],
-    summary="Proyección de comisión variable del próximo mes, con base en 3 o 6 meses de historial reciente",
+    summary="Proyección de comisión variable del próximo mes (3/6 meses de historial) o "
+             "reconstrucción real de un mes específico ya cerrado",
 )
 def post_commission_simulation(
     payload: ProyeccionComisionRequest, commission_simulation_service: CommissionSimulationServiceDep,
 ) -> ProyeccionComisionResponse:
     """Exclusivamente esquema variable (sin comparar contra el plano) -- ver
-    `CommissionSimulationService.proyectar_comision_variable` para el porqué de cada
-    decisión de diseño. La comparación retroactiva plano vs. variable (`simular()`)
-    sigue existiendo internamente para la alerta de divergencia del piloto en sombra,
-    pero ya no se expone por este endpoint."""
-    r = commission_simulation_service.proyectar_comision_variable(payload.meses_historico)
+    `CommissionSimulationService.proyectar_comision_variable`/`reconstruir_mes_especifico`
+    para el porqué de cada decisión de diseño. La comparación retroactiva plano vs.
+    variable (`simular()`) sigue existiendo internamente para la alerta de divergencia
+    del piloto en sombra, pero ya no se expone por este endpoint.
+
+    `anio`+`mes`: reconstruye lo que se hubiera pagado ESE mes específico con la
+    configuración vigente hoy (meta/bonos/devoluciones reales de ese período).
+    `meses_historico` (default 3 si no se especifica nada): proyecta el próximo mes
+    calendario promediando los últimos 3 o 6 meses cerrados. Son mutuamente
+    excluyentes -- pasar `anio`/`mes` tiene prioridad si por error llegan ambos."""
+    if (payload.anio is None) != (payload.mes is None):
+        raise ValidationError("Para reconstruir un mes específico se requieren `anio` y `mes` juntos.")
+    if payload.anio is not None and payload.mes is not None:
+        r = commission_simulation_service.reconstruir_mes_especifico(payload.anio, payload.mes)
+    else:
+        r = commission_simulation_service.proyectar_comision_variable(payload.meses_historico or 3)
     return ProyeccionComisionResponse(
         meses_historico=r.meses_historico, periodo_proyectado=r.periodo_proyectado,
         vendedores_proyectados=r.vendedores_proyectados,

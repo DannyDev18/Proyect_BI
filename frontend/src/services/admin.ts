@@ -1,6 +1,7 @@
 import { api } from './http';
 import type {
-  AnomaliaEstado, AnomaliaResponse, AnomaliaRevision, AuditLogEntry, AuditLogFilters, ModelStatus, SystemHealth,
+  AdminResumen, AnomaliaEstado, AnomaliaResponse, AnomaliaRevision, AuditLogEntry, AuditLogFilters, ModelStatus,
+  SystemHealth,
 } from '../types/admin';
 import type { Page, PaginationQuery } from '../types/pagination';
 
@@ -25,6 +26,9 @@ export const getModelsStatus = () =>
 
 export const getSystemHealth = () =>
   api.get<SystemHealth>('/api/v1/analytics/admin/system-health');
+
+export const getAdminResumen = () =>
+  api.get<AdminResumen>('/api/v1/analytics/admin/resumen');
 
 export const getAuditLogs = (pagination: PaginationQuery, filters: AuditLogFilters = {}) =>
   api.get<Page<AuditLogEntry>>('/api/v1/analytics/admin/audit-logs', {

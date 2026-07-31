@@ -35,7 +35,7 @@ export const VentasCrossSelling = () => {
 
       <SaleAssistant clienteId={cliente?.cliente_id ?? null} />
 
-      <ClientProfileCard cliente={cliente} />
+      {cliente && <ClientProfileCard cliente={cliente} />}
 
       <div>
         <h3 className="font-sans font-semibold text-slate-200 mb-4">Combos inteligentes</h3>

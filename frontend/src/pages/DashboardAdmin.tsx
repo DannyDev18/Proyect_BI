@@ -1,16 +1,18 @@
 import { useState } from 'react';
-import { Activity, AlertTriangle, Cpu, Database, FileText, ShieldAlert } from 'lucide-react';
+import { Activity, AlertTriangle, Cpu, Database, FileText, ShieldAlert, ShieldCheck, ShieldX, Store, Users } from 'lucide-react';
 import {
-  useActualizarAnomaliaRevision, useAnomaliaRevisiones, useAnomalyDetector, useAuditLogs, useModelsStatus,
-  useSystemHealth,
+  useActualizarAnomaliaRevision, useAdminResumen, useAnomaliaRevisiones, useAnomalyDetector, useAuditLogs,
+  useModelsStatus, useSystemHealth,
 } from '../hooks/admin';
 import { usePagination } from '../hooks/usePagination';
 import { Badge } from '../components/ui/Badge';
 import { SearchInput } from '../components/ui/SearchInput';
 import { ChartCard } from '../components/ui/ChartCard';
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
+import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { Pagination } from '../components/ui/Pagination';
 import { Select } from '../components/ui/Select';
+import { DateField } from '../components/ui/DateField';
 import type { AnomaliaEstado, AnomaliaRevision } from '../types/admin';
 
 const levelColor = {
@@ -47,6 +49,7 @@ export const DashboardAdmin = () => {
   const anomaly = useAnomalyDetector();
   const models = useModelsStatus();
   const health = useSystemHealth();
+  const resumen = useAdminResumen();
   const [txId, setTxId] = useState('');
 
   // Fase 2 Admin (docs/features/plan_correcciones_pendientes.md §3): triage de
@@ -121,6 +124,24 @@ export const DashboardAdmin = () => {
           <p className="text-sm text-slate-500 mt-0.5">Logs de auditoría · Estado MLOps · Detección de anomalías</p>
         </div>
         <Badge variant="success" dot>Sistema operativo</Badge>
+      </div>
+
+      {/* Métricas reales (Fase 5 §5.5, docs/features/plan_correcciones_integrales_sistema.md) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 stagger-children">
+        {resumen.loading ? (
+          <><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /><KpiCardSkeleton /></>
+        ) : resumen.error ? (
+          <div className="col-span-full card">
+            <p className="text-sm text-danger p-4">{resumen.error}</p>
+          </div>
+        ) : (
+          <>
+            <KpiCard title="Usuarios activos" value={resumen.data?.usuarios_activos ?? '—'} icon={ShieldCheck} trend="neutral" />
+            <KpiCard title="Usuarios inactivos" value={resumen.data?.usuarios_inactivos ?? '—'} icon={ShieldX} trend="neutral" />
+            <KpiCard title="Vendedores activos" value={resumen.data?.total_vendedores_activos ?? '—'} icon={Users} trend="neutral" />
+            <KpiCard title="Bodegas" value={resumen.data?.total_almacenes ?? '—'} icon={Store} trend="neutral" />
+          </>
+        )}
       </div>
 
       {/* Main 2-column grid */}
@@ -315,20 +336,22 @@ export const DashboardAdmin = () => {
         <div className="card p-3 mb-3 grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="space-y-1">
             <label htmlFor="audit-desde" className="text-[11px] font-semibold uppercase text-slate-500">Desde</label>
-            <input
-              id="audit-desde" type="date"
+            <DateField
+              id="audit-desde"
               value={auditFilters.fecha_desde}
               onChange={(e) => setAuditFilters({ ...auditFilters, fecha_desde: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-2 py-1.5 text-xs text-slate-200 outline-none focus-ring"
+              className="w-full"
+              size="sm"
             />
           </div>
           <div className="space-y-1">
             <label htmlFor="audit-hasta" className="text-[11px] font-semibold uppercase text-slate-500">Hasta</label>
-            <input
-              id="audit-hasta" type="date"
+            <DateField
+              id="audit-hasta"
               value={auditFilters.fecha_hasta}
               onChange={(e) => setAuditFilters({ ...auditFilters, fecha_hasta: e.target.value })}
-              className="w-full bg-slate-950 border border-slate-700/50 rounded-lg px-2 py-1.5 text-xs text-slate-200 outline-none focus-ring"
+              className="w-full"
+              size="sm"
             />
           </div>
           <div className="space-y-1">

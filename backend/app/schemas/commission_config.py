@@ -39,7 +39,6 @@ class FactorCreditoResponse(BaseModel):
     dias_desde: int
     dias_hasta: Optional[int] = None
     factor: float
-    pct_al_facturar: float
     vigente_desde: datetime.date
     vigente_hasta: Optional[datetime.date] = None
 
@@ -47,8 +46,7 @@ class FactorCreditoResponse(BaseModel):
 class FactorCreditoPayload(BaseModel):
     dias_desde: int = Field(..., ge=0)
     dias_hasta: Optional[int] = Field(None, ge=0)
-    factor: float = Field(..., ge=0.0, le=1.5)
-    pct_al_facturar: float = Field(100.0, ge=0.0, le=100.0)
+    factor: float = Field(..., ge=0.0, le=2.0)
 
 
 class FactoresCreditoPayload(BaseModel):
@@ -60,6 +58,8 @@ class FactoresCreditoResponse(BaseModel):
 
 
 # ── Configuración por vendedor ──────────────────────────────────────────────────
+# 'jefe_agencia' (auditoría 44): tercer perfil real de la empresa, con tramos de
+# cobranza propios y el componente 'contado_agencia' (requiere `agencia`).
 class ConfigVendedorResponse(BaseModel):
     id_vendedor_origen: str
     nombre_vendedor: Optional[str] = None
@@ -67,16 +67,87 @@ class ConfigVendedorResponse(BaseModel):
     factor_tipo: float
     fecha_ingreso: Optional[datetime.date] = None
     activo: bool
+    agencia: Optional[str] = None
 
 
 class ConfigVendedorPayload(BaseModel):
-    tipo: str = Field(..., pattern="^(externo|interno)$")
+    tipo: str = Field(..., pattern="^(externo|interno|jefe_agencia)$")
     factor_tipo: float = Field(..., ge=0.0, le=1.5)
     fecha_ingreso: Optional[datetime.date] = None
+    agencia: Optional[str] = Field(None, max_length=3, description="Solo aplica a 'jefe_agencia' (establ de su agencia).")
 
 
 class ConfigVendedoresResponse(BaseModel):
     vendedores: List[ConfigVendedorResponse]
+
+
+# ── Tramos de comisión sobre COBROS (auditoría 44 §2.1) ─────────────────────────
+class TramoCobranzaResponse(BaseModel):
+    id: int
+    perfil: str
+    dias_hasta: Optional[int] = None
+    tasa_pct: float
+    vigente_desde: datetime.date
+    vigente_hasta: Optional[datetime.date] = None
+
+
+class TramoCobranzaPayload(BaseModel):
+    dias_hasta: Optional[int] = Field(None, ge=0, description="Techo del tramo en días de cobro. None = sin tope.")
+    tasa_pct: float = Field(..., ge=0.0, le=100.0)
+
+
+class TramosCobranzaPayload(BaseModel):
+    perfil: str = Field(..., pattern="^(externo|interno|jefe_agencia)$")
+    tramos: List[TramoCobranzaPayload]
+
+
+class TramosCobranzaResponse(BaseModel):
+    perfil: str
+    tramos: List[TramoCobranzaResponse]
+
+
+class TodosTramosCobranzaResponse(BaseModel):
+    """Los 3 perfiles a la vez -- vista completa del panel de configuración."""
+    externo: List[TramoCobranzaResponse]
+    interno: List[TramoCobranzaResponse]
+    jefe_agencia: List[TramoCobranzaResponse]
+
+
+# ── Fórmula de comisión (auditoría 44 §2.2: estructura editable, no quemada) ────
+class FormulaComponenteResponse(BaseModel):
+    id: int
+    orden: int
+    componente: str
+    operador: str
+    activo: bool
+    parametros: dict
+
+
+class FormulaResponse(BaseModel):
+    id: int
+    clave: str
+    nombre: str
+    activa: bool
+    componentes: List[FormulaComponenteResponse]
+
+
+class FormulasResponse(BaseModel):
+    formulas: List[FormulaResponse]
+    catalogo_componentes: List[str] = Field(
+        ..., description="Claves de componente válidas -- el editor del frontend solo permite elegir de esta lista.",
+    )
+
+
+class FormulaComponentePayload(BaseModel):
+    orden: int = Field(..., ge=1)
+    componente: str
+    operador: str = Field(..., pattern="^(sumar|restar|multiplicar)$")
+    activo: bool = True
+    parametros: dict = Field(default_factory=dict)
+
+
+class FormulaComponentesPayload(BaseModel):
+    componentes: List[FormulaComponentePayload]
 
 
 # ── Búsqueda inteligente (autocomplete) ─────────────────────────────────────────
@@ -95,7 +166,14 @@ class ClaseBusqueda(BaseModel):
 # variable del próximo mes calendario -- exclusivamente esquema variable, sin comparar
 # contra el plano (ver commission_simulation_service.py::proyectar_comision_variable).
 class ProyeccionComisionRequest(BaseModel):
-    meses_historico: int = Field(3, description="Ventana de historial a usar como base: 3 o 6 meses.")
+    """Dos modos mutuamente excluyentes: `meses_historico` proyecta el PRÓXIMO mes
+    calendario promediando 3 o 6 meses ya cerrados (cumplimiento neutro, sin meta
+    todavía); `anio`+`mes` reconstruye la comisión REAL que se hubiera pagado en ESE
+    mes específico ya cerrado, con la configuración de comisión variable vigente hoy
+    y la meta/bonos/devoluciones reales de ese período."""
+    meses_historico: Optional[int] = Field(None, description="Ventana de historial para proyectar el próximo mes: 3 o 6. No usar junto con anio/mes.")
+    anio: Optional[int] = Field(None, description="Año del mes específico a reconstruir. Requiere `mes`.")
+    mes: Optional[int] = Field(None, ge=1, le=12, description="Mes específico a reconstruir (1-12). Requiere `anio`.")
 
 
 class ProyeccionVendedorResponse(BaseModel):

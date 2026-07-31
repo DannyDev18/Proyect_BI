@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { TrendingUp, Trophy, Info } from "lucide-react";
 
 import { usePeriods, useGoalsTracking, useGenerateGoals, useReviewGoal, useMetaSugeridaGerencia } from "../../hooks/goals";
+import { useVendedores } from "../../hooks/gerencia";
 import type { GoalPeriodOption, GoalProposal } from "../../types/goals";
 import { Select } from "../ui/Select";
 import { Button } from "../ui/Button";
@@ -20,9 +21,11 @@ export function GoalsConsole() {
   const [pressure, setPressure] = useState<number>(10);
   const [period, setPeriod] = useState({ anio: new Date().getFullYear(), mes: new Date().getMonth() + 1 });
   const [hasInitializedPeriod, setHasInitializedPeriod] = useState(false);
+  const [vendedorFiltro, setVendedorFiltro] = useState<string>('');
   const [detalleVendedor, setDetalleVendedor] = useState<GoalProposal | null>(null);
   const toast = useToast();
   const desglose = useMetaSugeridaGerencia(detalleVendedor?.vendedor_origen ?? null);
+  const { data: vendedoresLista } = useVendedores();
 
   const periods = usePeriods();
   const months = useMemo<GoalPeriodOption[]>(() => periods.data.map((d) => {
@@ -42,7 +45,7 @@ export function GoalsConsole() {
     }
   }, [months, hasInitializedPeriod]);
 
-  const tracking = useGoalsTracking(period.anio, period.mes);
+  const tracking = useGoalsTracking(period.anio, period.mes, vendedorFiltro || null);
   const [proposals, setProposals] = useState<GoalProposal[]>([]);
   useEffect(() => {
     setProposals(tracking.data);
@@ -210,6 +213,24 @@ export function GoalsConsole() {
           >
             {months.map((m, idx) => (
               <option key={idx} value={`${m.anio}-${m.mes}`}>{m.label}</option>
+            ))}
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-semibold text-slate-400" htmlFor="goals-console-vendedor">
+            Vendedor
+          </label>
+          <Select
+            id="goals-console-vendedor"
+            value={vendedorFiltro}
+            onChange={(e) => setVendedorFiltro(e.target.value)}
+            disabled={loading}
+            className="min-w-[180px]"
+          >
+            <option value="">Todos los vendedores</option>
+            {vendedoresLista?.map((v) => (
+              <option key={v} value={v}>{v}</option>
             ))}
           </Select>
         </div>

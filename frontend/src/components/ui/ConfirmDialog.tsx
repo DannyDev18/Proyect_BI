@@ -11,12 +11,17 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
   loading?: boolean;
+  /** Deshabilita el botón de confirmación (ej. hasta que el usuario escriba el email
+   * exacto en un borrado permanente, Fase 5 §5.3) sin bloquear el resto del modal. */
+  confirmDisabled?: boolean;
 }
 
 /** Modal centrado de confirmación para acciones destructivas (P2/§5.3) — reemplaza
  * `window.confirm`. Mismo focus trap/Esc/clic-fuera que `Drawer.tsx`. El botón de
  * confirmación lleva el verbo exacto de la acción, nunca "Confirmar" genérico. */
-export const ConfirmDialog = ({ open, title, message, confirmLabel, onConfirm, onCancel, loading = false }: ConfirmDialogProps) => {
+export const ConfirmDialog = ({
+  open, title, message, confirmLabel, onConfirm, onCancel, loading = false, confirmDisabled = false,
+}: ConfirmDialogProps) => {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -76,7 +81,7 @@ export const ConfirmDialog = ({ open, title, message, confirmLabel, onConfirm, o
         <div className="text-sm text-slate-400 mb-6">{message}</div>
         <div className="flex justify-end gap-3">
           <Button variant="ghost" onClick={onCancel}>Cancelar</Button>
-          <Button variant="danger" loading={loading} onClick={onConfirm}>{confirmLabel}</Button>
+          <Button variant="danger" loading={loading} disabled={confirmDisabled} onClick={onConfirm}>{confirmLabel}</Button>
         </div>
       </div>
     </div>,

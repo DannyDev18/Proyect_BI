@@ -12,6 +12,10 @@ interface CrossSellStore {
   canasta: CanastaItem[];
   agregarACanasta: (item: CanastaItem) => void;
   quitarDeCanasta: (codart: string) => void;
+  /** Auditoría 43 (H43-9): invocado desde el cierre de sesión -- sin `persist`, el
+   * cliente (PII) igual sobrevivía en memoria entre logins porque el store nunca se
+   * recrea con una navegación SPA. */
+  reset: () => void;
 }
 
 /** Fase 1 de docs/features/plan_refactor_venta_cruzada_ia.md (CAMBIO 1): el cliente
@@ -27,4 +31,5 @@ export const useCrossSellStore = create<CrossSellStore>((set) => ({
   canasta: [],
   agregarACanasta: (item) => set((s) => (s.canasta.some((c) => c.codart === item.codart) ? s : { canasta: [...s.canasta, item] })),
   quitarDeCanasta: (codart) => set((s) => ({ canasta: s.canasta.filter((c) => c.codart !== codart) })),
+  reset: () => set({ cliente: null, canasta: [] }),
 }));

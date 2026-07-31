@@ -116,12 +116,59 @@ CREATE TABLE edw.Fact_Cobros_CXC (
     formapago_sk        INT NOT NULL REFERENCES edw.Dim_FormaPago(formapago_sk),
     num_transaccion     VARCHAR(20) NOT NULL,
     valor_cobrado       NUMERIC(15,4) NOT NULL,
-    saldo_documento     NUMERIC(15,4) NOT NULL,
+    -- Auditoría 41 (H3): NULL real en SAP (cuentasporcobrar.saldodoc, 55.5% de los documentos)
+    -- significa "saldo desconocido", no "documento pagado" -- antes se coaccionaba a 0.0 con
+    -- fillna(0), indistinguible de un cierre real. Nullable a propósito.
+    saldo_documento     NUMERIC(15,4),
     dias_vencimiento    INTEGER NOT NULL,
     esta_vencido        BOOLEAN DEFAULT FALSE,
     fecha_carga         TIMESTAMP DEFAULT NOW()
 );
 COMMENT ON TABLE edw.Fact_Cobros_CXC IS 'Seguimiento de cobros y cuentas por cobrar de la cartera.';
+
+-- ── 5b. FACT_COBROS_CUOTAS ──
+-- Cobranza al grano real de negocio: un cobro, de una cuota de una factura, con un
+-- instrumento de pago. Fuente de la COMISIÓN SOBRE COBROS
+-- (docs/auditoria/44_comisiones_sobre_cobros.md, docs/features/plan_comisiones_sobre_cobros.md).
+--
+-- Convive con Fact_Cobros_CXC sin reemplazarla: aquélla la consumen analytics/Cartera 360 y
+-- su semántica mixta (mezcla facturas emitidas con cobros, H-4) queda documentada pero NO
+-- corregida aquí -- cambiarla rompería consumidores actuales.
+CREATE TABLE edw.Fact_Cobros_Cuotas (
+    cobro_cuota_sk      BIGSERIAL PRIMARY KEY,
+    -- fecha_sk = banfec (EFECTIVIZACIÓN). Es la fecha que devenga la comisión: para cheques
+    -- postfechados el dinero entra semanas después de recibirse el cheque y el 47,4% de esos
+    -- cobros cruzan de mes (auditoría 44, H-3).
+    fecha_sk            INT NOT NULL REFERENCES edw.Dim_Fecha(fecha_sk),
+    fecha_registro_sk   INT REFERENCES edw.Dim_Fecha(fecha_sk),   -- fectra
+    fecha_emision_sk    INT REFERENCES edw.Dim_Fecha(fecha_sk),   -- fecemi (factura origen)
+    cliente_sk          INT NOT NULL REFERENCES edw.Dim_Cliente(cliente_sk),
+    vendedor_sk         INT NOT NULL REFERENCES edw.Dim_Vendedor(vendedor_sk),
+    -- Instrumento de pago como DIMENSIÓN DEGENERADA (varchar en el hecho), no FK a
+    -- Dim_FormaPago. Decisión deliberada con evidencia (auditoría 44, H-2): Dim_FormaPago
+    -- proviene de un extractor estático de 3 filas (E/C/0) y hoy deja el 100% de las 214.108
+    -- filas de Fact_Cobros_CXC en el centinela -1. El vocabulario real es cerrado y de 7
+    -- valores (EF/CP/DP/CH/TA/ND/NC); una FK repetiría exactamente el defecto que esta tabla
+    -- corrige.
+    tipo_instrumento    VARCHAR(2) NOT NULL,
+    es_postfechado      BOOLEAN NOT NULL DEFAULT FALSE,           -- tiptra = 'CP'
+    -- dias_cobro = banfec - fecemi, con piso en 0. Se materializa en el ETL (no se calcula
+    -- por consulta) porque es el discriminante del tramo de comisión: así el tramo es
+    -- auditable sobre el dato cargado. Piso 0 por 12 filas históricas con banfec anterior a
+    -- fecemi (mínimo -25 días, auditoría 44 H-9).
+    dias_cobro          INTEGER NOT NULL,
+    valor_cobrado       NUMERIC(15,4) NOT NULL,
+    num_comprobante     VARCHAR(20) NOT NULL,                     -- numcco ('RC…'/'ND…')
+    num_transaccion     VARCHAR(20),                              -- numtra (factura origen)
+    num_cuota           INTEGER,
+    num_cheque          VARCHAR(20),
+    -- Las notas de débito se excluyen de la base comisionable (el reporte del ERP filtra
+    -- substring(numcco,1,2) <> 'ND'). Se marca en vez de descartarse en el ETL para que la
+    -- regla siga siendo configurable en la capa de negocio.
+    es_nota_debito      BOOLEAN NOT NULL DEFAULT FALSE,
+    fecha_carga         TIMESTAMP DEFAULT NOW()
+);
+COMMENT ON TABLE edw.Fact_Cobros_Cuotas IS 'Cobranza al grano (cobro, cuota, instrumento). Base de la comisión sobre cobros; devengo por fecha de efectivización.';
 
 -- ── 6. FACT_PAGOS_CXP ──
 CREATE TABLE edw.Fact_Pagos_CXP (

@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.exceptions import ValidationError
 from app.utils.validators import sanitize_date_str
 
@@ -46,17 +47,27 @@ TIPOS_MOVIMIENTO_CON_MONTO = {"FAC": "venta", "CPA": "compra"}
 
 
 class WarehouseRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, almacenes_permitidos: list[str] | None = None):
+        """`almacenes_permitidos` (RN-B10, docs/features/plan_correcciones_integrales_
+        sistema.md Fase 1.b): restricción de seguridad resuelta por
+        `resolve_almacenes_filter` a partir de las bodegas asignadas al usuario --
+        `None` = sin restricción, `[]` = rol bodega sin ninguna asignada (no ve nada).
+        Se aplica en `_filtros_snapshot`, el único choke point de filtros del módulo,
+        así que las ~14 funciones públicas de este repositorio quedan cubiertas sin
+        tocar cada una."""
         self.db = db
+        self.almacenes_permitidos = almacenes_permitidos
 
     # ── Filtros comunes ─────────────────────────────────────────────────────
-    @staticmethod
     def _filtros_snapshot(
-        sucursal: str | None, almacen: str | None, categoria: str | None,
+        self, sucursal: str | None, almacen: str | None, categoria: str | None,
         proveedor: str | None, tipo_movimiento: str | None,
     ) -> tuple[str, dict[str, Any]]:
         """Filtros para queries basadas en el snapshot (alias fijos: su=dim_sucursal,
-        al=dim_almacen, p=dim_producto)."""
+        al=dim_almacen, p=dim_producto). `almacen` es la elección del usuario en la
+        barra de filtros; `self.almacenes_permitidos` es la restricción de seguridad --
+        se aplican ambos, en AND (intersección), nunca solo el segundo ampliando al
+        primero."""
         filtros: list[str] = []
         params: dict[str, Any] = {}
 
@@ -72,6 +83,17 @@ class WarehouseRepository:
         if almacen:
             filtros.append("al.nombre_almacen = :almacen")
             params["almacen"] = almacen
+        if self.almacenes_permitidos is not None:
+            if not self.almacenes_permitidos:
+                # Rol bodega sin ninguna bodega asignada: no debe ver ningún dato.
+                filtros.append("1 = 0")
+            else:
+                placeholders_alm = ", ".join(
+                    f":alm_perm_{i}" for i in range(len(self.almacenes_permitidos))
+                )
+                for i, codalm in enumerate(self.almacenes_permitidos):
+                    params[f"alm_perm_{i}"] = codalm
+                filtros.append(f"al.codalm IN ({placeholders_alm})")
         if categoria:
             filtros.append("p.clase = :categoria")
             params["categoria"] = categoria
@@ -154,12 +176,28 @@ class WarehouseRepository:
         return int(self.db.execute(text(query), params).scalar() or 0)
 
     # ── Catálogos para los filtros globales (§1.1) ──────────────────────────
-    def get_proveedores(self) -> list[str]:
+    def get_proveedores(self, categoria: str | None = None) -> list[str]:
+        """Catálogo de proveedores para el filtro de bodega. `categoria` (Fase 2,
+        docs/features/plan_correcciones_integrales_sistema.md §Fase 2.2 -- filtros
+        "inteligentes"): si se pasa, restringe a los proveedores que realmente
+        suministran algún artículo de esa categoría (`edw.fact_compras`, mismo criterio
+        de inferencia que `_filtros_snapshot` usa para el filtro `proveedor` -- el ERP
+        no guarda proveedor en el artículo directamente)."""
         # Centinela -1 fuera del catálogo (regla 12), mismo criterio que get_almacenes.
+        if not categoria:
+            res = self.db.execute(text(
+                "SELECT DISTINCT nombre_proveedor FROM edw.dim_proveedor "
+                "WHERE nombre_proveedor IS NOT NULL AND proveedor_sk <> -1 ORDER BY nombre_proveedor"
+            )).fetchall()
+            return [str(r[0]) for r in res]
         res = self.db.execute(text(
-            "SELECT DISTINCT nombre_proveedor FROM edw.dim_proveedor "
-            "WHERE nombre_proveedor IS NOT NULL AND proveedor_sk <> -1 ORDER BY nombre_proveedor"
-        )).fetchall()
+            "SELECT DISTINCT pr.nombre_proveedor FROM edw.dim_proveedor pr "
+            "WHERE pr.nombre_proveedor IS NOT NULL AND pr.proveedor_sk <> -1 AND EXISTS ("
+            "  SELECT 1 FROM edw.fact_compras fc "
+            "  JOIN edw.dim_producto p2 ON fc.producto_sk = p2.producto_sk "
+            "  WHERE fc.proveedor_sk = pr.proveedor_sk AND p2.clase = :categoria"
+            ") ORDER BY pr.nombre_proveedor"
+        ), {"categoria": categoria}).fetchall()
         return [str(r[0]) for r in res]
 
     # ── Inventario maestro por producto (KPIs, G5, G6, plan de compras) ────
@@ -167,12 +205,17 @@ class WarehouseRepository:
         self, sucursal: str | None = None, almacen: str | None = None,
         categoria: str | None = None, proveedor: str | None = None,
         tipo_movimiento: str | None = None, dias_salidas: int = 30,
+        dias_ventana_inmovilizado: int = settings.BODEGA_DIAS_VENTANA_INMOVILIZADO,
     ) -> list[dict[str, Any]]:
         """Una fila por codart: stock/valor del último snapshot (sumado sobre los
         almacenes filtrados) + salidas de los últimos `dias_salidas` días + salidas del
-        período previo equivalente (tendencia)."""
+        período previo equivalente (tendencia) + salidas de la ventana más amplia
+        `dias_ventana_inmovilizado` (Fase 6.1, H-2/RN-B11: clasificar "Inmovilizado" con
+        una ventana de 90 días evita marcar como estancado un artículo que simplemente
+        no vendió en los últimos 30 días por estacionalidad)."""
         where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         params["dias"] = dias_salidas
+        params["dias_inmov"] = dias_ventana_inmovilizado
 
         query = f"""
             WITH ultimo AS (SELECT MAX(fecha_sk) AS fecha_sk FROM edw.fact_inventario_snapshot),
@@ -199,22 +242,26 @@ class WarehouseRepository:
                        ) AS salidas_periodo,
                        SUM(m.cantidad_movimiento) FILTER (
                            WHERE d.fecha_completa <  CURRENT_DATE - (:dias * INTERVAL '1 day')
-                       ) AS salidas_periodo_anterior
+                       ) AS salidas_periodo_anterior,
+                       SUM(m.cantidad_movimiento) FILTER (
+                           WHERE d.fecha_completa >= CURRENT_DATE - (:dias_inmov * INTERVAL '1 day')
+                       ) AS salidas_ventana_inmovilizado
                 FROM edw.fact_movimientos_inventario m
                 JOIN edw.dim_fecha d ON m.fecha_sk = d.fecha_sk
                 JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
                 JOIN edw.dim_almacen  al ON m.almacen_sk = al.almacen_sk
                 JOIN edw.dim_sucursal su ON m.sucursal_sk = su.sucursal_sk
                 WHERE m.es_salida
-                  AND d.fecha_completa >= CURRENT_DATE - (2 * :dias * INTERVAL '1 day')
+                  AND d.fecha_completa >= CURRENT_DATE - (GREATEST(2 * :dias, :dias_inmov) * INTERVAL '1 day')
                   {where_extra}
                 GROUP BY p.codart
             )
             SELECT snap.codart, snap.nombre_articulo, snap.categoria,
                    snap.stock_actual, snap.valor_inventario, snap.costo_unitario,
                    snap.punto_reorden_config,
-                   COALESCE(sal.salidas_periodo, 0)          AS salidas_periodo,
-                   COALESCE(sal.salidas_periodo_anterior, 0) AS salidas_periodo_anterior
+                   COALESCE(sal.salidas_periodo, 0)               AS salidas_periodo,
+                   COALESCE(sal.salidas_periodo_anterior, 0)      AS salidas_periodo_anterior,
+                   COALESCE(sal.salidas_ventana_inmovilizado, 0)  AS salidas_ventana_inmovilizado
             FROM snap
             LEFT JOIN salidas sal ON sal.codart = snap.codart
             ORDER BY salidas_periodo DESC, snap.valor_inventario DESC
@@ -231,6 +278,210 @@ class WarehouseRepository:
                 "punto_reorden_config": float(r[6] or 0),
                 "salidas_periodo": float(r[7] or 0),
                 "salidas_periodo_anterior": float(r[8] or 0),
+                "salidas_ventana_inmovilizado": float(r[9] or 0),
+            }
+            for r in res
+        ]
+
+    # ── Fase 6.2 (H-9): "Artículos sin movimiento en ventas por almacén" ────
+    # Reporte único parametrizado que reemplaza QUERY_PRODUCTOS_SIN_VENTA y
+    # QUERY_ARTICULOS_ESTANCADOS (misma query en Producción salvo un `HAVING`, ver
+    # docs/features/plan_correcciones_integrales_sistema.md §6.2 / H-9).
+    def get_articulos_sin_venta(
+        self, fecha_desde: str, fecha_hasta: str,
+        sucursal: str | None = None, almacen: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None,
+        solo_con_stock: bool = True, busqueda: str | None = None, limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Una fila por (codart, almacén) sin ninguna venta (`tipo_movimiento='FAC'`) en
+        `[fecha_desde, fecha_hasta]`. `solo_con_stock=True` = "artículos estancados"
+        (tienen existencia pero no rotan); `False` = "sin venta" completo (incluye
+        artículos con stock cero o negativo -- H-9: antes eran dos queries casi
+        idénticas, ahora un solo filtro). El universo son las combinaciones
+        (producto, almacén) con AL MENOS UN movimiento histórico (evita escanear el
+        catálogo completo del ERP contra bodegas donde el artículo nunca ha estado).
+
+        Stock actual se calcula agregando el kardex completo (regla 3: dirección por
+        `es_entrada`/`es_salida`, nunca por signo) en vez de `fact_inventario_snapshot`
+        -- el snapshot solo está poblado "hacia adelante" (<1% de histórico pre-2026,
+        auditoría 05), y este reporte necesita responder correctamente sobre rangos de
+        fecha arbitrarios, no solo el estado de hoy.
+
+        `FechaUltimaVenta`/`NumeroFactura` (última venta histórica, no solo en el rango
+        analizado -- responde "¿cuándo fue la última vez que se vendió, si acaso?") vía
+        `ROW_NUMBER() OVER (PARTITION BY almacen_sk, producto_sk ORDER BY fecha DESC,
+        num_documento DESC)` sobre movimientos `FAC`.
+
+        **Limitación heredada, no introducida por este método (H-8 del plan):**
+        `fact_movimientos_inventario` no tiene columna de estado de documento --
+        verificado en `etl/extractors/kardex_extractor.sql`, que no aplica el token
+        `{ESTADO}` (a diferencia de otros extractores) -- así que una factura anulada
+        ('A') puede aparecer como "última venta" si es la más reciente. Corregirlo
+        requeriría un cambio de ETL/esquema (agregar la columna y re-extraer desde SAP),
+        fuera del alcance de este reporte; se documenta en vez de fingir que no existe.
+        Sin columna `Cliente` -- decisión del usuario (§6.0 del plan)."""
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, None)
+        params["fecha_desde"] = fecha_desde
+        params["fecha_hasta"] = fecha_hasta
+        params["limit"] = limit
+        clausula_busqueda = ""
+        if busqueda:
+            clausula_busqueda = "AND (p.codart ILIKE :busqueda OR p.nombre_articulo ILIKE :busqueda)"
+            params["busqueda"] = f"%{busqueda}%"
+        clausula_stock = "HAVING MAX(COALESCE(stk.stock_actual, 0)) > 0" if solo_con_stock else ""
+
+        query = f"""
+            WITH universo AS (
+                SELECT DISTINCT m.producto_sk, m.almacen_sk
+                FROM edw.fact_movimientos_inventario m
+                JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
+                JOIN edw.dim_almacen  al ON m.almacen_sk = al.almacen_sk
+                JOIN edw.dim_sucursal su ON m.sucursal_sk = su.sucursal_sk
+                WHERE p.producto_sk <> -1 AND al.almacen_sk <> -1 {where_extra}
+            ),
+            stock AS (
+                SELECT m.producto_sk, m.almacen_sk,
+                       SUM(CASE WHEN m.es_entrada THEN m.cantidad_movimiento
+                                WHEN m.es_salida THEN -m.cantidad_movimiento ELSE 0 END) AS stock_actual
+                FROM edw.fact_movimientos_inventario m
+                JOIN universo u ON u.producto_sk = m.producto_sk AND u.almacen_sk = m.almacen_sk
+                GROUP BY m.producto_sk, m.almacen_sk
+            ),
+            ventas_ordenadas AS (
+                SELECT m.producto_sk, m.almacen_sk, d.fecha_completa AS fecha, m.num_documento,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY m.almacen_sk, m.producto_sk ORDER BY d.fecha_completa DESC, m.num_documento DESC
+                       ) AS rn
+                FROM edw.fact_movimientos_inventario m
+                JOIN edw.dim_fecha d ON m.fecha_sk = d.fecha_sk
+                JOIN universo u ON u.producto_sk = m.producto_sk AND u.almacen_sk = m.almacen_sk
+                WHERE m.tipo_movimiento = 'FAC'
+            ),
+            sin_venta_rango AS (
+                SELECT u.producto_sk, u.almacen_sk
+                FROM universo u
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM edw.fact_movimientos_inventario m2
+                    JOIN edw.dim_fecha d2 ON m2.fecha_sk = d2.fecha_sk
+                    WHERE m2.tipo_movimiento = 'FAC'
+                      AND m2.producto_sk = u.producto_sk AND m2.almacen_sk = u.almacen_sk
+                      AND d2.fecha_completa BETWEEN :fecha_desde AND :fecha_hasta
+                )
+            )
+            SELECT p.codart, MAX(p.nombre_articulo) AS nombre, MAX(COALESCE(p.clase, 'SIN-CLASE')) AS categoria,
+                   al.nombre_almacen, MAX(COALESCE(stk.stock_actual, 0)) AS stock_actual,
+                   MAX(p.costo_promedio) AS costo_unitario,
+                   MAX(uv.fecha) AS fecha_ultima_venta, MAX(uv.num_documento) AS numero_factura
+            FROM sin_venta_rango sv
+            JOIN edw.dim_producto p ON p.producto_sk = sv.producto_sk
+            JOIN edw.dim_almacen al ON al.almacen_sk = sv.almacen_sk
+            LEFT JOIN stock stk ON stk.producto_sk = sv.producto_sk AND stk.almacen_sk = sv.almacen_sk
+            LEFT JOIN ventas_ordenadas uv
+                ON uv.producto_sk = sv.producto_sk AND uv.almacen_sk = sv.almacen_sk AND uv.rn = 1
+            WHERE 1 = 1 {clausula_busqueda}
+            GROUP BY p.codart, al.nombre_almacen, sv.producto_sk, sv.almacen_sk
+            {clausula_stock}
+            ORDER BY stock_actual DESC
+            LIMIT :limit
+        """
+        res = self.db.execute(text(query), params).fetchall()
+        return [
+            {
+                "codart": str(r[0]),
+                "nombre": str(r[1]),
+                "categoria": str(r[2]),
+                "almacen": str(r[3]),
+                "stock_actual": float(r[4] or 0),
+                "costo_unitario": float(r[5] or 0),
+                "fecha_ultima_venta": r[6].isoformat() if r[6] else None,
+                "numero_factura": r[7],
+            }
+            for r in res
+        ]
+
+    def get_movimientos_kardex(
+        self, fecha_desde: str, fecha_hasta: str,
+        sucursal: str | None = None, almacen: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None,
+        tipo_movimiento: str | None = None, busqueda: str | None = None, limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Fase 6.7 (H-11 del plan): migración de `QUERY_KARDEX_MOVIMIENTOS` al EDW.
+        Grano de la fila = un movimiento individual de kardex (mismo grano que
+        `edw.fact_movimientos_inventario`) -- corrige el `GROUP BY` sin agregación de
+        la query original (era un `DISTINCT` disfrazado) con un `SELECT` directo sobre
+        el hecho, sin agrupar.
+
+        `existencia_global` (columna `a.exiact` de la query original) **no tiene
+        equivalente directo en el EDW** -- `dim_producto` no almacena existencia. Se
+        deriva sumando el kardex COMPLETO (todos los almacenes, todo el histórico
+        disponible) por producto, igual que el cálculo de stock del resto del módulo
+        (regla 3: dirección por `es_entrada`/`es_salida`, nunca por signo) -- la fuente
+        se declara explícitamente en el título de columna del contrato tipado, nunca
+        se sirve en silencio como si fuera el mismo dato que `exiact` de Producción.
+
+        `tipo_movimiento` se aplica directo sobre `m.tipo_movimiento` (cada fila ES ese
+        movimiento) -- a diferencia del resto de reportes del módulo, donde
+        `_filtros_snapshot` lo traduce a "artículos que alguna vez tuvieron ese tipo de
+        movimiento" (semántica correcta para agregados por artículo, pero incorrecta
+        para un listado de movimientos individuales: filtrar por FAC debe devolver solo
+        filas FAC, no todas las filas de artículos que alguna vez se vendieron)."""
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, None)
+        params["fecha_desde"] = fecha_desde
+        params["fecha_hasta"] = fecha_hasta
+        params["limit"] = limit
+        clausula_busqueda = ""
+        if busqueda:
+            clausula_busqueda = "AND (p.codart ILIKE :busqueda OR p.nombre_articulo ILIKE :busqueda)"
+            params["busqueda"] = f"%{busqueda}%"
+        clausula_tipo = ""
+        if tipo_movimiento:
+            if tipo_movimiento not in _CODIGOS_TIPO_MOVIMIENTO:
+                raise ValidationError(
+                    f"tipo_movimiento inválido: '{tipo_movimiento}'. Valores permitidos: "
+                    f"{', '.join(sorted(_CODIGOS_TIPO_MOVIMIENTO))}."
+                )
+            clausula_tipo = "AND m.tipo_movimiento = :tipo_movimiento"
+            params["tipo_movimiento"] = tipo_movimiento
+
+        query = f"""
+            WITH existencia_global AS (
+                SELECT m2.producto_sk,
+                       SUM(CASE WHEN m2.es_entrada THEN m2.cantidad_movimiento
+                                WHEN m2.es_salida THEN -m2.cantidad_movimiento ELSE 0 END) AS existencia_global
+                FROM edw.fact_movimientos_inventario m2
+                GROUP BY m2.producto_sk
+            )
+            SELECT d.fecha_completa AS fecha, al.nombre_almacen AS almacen,
+                   p.codart, p.nombre_articulo AS nombre, COALESCE(p.clase, 'SIN-CLASE') AS categoria,
+                   m.tipo_movimiento,
+                   CASE WHEN m.es_entrada THEN 'Entrada' WHEN m.es_salida THEN 'Salida' ELSE 'N/D' END AS direccion,
+                   m.cantidad_movimiento AS cantidad, m.num_documento AS numero_documento,
+                   COALESCE(eg.existencia_global, 0) AS existencia_global
+            FROM edw.fact_movimientos_inventario m
+            JOIN edw.dim_fecha d ON m.fecha_sk = d.fecha_sk
+            JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
+            JOIN edw.dim_almacen al ON m.almacen_sk = al.almacen_sk
+            JOIN edw.dim_sucursal su ON m.sucursal_sk = su.sucursal_sk
+            LEFT JOIN existencia_global eg ON eg.producto_sk = m.producto_sk
+            WHERE p.producto_sk <> -1 AND al.almacen_sk <> -1
+              AND d.fecha_completa BETWEEN :fecha_desde AND :fecha_hasta
+              {where_extra} {clausula_busqueda} {clausula_tipo}
+            ORDER BY d.fecha_completa DESC, al.nombre_almacen, p.codart
+            LIMIT :limit
+        """
+        res = self.db.execute(text(query), params).fetchall()
+        return [
+            {
+                "fecha": r[0].isoformat() if r[0] else None,
+                "almacen": str(r[1]),
+                "codart": str(r[2]),
+                "nombre": str(r[3]),
+                "categoria": str(r[4]),
+                "tipo_movimiento": str(r[5]),
+                "direccion": str(r[6]),
+                "cantidad": float(r[7] or 0),
+                "numero_documento": r[8],
+                "existencia_global": float(r[9] or 0),
             }
             for r in res
         ]
@@ -372,7 +623,14 @@ class WarehouseRepository:
         del gráfico "Histórico y Predicción de Salidas" con "Top 10 productos")."""
         where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, None)
         rango = self._rango_fechas(fecha_desde, fecha_hasta, params)
-        join_al = "JOIN edw.dim_almacen  al ON {m}.almacen_sk = al.almacen_sk" if almacen else ""
+        # El JOIN a dim_almacen debe activarse también cuando hay una restricción de
+        # seguridad por bodega (RN-B10), aunque el usuario no haya elegido `almacen`:
+        # si se omite, el WHERE de _filtros_snapshot referenciaría un alias `al`
+        # inexistente y la query fallaría.
+        join_al = (
+            "JOIN edw.dim_almacen  al ON {m}.almacen_sk = al.almacen_sk"
+            if (almacen or self.almacenes_permitidos is not None) else ""
+        )
         join_su = "JOIN edw.dim_sucursal su ON {m}.sucursal_sk = su.sucursal_sk" if sucursal else ""
 
         filtro_prod = ""
@@ -631,15 +889,19 @@ class WarehouseRepository:
         self, sucursal: str | None = None, categoria: str | None = None,
         proveedor: str | None = None, tipo_movimiento: str | None = None,
         almacen: str | None = None, dias_salidas: int = 30, limit: int = 500,
+        dias_ventana_inmovilizado: int = settings.BODEGA_DIAS_VENTANA_INMOVILIZADO,
     ) -> list[dict[str, Any]]:
         """Una fila por (codart, almacén) con stock del último snapshot y salidas de los
         últimos `dias_salidas` días EN ESE almacén — insumo de la matriz §3.1 y de la
         lógica de transferencias RN-B3 (excedente/déficit por bodega). `almacen` es
         opcional: la matriz de §3.1 lo usa para restringir a una sola bodega cuando el
         usuario filtra por almacén; las transferencias (§3.2) lo dejan en None porque
-        necesitan comparar TODAS las bodegas entre sí (origen/destino)."""
+        necesitan comparar TODAS las bodegas entre sí (origen/destino). También trae
+        `salidas_ventana_inmovilizado` (Fase 6.1, H-2) para que la matriz clasifique
+        "Inmovilizado" igual que `get_inventario_productos`."""
         where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
         params["dias"] = dias_salidas
+        params["dias_inmov"] = dias_ventana_inmovilizado
         params["limit"] = limit
 
         query = f"""
@@ -661,14 +923,20 @@ class WarehouseRepository:
                 GROUP BY p.codart, al.nombre_almacen
             ),
             salidas AS (
-                SELECT p.codart, al.nombre_almacen, SUM(m.cantidad_movimiento) AS salidas
+                SELECT p.codart, al.nombre_almacen,
+                       SUM(m.cantidad_movimiento) FILTER (
+                           WHERE d.fecha_completa >= CURRENT_DATE - (:dias * INTERVAL '1 day')
+                       ) AS salidas,
+                       SUM(m.cantidad_movimiento) FILTER (
+                           WHERE d.fecha_completa >= CURRENT_DATE - (:dias_inmov * INTERVAL '1 day')
+                       ) AS salidas_ventana_inmovilizado
                 FROM edw.fact_movimientos_inventario m
                 JOIN edw.dim_fecha d ON m.fecha_sk = d.fecha_sk
                 JOIN edw.dim_producto p ON m.producto_sk = p.producto_sk
                 JOIN edw.dim_almacen  al ON m.almacen_sk = al.almacen_sk
                 JOIN edw.dim_sucursal su ON m.sucursal_sk = su.sucursal_sk
                 WHERE m.es_salida
-                  AND d.fecha_completa >= CURRENT_DATE - (:dias * INTERVAL '1 day')
+                  AND d.fecha_completa >= CURRENT_DATE - (GREATEST(:dias, :dias_inmov) * INTERVAL '1 day')
                   {where_extra}
                 GROUP BY p.codart, al.nombre_almacen
             ),
@@ -681,7 +949,8 @@ class WarehouseRepository:
             )
             SELECT sn.codart, sn.nombre, sn.categoria, sn.nombre_almacen,
                    sn.stock_actual, sn.costo_unitario, sn.punto_reorden_config,
-                   COALESCE(sa.salidas, 0) AS salidas_periodo
+                   COALESCE(sa.salidas, 0) AS salidas_periodo,
+                   COALESCE(sa.salidas_ventana_inmovilizado, 0) AS salidas_ventana_inmovilizado
             FROM snap sn
             JOIN relevantes r ON r.codart = sn.codart
             LEFT JOIN salidas sa ON sa.codart = sn.codart AND sa.nombre_almacen = sn.nombre_almacen
@@ -698,6 +967,7 @@ class WarehouseRepository:
                 "costo_unitario": float(r[5] or 0),
                 "punto_reorden_config": float(r[6] or 0),
                 "salidas_periodo": float(r[7] or 0),
+                "salidas_ventana_inmovilizado": float(r[8] or 0),
             }
             for r in res
         ]
@@ -712,7 +982,23 @@ class WarehouseRepository:
         de la demanda real, no solo de los días con actividad."""
         if not codarts:
             return []
-        query = """
+        params: dict[str, Any] = {"codarts": codarts, "dias": dias}
+        # RN-B10: mismo criterio de restricción que _filtros_snapshot -- un usuario
+        # bodega no debe recibir series de salida de almacenes fuera de su asignación,
+        # aunque este método no pase por el choke point (no filtra por sucursal/almacen
+        # elegido, compara TODAS las bodegas entre sí para las transferencias sugeridas).
+        restriccion = ""
+        if self.almacenes_permitidos is not None:
+            if not self.almacenes_permitidos:
+                restriccion = "AND 1 = 0"
+            else:
+                placeholders_alm = ", ".join(
+                    f":alm_perm_{i}" for i in range(len(self.almacenes_permitidos))
+                )
+                for i, codalm in enumerate(self.almacenes_permitidos):
+                    params[f"alm_perm_{i}"] = codalm
+                restriccion = f"AND al.codalm IN ({placeholders_alm})"
+        query = f"""
             SELECT p.codart, al.nombre_almacen AS almacen, d.fecha_completa AS fecha,
                    SUM(m.cantidad_movimiento) AS unidades,
                    SUM(m.valor_venta) FILTER (WHERE m.tipo_movimiento = 'FAC') AS venta
@@ -723,9 +1009,10 @@ class WarehouseRepository:
             WHERE m.es_salida
               AND p.codart = ANY(:codarts)
               AND d.fecha_completa >= CURRENT_DATE - (:dias * INTERVAL '1 day')
+              {restriccion}
             GROUP BY p.codart, al.nombre_almacen, d.fecha_completa
         """
-        res = self.db.execute(text(query), {"codarts": codarts, "dias": dias}).fetchall()
+        res = self.db.execute(text(query), params).fetchall()
         return [
             {
                 "codart": str(r[0]),

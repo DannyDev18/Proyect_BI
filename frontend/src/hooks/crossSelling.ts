@@ -12,9 +12,7 @@ import {
 } from '../services/crossSelling';
 import { qk } from '../constants/queryKeys';
 import { useDebouncedValue } from './useDebouncedValue';
-
-const errorMessage = (error: unknown): string | null =>
-  error ? (error instanceof Error ? error.message : 'Error al cargar datos') : null;
+import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 const wrap = <T,>(query: { data?: T; isLoading: boolean; error: unknown; refetch: () => unknown }) => ({
   data: query.data ?? null,

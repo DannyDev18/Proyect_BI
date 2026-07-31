@@ -48,7 +48,7 @@ class ComisionFactorCredito(Base):
     todavía para los tramos > 30 días."""
     __tablename__ = "comision_factores_credito"
     __table_args__ = (
-        CheckConstraint("factor >= 0 AND factor <= 1.5", name="check_factor_credito_valido"),
+        CheckConstraint("factor >= 0 AND factor <= 2.0", name="check_factor_credito_valido"),
         CheckConstraint("dias_desde >= 0", name="check_dias_desde_valido"),
         {"schema": "public"},
     )
@@ -57,7 +57,6 @@ class ComisionFactorCredito(Base):
     dias_desde = Column(Integer, nullable=False)
     dias_hasta = Column(Integer, nullable=True)  # NULL = sin tope superior
     factor = Column(Numeric(4, 2), nullable=False)
-    pct_al_facturar = Column(Numeric(5, 2), nullable=False, default=100.0)  # reservado fase 2 (split cobranza)
     vigente_desde = Column(Date, nullable=False)
     vigente_hasta = Column(Date, nullable=True)
 
@@ -71,10 +70,14 @@ class ComisionConfigVendedor(Base):
     antes un cambio de tipo externo/interno se aplicaba retroactivamente a cualquier
     período cerrado que aún no se hubiera congelado por primera vez -- mismo patrón que
     `ComisionMatrizCategoria`/`ComisionFactorCredito`, nunca se edita una fila vigente,
-    se cierra (`vigente_hasta`) y se inserta una nueva."""
+    se cierra (`vigente_hasta`) y se inserta una nueva.
+
+    Perfil `jefe_agencia` (auditoría 44, docs/features/plan_comisiones_sobre_cobros.md):
+    tercer perfil real de la empresa, con tabla de tramos propia (RN-CM9) y un componente
+    adicional de comisión (1% de ventas de contado de SU agencia, `agencia` = `establ`)."""
     __tablename__ = "comision_config_vendedor"
     __table_args__ = (
-        CheckConstraint("tipo IN ('externo','interno')", name="check_tipo_vendedor_valido"),
+        CheckConstraint("tipo IN ('externo','interno','jefe_agencia')", name="check_tipo_vendedor_valido"),
         CheckConstraint("factor_tipo >= 0 AND factor_tipo <= 1.5", name="check_factor_tipo_valido"),
         # A lo sumo una fila "abierta" (vigente_hasta NULL) por vendedor -- reemplaza el
         # UNIQUE plano que tenía id_vendedor_origen antes de admitir historial.
@@ -91,8 +94,86 @@ class ComisionConfigVendedor(Base):
     factor_tipo = Column(Numeric(4, 2), nullable=False, default=1.0)
     fecha_ingreso = Column(Date, nullable=True)
     activo = Column(Boolean, nullable=False, default=True)
+    # Agencia (edw.dim_sucursal.establ) del jefe de agencia -- base del componente
+    # 'contado_agencia' de la fórmula (§2.3 del plan). NULL para externo/interno.
+    agencia = Column(String(3), nullable=True)
     vigente_desde = Column(Date, nullable=False, default=lambda: datetime.date(1900, 1, 1))
     vigente_hasta = Column(Date, nullable=True)
+
+
+class ComisionTramoCobranza(Base):
+    """Tramos de comisión sobre COBRANZA por perfil de vendedor (auditoría 44,
+    docs/features/plan_comisiones_sobre_cobros.md §2.1) -- la regla realmente vigente en
+    la empresa hoy: tasa según los días transcurridos entre la emisión de la factura y la
+    fecha en que el cobro se hace efectivo (`edw.fact_cobros_cuotas.dias_cobro`, calculado
+    sobre `banfec`, NUNCA sobre la fecha de recepción del cheque -- RN-CM8/RN-CM9).
+
+    `dias_hasta` es el techo del tramo (21/60/90/120/365 del cuadro de negocio); NULL
+    significa "sin tope superior" (equivalente al remanente > 365, tasa 0% en el cuadro
+    original). Se resuelve por el primer tramo, en orden de `dias_hasta` ascendente, que
+    cubre `dias_cobro` -- mismo patrón de resolución por especificidad que
+    `ComisionMatrizCategoria`, pero por rango numérico en vez de por clase/subclase."""
+    __tablename__ = "comision_tramos_cobranza"
+    __table_args__ = (
+        CheckConstraint("perfil IN ('externo','interno','jefe_agencia')", name="check_perfil_tramo_valido"),
+        CheckConstraint("tasa_pct >= 0 AND tasa_pct <= 100", name="check_tasa_tramo_valida"),
+        CheckConstraint("dias_hasta IS NULL OR dias_hasta >= 0", name="check_dias_hasta_valido"),
+        {"schema": "public"},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    perfil = Column(String(15), nullable=False)
+    dias_hasta = Column(Integer, nullable=True)
+    tasa_pct = Column(Numeric(6, 3), nullable=False)
+    vigente_desde = Column(Date, nullable=False)
+    vigente_hasta = Column(Date, nullable=True)
+    creado_por = Column(Integer, ForeignKey("public.usuarios.id", ondelete="SET NULL"), nullable=True)
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ComisionFormula(Base):
+    """Estructura de la fórmula de comisión variable como configuración persistida, NO
+    código (auditoría 44, pedido explícito del usuario: "la fórmula ... también puede ser
+    editable y no quemada en código"). Una fórmula vigente es una tubería ORDENADA de
+    componentes de un catálogo cerrado (`ComisionFormulaComponente.componente`, validado
+    en el servicio, nunca evaluación de expresiones arbitrarias -- superficie de ejecución
+    inaceptable en un módulo que mueve dinero real).
+
+    A lo sumo una fórmula `activa` a la vez (índice parcial, mismo patrón que
+    `ComisionConfigVendedor`)."""
+    __tablename__ = "comision_formula"
+    __table_args__ = (
+        Index("uq_comision_formula_activa", "activa", unique=True, postgresql_where=text("activa = true")),
+        {"schema": "public"},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    clave = Column(String(30), nullable=False, unique=True)  # 'actual' | 'cobranza' | ...
+    nombre = Column(String(100), nullable=False)
+    activa = Column(Boolean, nullable=False, default=False)
+    creado_por = Column(Integer, ForeignKey("public.usuarios.id", ondelete="SET NULL"), nullable=True)
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ComisionFormulaComponente(Base):
+    """Un paso de la tubería de una `ComisionFormula`. Catálogo cerrado de `componente`
+    validado en `CommissionConfigService` (no en un CHECK de BD, para no requerir una
+    migración cada vez que se habilite un componente ya soportado por el motor pero
+    todavía no expuesto en ninguna fórmula)."""
+    __tablename__ = "comision_formula_componente"
+    __table_args__ = (
+        CheckConstraint("operador IN ('sumar','restar','multiplicar')", name="check_operador_formula_valido"),
+        UniqueConstraint("formula_id", "orden", name="uq_formula_orden"),
+        {"schema": "public"},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    formula_id = Column(Integer, ForeignKey("public.comision_formula.id", ondelete="CASCADE"), nullable=False)
+    orden = Column(Integer, nullable=False)
+    componente = Column(String(30), nullable=False)
+    operador = Column(String(12), nullable=False)
+    activo = Column(Boolean, nullable=False, default=True)
+    parametros = Column(JSONB, nullable=False, default=dict)
 
 
 class ComisionLiquidacion(Base):
@@ -131,7 +212,8 @@ class ComisionConfigAuditoria(Base):
     __tablename__ = "comision_config_auditoria"
     __table_args__ = (
         CheckConstraint(
-            "tabla IN ('comision_matriz_categorias', 'comision_factores_credito', 'comision_config_vendedor')",
+            "tabla IN ('comision_matriz_categorias', 'comision_factores_credito', 'comision_config_vendedor', "
+            "'comision_tramos_cobranza', 'comision_formula')",
             name="check_tabla_auditoria_valida",
         ),
         {"schema": "public"},

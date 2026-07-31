@@ -374,6 +374,68 @@ class PredictionService:
         self._churn_explanation_cache[cliente_id] = contribuciones
         return contribuciones
 
+    def get_customer_segment_batch(self, cliente_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Mismo patrón de `get_churn_risk_batch` aplicado a segmentación RFM (auditoría
+        41, Fase 2 del refactor Cartera 360: `get_ruta_hoy` enriquece hasta
+        `CARTERA360_RUTA_TOP_N` clientes por request -- una consulta + una predicción
+        vectorizada evita N round-trips)."""
+        if not cliente_ids:
+            return {}
+        df_rfm = self.prediction_repo.get_rfm_features_batch(cliente_ids)
+        if df_rfm.empty:
+            return {cid: {"segmento": -1, "nombre_segmento": "Sin historial"} for cid in cliente_ids}
+        try:
+            X = df_rfm[["recency", "frequency", "monetary_value"]]
+            clusters = inference.predict_segmentation(self.model_loader, X)
+            cluster_to_segment = inference.get_cluster_to_segment(self.model_loader)
+            resultado = {
+                str(row["cliente_id"]): {
+                    "segmento": int(clusters.iloc[i]),
+                    "nombre_segmento": cluster_to_segment.get(str(int(clusters.iloc[i])), f"Segmento {int(clusters.iloc[i])}"),
+                }
+                for i, row in df_rfm.reset_index(drop=True).iterrows()
+            }
+        except Exception as e:
+            logger.error(f"Fallo segmentación RFM en lote ({len(cliente_ids)} clientes): {e}")
+            resultado = {}
+        for cid in cliente_ids:
+            resultado.setdefault(cid, {"segmento": -1, "nombre_segmento": "Sin historial"})
+        return resultado
+
+    def get_churn_explanation_batch(self, cliente_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Mismo patrón anti N+1 aplicado a la explicación SHAP (auditoría 41, Fase 2):
+        una sola consulta de features + un solo `TreeExplainer(...)` vectorizado sobre
+        las N filas, en vez de reconstruir el explainer y consultar la BD por cliente."""
+        if not cliente_ids:
+            return {}
+        df_features = self.prediction_repo.get_churn_features_batch(cliente_ids)
+        if df_features.empty:
+            return {cid: [] for cid in cliente_ids}
+        try:
+            import shap
+
+            X = df_features[["recency", "frequency", "monetary_value", "average_ticket"]]
+            model = self.model_loader.get('churn_rf')
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer(X).values
+            valores_clase1 = shap_values[:, :, 1] if shap_values.ndim == 3 else shap_values
+
+            resultado: dict[str, list[dict[str, Any]]] = {}
+            for i, row in df_features.reset_index(drop=True).iterrows():
+                contribuciones = [
+                    {"feature": col, "valor": float(X[col].iloc[i]), "contribucion": float(valores_clase1[i, j])}
+                    for j, col in enumerate(X.columns)
+                ]
+                contribuciones.sort(key=lambda c: abs(c["contribucion"]), reverse=True)
+                resultado[str(row["cliente_id"])] = contribuciones
+        except Exception as e:
+            logger.error(f"Fallo explicación SHAP en lote ({len(cliente_ids)} clientes): {e}")
+            resultado = {}
+        for cid in cliente_ids:
+            resultado.setdefault(cid, [])
+            self._churn_explanation_cache[cid] = resultado[cid]
+        return resultado
+
     def get_churn_risk_batch(self, cliente_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Misma inferencia que `get_churn_risk`, pero para un lote de clientes con UNA
         sola consulta + UNA sola llamada vectorizada al modelo (en vez de N round-trips)
@@ -620,10 +682,10 @@ class PredictionService:
             return []
         return self.catalog_repo.search_productos(query)
 
-    def search_clientes(self, query: str) -> list[dict[str, Any]]:
+    def search_clientes(self, query: str, codven_restriccion: str | None = None) -> list[dict[str, Any]]:
         if not self.catalog_repo:
             return []
-        return self.catalog_repo.search_clientes(query)
+        return self.catalog_repo.search_clientes(query, codven_restriccion=codven_restriccion)
 
     # ── Caso de uso: Segmentación RFM interactiva ─────────────────────────────
     def get_customer_segment(self, cliente_id: str, codven_restriccion: str | None = None) -> dict[str, Any]:

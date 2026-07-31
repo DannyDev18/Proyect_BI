@@ -4,7 +4,7 @@ import {
   BarChart, Bar,
   PieChart, Pie, Cell, Legend, Brush
 } from 'recharts';
-import { DollarSign, TrendingUp, ShoppingBag, Target, Filter, FileSpreadsheet, Printer } from 'lucide-react';
+import { DollarSign, TrendingUp, ShoppingBag, Target, FileSpreadsheet } from 'lucide-react';
 import {
   useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores, useAlmacenes,
 } from '../hooks/gerencia';
@@ -14,6 +14,7 @@ import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { ChartCard } from '../components/ui/ChartCard';
 import { Badge } from '../components/ui/Badge';
 import { Select } from '../components/ui/Select';
+import { DateField } from '../components/ui/DateField';
 import { FilterBar, FilterField } from '../components/ui/FilterBar';
 import { Button } from '../components/ui/Button';
 import { ChartTooltip } from '../components/ui/ChartTooltip';
@@ -62,8 +63,7 @@ export const DashboardGerencia = () => {
   };
 
   // Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): export del
-  // dashboard -- Excel real (backend, reutiliza warehouse_export.py) + PDF vía
-  // impresión del navegador (mismo patrón que BodegaReportes.tsx, sin librería nueva).
+  // dashboard a Excel real (backend, reutiliza warehouse_export.py).
   const exportarExcel = async () => {
     setDescargando(true);
     try {
@@ -103,38 +103,25 @@ export const DashboardGerencia = () => {
           >
             {descargando ? 'Generando…' : 'Excel'}
           </Button>
-          <Button
-            variant="primary" size="sm" onClick={() => window.print()} disabled={kpi.loading}
-            icon={<Printer size={14} aria-hidden="true" />} aria-label="Imprimir o exportar a PDF"
-          >
-            PDF
-          </Button>
         </div>
       </div>
 
       {/* Filter Bar */}
       <FilterBar className="print:hidden">
-        <div className="flex items-center gap-2 text-slate-400">
-          <Filter className="w-4 h-4" />
-          <span className="text-sm font-medium">Filtros:</span>
-        </div>
+    
 
         <FilterField label="Desde" htmlFor="gerencia-fecha-desde">
-          <input
+          <DateField
             id="gerencia-fecha-desde"
-            type="date"
             value={filters.start_date}
             onChange={(e) => setFilters(f => ({ ...f, start_date: e.target.value }))}
-            className="bg-slate-950 border border-slate-700 text-sm text-slate-300 rounded-md px-3 py-1.5 focus-ring"
           />
         </FilterField>
         <FilterField label="Hasta" htmlFor="gerencia-fecha-hasta">
-          <input
+          <DateField
             id="gerencia-fecha-hasta"
-            type="date"
             value={filters.end_date}
             onChange={(e) => setFilters(f => ({ ...f, end_date: e.target.value }))}
-            className="bg-slate-950 border border-slate-700 text-sm text-slate-300 rounded-md px-3 py-1.5 focus-ring"
           />
         </FilterField>
 

@@ -18,16 +18,12 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass
 
-from app.core.config import settings
 from app.core.exceptions import ValidationError
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.goal_repository import GoalRepository
-from app.services.commission_bonus import calcular_bonos_periodo
-from app.services.commission_engine import (
-    GRUPO_EXCLUIDO, ConfigComisionVariable, LineaComisionable, calcular_comision, calcular_comision_variable,
-    fecha_referencia_periodo,
-)
+from app.services.commission_engine import GRUPO_EXCLUIDO, calcular_comision, fecha_referencia_periodo
+from app.services.commission_variable_engine import calcular_comision_variable_completa, resolver_componentes_formula
 
 MESES_PROYECCION_VALIDOS = (3, 6)
 
@@ -103,18 +99,21 @@ class CommissionSimulationService:
     def simular(self, meses: int = 12, anio_desde: int | None = None, mes_desde: int | None = None) -> ResumenSimulacion:
         """Simula los últimos `meses` (o desde `anio_desde`/`mes_desde` si se especifica)
         comparando el esquema plano vigente (tasas configuradas por meta, ya
-        persistidas) contra el esquema variable (matriz/crédito/tipo vigentes)."""
+        persistidas) contra el TOTAL de Comisiones Variables (líneas de venta por
+        margen/categoría + cobranza por tramo de días de cobro + ventas de contado de
+        agencia, sumadas -- auditoría 44, corrección de diseño 2026-07-30: no son dos
+        esquemas entre los que se elige, es un solo total). Delega en
+        `commission_variable_engine.calcular_comision_variable_completa` -- el mismo
+        cálculo que usa `CommissionService`, para que el simulador refleje exactamente
+        lo que se liquidaría."""
         hoy = datetime.date.today()
         ancla_anio, ancla_mes = (anio_desde, mes_desde) if anio_desde and mes_desde else (hoy.year, hoy.month)
         periodos = _meses_anteriores(ancla_anio, ancla_mes, meses)
 
-        config = ConfigComisionVariable(
-            tope_descuento_pct=settings.COMISION_TOPE_DESCUENTO_PCT,
-            tasa_minima_sin_costo_pct=settings.COMISION_TASA_MINIMA_SIN_COSTO_PCT,
-            umbral_subtotal_x=settings.COMISION_UMBRAL_SUBTOTAL_X,
-            mult_excelente=settings.COMISION_MULT_EXCELENTE, mult_cerca=settings.COMISION_MULT_CERCA,
-            piso_lejos=settings.COMISION_PISO_LEJOS,
-        )
+        # La fórmula (a diferencia de la matriz/crédito, que sí tienen vigencia por
+        # fecha) es una sola resolución para toda la simulación -- ver
+        # `resolver_componentes_formula`.
+        formula_componentes = resolver_componentes_formula(self.commission_config_repo)
 
         detalle: list[SimulacionVendedorMes] = []
         costo_total_plana = 0.0
@@ -124,8 +123,11 @@ class CommissionSimulationService:
 
         for anio, mes in periodos:
             fecha_periodo = fecha_referencia_periodo(anio, mes)
-            matriz = self.commission_config_repo.get_matriz_as_reglas(fecha_periodo)
-            rangos_credito = self.commission_config_repo.get_factores_credito_as_rangos(fecha_periodo)
+            # Matriz/crédito vigentes de ESTE período: una sola resolución por período,
+            # reutilizada para todos los vendedores de ese mes (no una consulta por
+            # vendedor).
+            matriz_periodo = self.commission_config_repo.get_matriz_as_reglas(fecha_periodo)
+            rangos_credito_periodo = self.commission_config_repo.get_factores_credito_as_rangos(fecha_periodo)
 
             vendedores = self.goal_repo.get_vendors_with_sales_in_period(anio, mes)
             for vendedor in vendedores:
@@ -138,53 +140,29 @@ class CommissionSimulationService:
                 bono = float(goal.bono_sobrecumplimiento) if goal else 0.0
                 c_plana = calcular_comision(venta_neta, monto_meta, comision_base_pct, bono)
 
-                lineas_repo = self.goal_repo.get_commission_lines(vendedor, anio, mes)
-                lineas = [
-                    LineaComisionable(
-                        codart=l.codart, clase=l.clase, subclase=l.subclase, es_servicio=l.es_servicio,
-                        subtotal_neto=l.subtotal_neto, margen_bruto=l.margen_bruto,
-                        valor_descuento=l.valor_descuento, dias_plazo=l.dias_plazo,
-                    )
-                    for l in lineas_repo
-                ]
-                config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor, fecha_periodo)
-                factor_tipo = (
-                    float(config_vendedor.factor_tipo) if config_vendedor else settings.COMISION_FACTOR_EXTERNO_DEFAULT
-                )
-                devoluciones = self.goal_repo.get_vendor_devoluciones_period(vendedor, anio, mes)
-                # Dos pasadas, igual que el cálculo real (CommissionService._calcular_variable,
-                # docs/auditoria/35_actualizacion_modulo_metas.md H3): el bono de cobranza es un
-                # % ADICIONAL sobre la comisión post-cumplimiento, así que hace falta conocerla
-                # antes de poder sumar los bonos. Antes la simulación siempre pasaba
-                # `bonos_total=0.0` y subestimaba el costo real del esquema variable.
-                pre_bonos = calcular_comision_variable(
-                    lineas=lineas, matriz=matriz, rangos_credito=rangos_credito, factor_tipo_vendedor=factor_tipo,
-                    venta_real=venta_neta, monto_meta=monto_meta, devoluciones_mes=devoluciones,
-                    bonos_total=0.0, config=config,
-                )
-                bonos_total = calcular_bonos_periodo(
-                    self.goal_repo, vendedor, anio, mes, pre_bonos.comision_post_cumplimiento,
-                )
-                c_variable = (
-                    pre_bonos if bonos_total == 0.0 else calcular_comision_variable(
-                        lineas=lineas, matriz=matriz, rangos_credito=rangos_credito, factor_tipo_vendedor=factor_tipo,
-                        venta_real=venta_neta, monto_meta=monto_meta, devoluciones_mes=devoluciones,
-                        bonos_total=bonos_total, config=config,
-                    )
+                resultado = calcular_comision_variable_completa(
+                    goal_repo=self.goal_repo, commission_config_repo=self.commission_config_repo,
+                    vendedor_origen=vendedor, anio=anio, mes=mes,
+                    venta_real=venta_neta, monto_meta=monto_meta, fecha_config=fecha_periodo,
+                    formula_componentes=formula_componentes, matriz=matriz_periodo, rangos_credito=rangos_credito_periodo,
                 )
 
+                # Margen de las líneas de venta (para el % costo/margen del resumen) --
+                # consulta propia porque el detalle línea a línea no forma parte del
+                # resultado agregado del motor compartido.
+                lineas_repo = self.goal_repo.get_commission_lines(vendedor, anio, mes)
                 margen_periodo = sum(l.margen_bruto or 0.0 for l in lineas_repo)
                 margen_bruto_total += margen_periodo
                 costo_total_plana += c_plana.comision_devengada
-                costo_total_variable += c_variable.comision_final
+                costo_total_variable += resultado.comision_final
 
-                diferencia = c_variable.comision_final - c_plana.comision_devengada
+                diferencia = resultado.comision_final - c_plana.comision_devengada
                 diferencia_pct = (
                     round((diferencia / c_plana.comision_devengada) * 100, 2) if c_plana.comision_devengada > 0 else None
                 )
                 detalle.append(SimulacionVendedorMes(
                     vendedor_origen=vendedor, anio=anio, mes=mes, venta_neta=round(venta_neta, 2),
-                    comision_plana=c_plana.comision_devengada, comision_variable=c_variable.comision_final,
+                    comision_plana=c_plana.comision_devengada, comision_variable=resultado.comision_final,
                     diferencia=round(diferencia, 2), diferencia_pct=diferencia_pct,
                 ))
 
@@ -201,6 +179,79 @@ class CommissionSimulationService:
             detalle=detalle,
         )
 
+    def reconstruir_mes_especifico(self, anio: int, mes: int) -> ResumenProyeccionComision:
+        """"¿Cuánto hubiera pagado ESTE mes con la configuración de comisión variable
+        vigente HOY (matriz de categorías, factores de crédito, tipo de vendedor)?" --
+        a diferencia de `proyectar_comision_variable` (que promedia 3/6 meses y asume
+        cumplimiento neutro porque proyecta un mes futuro sin meta todavía), aquí el mes
+        elegido ya cerró: se usa su meta REAL (`goal.monto_meta`), sus devoluciones
+        reales y sus bonos reales (venta cruzada/cliente nuevo/cobranza), exactamente
+        igual que `simular()` calcula el esquema variable real -- pero sin comparar
+        contra el esquema plano, mismo recorte que pidió gerencia para este panel."""
+        hoy = datetime.date.today()
+        if (anio, mes) > (hoy.year, hoy.month):
+            raise ValidationError("No se puede reconstruir un mes futuro: todavía no existen ventas reales.")
+
+        fecha_config = hoy
+        fecha_periodo = fecha_referencia_periodo(anio, mes)
+        formula_componentes = resolver_componentes_formula(self.commission_config_repo)
+        matriz_hoy = self.commission_config_repo.get_matriz_as_reglas(fecha_config)
+        rangos_credito_hoy = self.commission_config_repo.get_factores_credito_as_rangos(fecha_config)
+        vendedores = sorted(self.goal_repo.get_vendors_with_sales_in_period(anio, mes))
+        nombres = self.catalog_repo.get_vendedores_info(vendedores)
+        periodo = f"{anio:04d}-{mes:02d}"
+
+        detalle: list[ProyeccionVendedor] = []
+        comision_total = 0.0
+        margen_total = 0.0
+
+        for vendedor in vendedores:
+            venta_neta = self.goal_repo.get_vendor_net_sales_period(vendedor, anio, mes)
+            goal = self.goal_repo.get_goal_for_period(vendedor, anio, mes)
+            monto_meta = float(goal.monto_meta) if goal else 0.0
+
+            # `fecha_config=hoy` (matriz/crédito/tramos/factor_tipo/agencia VIGENTES HOY:
+            # "¿cuánto pagaría este mes con la configuración de HOY?"), pero
+            # `fecha_config_vendedor_meta=fecha_periodo` para deshacer el ajuste de la
+            # meta con el tipo de vendedor VIGENTE EN ESE PERÍODO histórico (no el de
+            # hoy, que puede haber cambiado desde entonces) -- mismo criterio que ya
+            # tenía este método antes de consolidarse en el motor compartido.
+            resultado = calcular_comision_variable_completa(
+                goal_repo=self.goal_repo, commission_config_repo=self.commission_config_repo,
+                vendedor_origen=vendedor, anio=anio, mes=mes,
+                venta_real=venta_neta, monto_meta=monto_meta,
+                fecha_config=fecha_config, fecha_config_vendedor_meta=fecha_periodo,
+                formula_componentes=formula_componentes, matriz=matriz_hoy, rangos_credito=rangos_credito_hoy,
+            )
+
+            lineas_repo = self.goal_repo.get_commission_lines(vendedor, anio, mes)
+            margen_mes = sum(
+                (l.margen_bruto or 0.0)
+                for l, d in zip(lineas_repo, resultado.desglose_lineas)
+                if d.grupo != GRUPO_EXCLUIDO
+            )
+            tasa_efectiva = (resultado.comision_final / margen_mes * 100) if margen_mes > 0 else 0.0
+
+            comision_total += resultado.comision_final
+            margen_total += margen_mes
+
+            detalle.append(ProyeccionVendedor(
+                vendedor_origen=vendedor, nombre_vendedor=nombres.get(vendedor),
+                periodo_proyectado=periodo, meses_historico_usados=1,
+                venta_neta_promedio=round(venta_neta, 2), margen_bruto_promedio=round(margen_mes, 2),
+                comision_variable_proyectada=round(resultado.comision_final, 2), tasa_efectiva_pct=round(tasa_efectiva, 2),
+            ))
+
+        detalle.sort(key=lambda d: d.comision_variable_proyectada, reverse=True)
+
+        return ResumenProyeccionComision(
+            meses_historico=1, periodo_proyectado=periodo,
+            vendedores_proyectados=len(detalle), comision_variable_total_proyectada=round(comision_total, 2),
+            margen_bruto_total_promedio=round(margen_total, 2),
+            tasa_efectiva_pct_global=round(comision_total / margen_total * 100, 2) if margen_total > 0 else 0.0,
+            detalle=detalle,
+        )
+
     def proyectar_comision_variable(self, meses_historico: int = 3) -> ResumenProyeccionComision:
         """Proyección hacia adelante -- distinta de `simular()` en tres cosas a
         propósito: (1) toma como base los `meses_historico` meses YA CERRADOS más
@@ -211,14 +262,15 @@ class CommissionSimulationService:
         la configuración actual se aplica al patrón de venta reciente de cada vendedor,
         ¿cuánto pagaría el próximo mes" -- no una reconstrucción contable de lo ya
         cerrado; (3) no compara contra el esquema plano (`comision_plana` no existe en
-        este resultado) -- es exclusivamente sobre el esquema variable, por eso
-        `venta_real == monto_meta` en cada mes histórico (cumplimiento neutro, tramo
-        META, multiplicador 1.0): el propósito es aislar la fórmula de
-        margen/categoría/crédito/tipo de vendedor, no adivinar si cumplirá una meta
-        futura que la Consola de Metas (motor IQR) todavía no ha generado. Bonos y
+        este resultado) -- es exclusivamente sobre el TOTAL de Comisiones Variables
+        (líneas de venta + cobranza + contado de agencia, sumadas -- auditoría 44), por
+        eso `venta_real == monto_meta` en cada mes histórico (cumplimiento neutro, tramo
+        META, multiplicador 1.0): el propósito es aislar la fórmula configurada
+        (margen/categoría/crédito/cobranza/tipo de vendedor), no adivinar si cumplirá una
+        meta futura que la Consola de Metas (motor IQR) todavía no ha generado. Bonos y
         devoluciones también se omiten de la proyección por el mismo motivo: son
         eventos puntuales del mes ya cerrado, no un patrón proyectable con la misma
-        base estadística que la venta."""
+        base estadística que la venta/cobranza."""
         if meses_historico not in MESES_PROYECCION_VALIDOS:
             raise ValidationError(
                 f"La proyección solo admite ventanas de {' o '.join(str(m) for m in MESES_PROYECCION_VALIDOS)} meses."
@@ -236,15 +288,11 @@ class CommissionSimulationService:
         periodo_proyectado = f"{anio_proy:04d}-{mes_proy:02d}"
 
         fecha_config = hoy
-        matriz = self.commission_config_repo.get_matriz_as_reglas(fecha_config)
-        rangos_credito = self.commission_config_repo.get_factores_credito_as_rangos(fecha_config)
-        config = ConfigComisionVariable(
-            tope_descuento_pct=settings.COMISION_TOPE_DESCUENTO_PCT,
-            tasa_minima_sin_costo_pct=settings.COMISION_TASA_MINIMA_SIN_COSTO_PCT,
-            umbral_subtotal_x=settings.COMISION_UMBRAL_SUBTOTAL_X,
-            mult_excelente=settings.COMISION_MULT_EXCELENTE, mult_cerca=settings.COMISION_MULT_CERCA,
-            piso_lejos=settings.COMISION_PISO_LEJOS,
-        )
+        # Config vigente HOY: una sola resolución para toda la proyección (matriz/
+        # crédito/fórmula no varían por vendedor ni por mes histórico en este método).
+        formula_componentes = resolver_componentes_formula(self.commission_config_repo)
+        matriz_hoy = self.commission_config_repo.get_matriz_as_reglas(fecha_config)
+        rangos_credito_hoy = self.commission_config_repo.get_factores_credito_as_rangos(fecha_config)
 
         vendedores: set[str] = set()
         for anio, mes in periodos:
@@ -256,29 +304,23 @@ class CommissionSimulationService:
         margen_total = 0.0
 
         for vendedor in sorted(vendedores):
-            config_vendedor = self.commission_config_repo.get_config_vendedor(vendedor, fecha_config)
-            factor_tipo = (
-                float(config_vendedor.factor_tipo) if config_vendedor else settings.COMISION_FACTOR_EXTERNO_DEFAULT
-            )
-
             venta_acumulada = 0.0
             margen_acumulado = 0.0
             comision_acumulada = 0.0
             for anio, mes in periodos:
                 venta_neta = self.goal_repo.get_vendor_net_sales_period(vendedor, anio, mes)
-                lineas_repo = self.goal_repo.get_commission_lines(vendedor, anio, mes)
-                lineas = [
-                    LineaComisionable(
-                        codart=l.codart, clase=l.clase, subclase=l.subclase, es_servicio=l.es_servicio,
-                        subtotal_neto=l.subtotal_neto, margen_bruto=l.margen_bruto,
-                        valor_descuento=l.valor_descuento, dias_plazo=l.dias_plazo,
-                    )
-                    for l in lineas_repo
-                ]
-                resultado = calcular_comision_variable(
-                    lineas=lineas, matriz=matriz, rangos_credito=rangos_credito, factor_tipo_vendedor=factor_tipo,
-                    venta_real=venta_neta, monto_meta=venta_neta, devoluciones_mes=0.0, bonos_total=0.0,
-                    config=config,
+                # `aplicar_ajuste_meta_por_tipo=False`: `venta_real == monto_meta` ya
+                # fuerza el cumplimiento neutro directamente -- pasarlo por
+                # `resolver_meta_sin_ajuste_tipo` dividiría `monto_meta` por el factor de
+                # tipo y rompería esa neutralidad para vendedores externos/internos.
+                # `incluir_bonos`/`incluir_devoluciones=False`: omitidos a propósito (ver
+                # docstring del método).
+                resultado = calcular_comision_variable_completa(
+                    goal_repo=self.goal_repo, commission_config_repo=self.commission_config_repo,
+                    vendedor_origen=vendedor, anio=anio, mes=mes,
+                    venta_real=venta_neta, monto_meta=venta_neta, fecha_config=fecha_config,
+                    aplicar_ajuste_meta_por_tipo=False, incluir_bonos=False, incluir_devoluciones=False,
+                    formula_componentes=formula_componentes, matriz=matriz_hoy, rangos_credito=rangos_credito_hoy,
                 )
                 # El margen mostrado excluye las líneas que el motor clasificó como
                 # grupo X (excluidas de comisión, ej. clase Z-999 "chatarra" -- ver
@@ -286,7 +328,8 @@ class CommissionSimulationService:
                 # aquí distorsionaba el margen mostrado con valores de costo rotos de
                 # líneas que ya no aportan nada a la comisión, y podía volver el
                 # denominador negativo (comisión positiva / margen negativo -> 0.00%
-                # engañoso). `desglose_lineas` preserva el mismo orden que `lineas`.
+                # engañoso).
+                lineas_repo = self.goal_repo.get_commission_lines(vendedor, anio, mes)
                 margen_mes = sum(
                     (l.margen_bruto or 0.0)
                     for l, d in zip(lineas_repo, resultado.desglose_lineas)

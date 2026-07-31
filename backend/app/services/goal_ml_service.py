@@ -291,19 +291,32 @@ class GoalMLService:
         return [RecomendacionComercial(producto_cod=str(row["item_B"]), score_afinidad=float(row["score"])) for _, row in recs_df.iterrows()]
 
     # ── Pronóstico de cierre ───────────────────────────────────────────────────
-    def forecast_cierre(self, sucursal: str | None, meta_mensual: float) -> ForecastCierre:
+    def forecast_cierre(
+        self, sucursal: str | None, meta_mensual: float, vendedor_nombre: str | None = None,
+    ) -> ForecastCierre:
+        """`vendedor_nombre` (auditoría A-0.3, decisión B-3, 2026-07-29): reemplaza
+        `sucursal` como filtro del rol `ventas` -- ver docstring de
+        `AnalyticsRepository.get_sales_performance` para la evidencia completa. Es el
+        `nombre_vendedor` (no el `codven`), porque `DatasetRepository.
+        get_daily_sales_history` ya filtra por ese campo (mismo filtro que usa el
+        selector de vendedor de Gerencia, Fase 3); el caller resuelve `codven ->
+        nombre_vendedor` antes de llamar. `sucursal`/`vendedor_nombre` son mutuamente
+        excluyentes en la práctica (esta función ya no recibe ambos con valor real)."""
         hoy = datetime.date.today()
         ultimo_dia_mes = (datetime.date(hoy.year + (hoy.month == 12), hoy.month % 12 + 1, 1) - datetime.timedelta(days=1))
         dias_restantes = (ultimo_dia_mes - hoy).days
 
         try:
-            df_hist = self.dataset_repo.get_daily_sales_history(sucursal=sucursal)
+            df_hist = self.dataset_repo.get_daily_sales_history(sucursal=sucursal, vendedor=vendedor_nombre)
         except Exception as e:
-            logger.error(f"Fallo consultando historial de ventas para pronóstico de cierre (sucursal={sucursal}): {e}")
+            logger.error(
+                f"Fallo consultando historial de ventas para pronóstico de cierre "
+                f"(sucursal={sucursal}, vendedor={vendedor_nombre}): {e}"
+            )
             raise ExternalDataError("No se pudo consultar el historial de ventas del EDW.") from e
 
         if df_hist.empty:
-            return ForecastCierre(sucursal or "Consolidado", dias_restantes, 0.0, 0.0, meta_mensual, 0.0, None, None)
+            return ForecastCierre(vendedor_nombre or sucursal or "Consolidado", dias_restantes, 0.0, 0.0, meta_mensual, 0.0, None, None)
 
         df_hist["ds"] = pd.to_datetime(df_hist["ds"])
         df_hist = df_hist.sort_values("ds").set_index("ds").resample("D").sum().fillna(0)
@@ -321,7 +334,7 @@ class GoalMLService:
         probabilidad = self._probabilidad_alcanzar_meta(proyeccion_cierre, meta_mensual, mae_modelo, dias_restantes)
 
         return ForecastCierre(
-            sucursal=sucursal or "Consolidado",
+            sucursal=vendedor_nombre or sucursal or "Consolidado",
             dias_restantes=dias_restantes,
             ventas_mes_actual=round(ventas_mes_actual, 2),
             proyeccion_cierre=round(proyeccion_cierre, 2),

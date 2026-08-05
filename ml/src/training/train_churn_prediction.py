@@ -1,10 +1,11 @@
 import logging
+import catboost as cb
 import numpy as np
 from sklearn.metrics import (
     accuracy_score, average_precision_score, classification_report, confusion_matrix,
     f1_score, precision_recall_curve, precision_score, recall_score, roc_auc_score,
 )
-from src.training.model_selector import find_best_classification_model
+from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 from src.utils.model_export import library_versions, save_artifact
 
 logger = logging.getLogger("ML.ChurnPrediction")
@@ -63,9 +64,33 @@ def evaluate_churn_classifier(y_true, y_pred, y_proba):
     return metrics
 
 def train_churn_model(X_train, y_train):
-    logger.info("Entrenando Clasificador competitivo Multi-Boosting para Predicción de Abandono...")
-    best_model = find_best_classification_model(X_train, y_train, cv_splits=3)
-    return best_model
+    """Un solo algoritmo fijo (CatBoost), no una competencia multi-modelo -- decisión
+    explícita del usuario (2026-08-04): antes se corría `find_best_classification_model`
+    (RF/XGBoost/LightGBM/CatBoost compitiendo por ROC-AUC en cada reentrenamiento), pero
+    CatBoost ya es el campeón consistente en `ml/models/churn.meta.json`
+    (`ml/REPORTE_MEJORA_MODELOS.md`); mantener las otras 3 familias solo agregaba tiempo
+    de entrenamiento sin cambiar el resultado. `find_best_classification_model` (
+    `model_selector.py`) se conserva intacta para `train_cross_sell_ranker.py`, que sí
+    sigue en competencia (contrato en `draft`, nunca promovido -- no tiene un campeón
+    fijo que justifique lo mismo)."""
+    logger.info("Entrenando CatBoostClassifier (único algoritmo, ver docstring) para Predicción de Abandono...")
+    cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    search = RandomizedSearchCV(
+        estimator=cb.CatBoostClassifier(random_state=42, verbose=0, auto_class_weights='Balanced'),
+        param_distributions={
+            'iterations': [100, 200],
+            'learning_rate': [0.01, 0.1],
+            'depth': [4, 6],
+        },
+        n_iter=4,
+        cv=cv,
+        scoring='roc_auc',
+        random_state=42,
+        n_jobs=1,  # CatBoost ya paraleliza internamente (ver model_selector.py).
+    )
+    search.fit(X_train, y_train)
+    logger.info(f"CatBoost mejor ROC-AUC de validación: {search.best_score_:.4f} | params: {search.best_params_}")
+    return search.best_estimator_
 
 def save_churn_model(model, filepath=None, metrics=None, features=None, data_range=None):
     save_artifact(

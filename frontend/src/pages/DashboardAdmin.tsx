@@ -1,19 +1,13 @@
 import { useState } from 'react';
-import { Activity, AlertTriangle, Cpu, Database, FileText, ShieldAlert, ShieldCheck, ShieldX, Store, Users } from 'lucide-react';
-import {
-  useActualizarAnomaliaRevision, useAdminResumen, useAnomaliaRevisiones, useAnomalyDetector, useAuditLogs,
-  useModelsStatus, useSystemHealth,
-} from '../hooks/admin';
+import { Activity, AlertTriangle, Cpu, Database, FileText, ShieldCheck, ShieldX, Store, Users } from 'lucide-react';
+import { useAdminResumen, useAuditLogs, useModelsStatus, useSystemHealth } from '../hooks/admin';
 import { usePagination } from '../hooks/usePagination';
 import { Badge } from '../components/ui/Badge';
-import { SearchInput } from '../components/ui/SearchInput';
 import { ChartCard } from '../components/ui/ChartCard';
 import { DataTable, type DataTableColumn } from '../components/ui/DataTable';
 import { KpiCard, KpiCardSkeleton } from '../components/ui/KpiCard';
 import { Pagination } from '../components/ui/Pagination';
-import { Select } from '../components/ui/Select';
 import { DateField } from '../components/ui/DateField';
-import type { AnomaliaEstado, AnomaliaRevision } from '../types/admin';
 
 const levelColor = {
   INFO:  'text-info',
@@ -38,68 +32,10 @@ const auditColumns: DataTableColumn<AuditEntry>[] = [
   { key: 'msg', header: 'Mensaje', render: (e) => <span className="text-slate-300 max-w-xs truncate block">{e.msg}</span> },
 ];
 
-const estadoBadgeVariant: Record<AnomaliaEstado, 'danger' | 'warning' | 'neutral' | 'success'> = {
-  nueva: 'danger',
-  revisada: 'neutral',
-  descartada: 'neutral',
-  confirmada: 'warning',
-};
-
 export const DashboardAdmin = () => {
-  const anomaly = useAnomalyDetector();
   const models = useModelsStatus();
   const health = useSystemHealth();
   const resumen = useAdminResumen();
-  const [txId, setTxId] = useState('');
-
-  // Fase 2 Admin (docs/features/plan_correcciones_pendientes.md §3): triage de
-  // anomalías -- separa "nueva" de lo ya trabajado, en vez de un resultado puntual.
-  const [revisionEstado, setRevisionEstado] = useState<AnomaliaEstado>('nueva');
-  const revisionPagination = usePagination(revisionEstado);
-  const revisiones = useAnomaliaRevisiones(revisionPagination.query, revisionEstado);
-  const actualizarRevision = useActualizarAnomaliaRevision();
-
-  const revisionColumns: DataTableColumn<AnomaliaRevision>[] = [
-    {
-      key: 'fecha_deteccion', header: 'Detectada',
-      render: (r) => <span className="text-slate-500 font-mono text-xs">{new Date(r.fecha_deteccion).toLocaleString()}</span>,
-    },
-    { key: 'transaccion_id', header: 'Transacción', render: (r) => <span className="font-mono text-slate-300">{r.transaccion_id}</span> },
-    { key: 'score', header: 'Score', render: (r) => <span className="font-mono text-slate-400">{r.score.toFixed(4)}</span> },
-    {
-      key: 'estado', header: 'Estado',
-      render: (r) => <Badge variant={estadoBadgeVariant[r.estado]}>{r.estado}</Badge>,
-    },
-    {
-      key: 'acciones', header: 'Acción',
-      render: (r) => (
-        r.estado === 'nueva' ? (
-          <div className="flex gap-1.5">
-            <button
-              type="button"
-              disabled={actualizarRevision.loading}
-              onClick={() => actualizarRevision.execute({ id: r.id, estado: 'confirmada' })}
-              className="px-2 py-1 rounded text-xs font-medium bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20 transition-colors disabled:opacity-50"
-            >
-              Confirmar fraude
-            </button>
-            <button
-              type="button"
-              disabled={actualizarRevision.loading}
-              onClick={() => actualizarRevision.execute({ id: r.id, estado: 'descartada' })}
-              className="px-2 py-1 rounded text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600 transition-colors disabled:opacity-50"
-            >
-              Descartar
-            </button>
-          </div>
-        ) : (
-          <span className="text-xs text-slate-600">
-            {r.fecha_revision ? new Date(r.fecha_revision).toLocaleDateString() : '—'}
-          </span>
-        )
-      ),
-    },
-  ];
 
   const [auditFilters, setAuditFilters] = useState({ fecha_desde: '', fecha_hasta: '', usuario: '', modulo: '' });
   const auditPagination = usePagination(auditFilters);
@@ -110,18 +46,13 @@ export const DashboardAdmin = () => {
     modulo: auditFilters.modulo || undefined,
   });
 
-  const handleSearch = (val: string) => {
-    setTxId(val);
-    anomaly.execute(val);
-  };
-
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-wrap justify-between items-center gap-3 animate-fade-in">
         <div>
           <h1 className="text-3xl font-display font-semibold text-slate-100">Sistema & Administración</h1>
-          <p className="text-sm text-slate-500 mt-0.5">Logs de auditoría · Estado MLOps · Detección de anomalías</p>
+          <p className="text-sm text-slate-500 mt-0.5">Logs de auditoría · Estado MLOps</p>
         </div>
         <Badge variant="success" dot>Sistema operativo</Badge>
       </div>
@@ -144,130 +75,33 @@ export const DashboardAdmin = () => {
         )}
       </div>
 
-      {/* Main 2-column grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-
-        {/* Detección de Anomalías (Isolation Forest) */}
-        <ChartCard
-          title="Detector de Anomalías Transaccionales"
-          badge={{ label: 'Isolation Forest', variant: 'ml' }}
-          height="h-auto"
-        >
-          <div className="space-y-4 py-2">
-            <SearchInput
-              placeholder="ID de transacción (ej: TXN-99821)"
-              onSearch={handleSearch}
-              loading={anomaly.loading}
-              label="Transacción a evaluar"
-            />
-            {txId && !anomaly.loading && (
-              <div className="animate-fade-in">
-                {anomaly.error ? (
-                  <p className="text-danger text-sm">{anomaly.error}</p>
-                ) : anomaly.data ? (
-                  <div className="p-5 rounded-xl border bg-slate-800/40 border-slate-700 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <p className="text-xs text-slate-500 uppercase tracking-widest">Resultado del análisis</p>
-                      <Badge variant={anomaly.data.es_anomalia ? 'danger' : 'success'} dot>
-                        {anomaly.data.es_anomalia ? 'Anomalía Detectada' : 'Transacción Normal'}
-                      </Badge>
-                    </div>
-                    <div className="flex gap-6">
-                      <div>
-                        <p className="text-xs text-slate-500">Anomaly Score</p>
-                        <p className="font-mono text-2xl font-semibold text-slate-100">{anomaly.data.score.toFixed(4)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-500">Transacción ID</p>
-                        <p className="font-mono text-sm text-slate-300 mt-1">{anomaly.data.transaccion_id}</p>
-                      </div>
-                    </div>
-                    {/* Score visual bar */}
-                    <div className="h-2.5 bg-slate-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-700 ${anomaly.data.es_anomalia ? 'bg-danger' : 'bg-success'}`}
-                        style={{ width: `${Math.min(100, Math.abs(anomaly.data.score) * 100)}%` }}
-                      />
-                    </div>
+      {/* Estado MLOps */}
+      <ChartCard
+        title="Estado de Modelos ML (MLOps)"
+        badge={{ label: 'En producción', variant: 'live' }}
+        height="h-auto"
+      >
+        <div className="space-y-3 py-2">
+          {models.loading ? (
+            <p className="text-sm text-slate-500">Cargando estado de modelos…</p>
+          ) : models.error ? (
+            <p className="text-sm text-danger">{models.error}</p>
+          ) : (
+            models.data.map((m) => (
+              <div key={m.name} className="flex items-center justify-between p-3 rounded-lg bg-slate-800/40 border border-slate-700 hover:border-slate-600 transition-colors">
+                <div className="flex items-center gap-3">
+                  <Cpu size={16} className="text-info flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-slate-200">{m.name}</p>
+                    {m.r2 != null && <p className="text-xs text-slate-500 font-mono">R² = {m.r2.toFixed(2)}</p>}
                   </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-        </ChartCard>
-
-        {/* Estado MLOps */}
-        <ChartCard
-          title="Estado de Modelos ML (MLOps)"
-          badge={{ label: 'En producción', variant: 'live' }}
-          height="h-auto"
-        >
-          <div className="space-y-3 py-2">
-            {models.loading ? (
-              <p className="text-sm text-slate-500">Cargando estado de modelos…</p>
-            ) : models.error ? (
-              <p className="text-sm text-danger">{models.error}</p>
-            ) : (
-              models.data.map((m) => (
-                <div key={m.name} className="flex items-center justify-between p-3 rounded-lg bg-slate-800/40 border border-slate-700 hover:border-slate-600 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <Cpu size={16} className="text-info flex-shrink-0" />
-                    <div>
-                      <p className="text-sm font-medium text-slate-200">{m.name}</p>
-                      {m.r2 != null && <p className="text-xs text-slate-500 font-mono">R² = {m.r2.toFixed(2)}</p>}
-                    </div>
-                  </div>
-                  <Badge variant={m.status === 'OK' ? 'success' : 'danger'}>{m.status}</Badge>
                 </div>
-              ))
-            )}
-          </div>
-        </ChartCard>
-      </div>
-
-      {/* Triage de Anomalías (Fase 2, docs/features/plan_correcciones_pendientes.md §3) */}
-      <div className="animate-fade-in-up stagger-1">
-        <div className="flex items-center gap-3 mb-3 flex-wrap">
-          <ShieldAlert size={18} className="text-slate-400" aria-hidden="true" />
-          <h3 className="font-sans font-semibold text-slate-200">Triage de Anomalías</h3>
-          <Badge variant="neutral">{revisiones.total} en "{revisionEstado}"</Badge>
-          <div className="ml-auto">
-            <Select
-              size="sm"
-              value={revisionEstado}
-              onChange={(e) => setRevisionEstado(e.target.value as AnomaliaEstado)}
-            >
-              <option value="nueva">Nuevas</option>
-              <option value="confirmada">Confirmadas</option>
-              <option value="descartada">Descartadas</option>
-              <option value="revisada">Revisadas</option>
-            </Select>
-          </div>
+                <Badge variant={m.status === 'OK' ? 'success' : 'danger'}>{m.status}</Badge>
+              </div>
+            ))
+          )}
         </div>
-
-        <DataTable
-          columns={revisionColumns}
-          data={revisiones.data}
-          loading={revisiones.loading}
-          rowKey={(r) => r.id}
-          emptyTitle={revisionEstado === 'nueva' ? 'Sin anomalías nuevas' : `Sin anomalías en estado "${revisionEstado}"`}
-          emptyDescription="Las transacciones calificadas como anómalas por el detector aparecen aquí para su revisión."
-        />
-        <Pagination
-          page={revisionPagination.page}
-          pageSize={revisionPagination.pageSize}
-          total={revisiones.total}
-          totalPages={revisiones.totalPages}
-          onPageChange={revisionPagination.setPage}
-          onPageSizeChange={revisionPagination.setPageSize}
-        />
-        {(revisiones.error || actualizarRevision.error) && (
-          <div className="flex items-center gap-2 text-xs text-danger mt-3">
-            <Activity size={12} aria-hidden="true" />
-            <span>{revisiones.error ?? actualizarRevision.error}</span>
-          </div>
-        )}
-      </div>
+      </ChartCard>
 
       {/* Panel de salud del sistema (Fase 2 Admin, docs/features/plan_correcciones_pendientes.md §3) */}
       <div className="animate-fade-in-up stagger-1">

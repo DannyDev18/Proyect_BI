@@ -24,9 +24,10 @@ from app.repositories.commission_config_repository import CommissionConfigReposi
 from app.repositories.goal_repository import GoalRepository
 from app.services.commission_bonus import calcular_bonos_periodo
 from app.services.commission_engine import (
-    CobroComisionable, ConfigComisionVariable, DesgloseLinea, DesgloseTramoCobranza, LineaComisionable,
-    NivelCumplimiento, PasoFormula, calcular_base_lineas_venta, calcular_comision_cobranza,
-    calcular_contado_agencia, calcular_nivel, evaluar_formula, resolver_meta_sin_ajuste_tipo,
+    UMBRAL_CERCA, UMBRAL_EXCELENTE, UMBRAL_META, CobroComisionable, ConfigComisionVariable, DesgloseLinea,
+    DesgloseTramoCobranza, LineaComisionable, NivelCumplimiento, PasoFormula, TramoCumplimiento,
+    calcular_base_lineas_venta, calcular_comision_cobranza, calcular_contado_agencia, calcular_nivel,
+    evaluar_formula, resolver_meta_sin_ajuste_tipo, resolver_tramo_cumplimiento,
 )
 
 
@@ -51,6 +52,20 @@ COMPONENTES_FALLBACK = (
 )
 
 
+# Fallback defensivo si `public.comision_tramos_cumplimiento` no tiene ninguna fila
+# vigente (dato borrado a mano) -- reproduce byte a byte el comportamiento de los 4
+# tramos fijos que el motor usaba antes de la auditoría 45 (`UMBRAL_*`/
+# `COMISION_MULT_*`), NO el umbral de 90%/escala de sobrecumplimiento nuevos: es una
+# red de seguridad para no dejar a un vendedor sin comisión por un problema de
+# configuración, no una forma de reintroducir CERCA=0.7x a propósito.
+TRAMOS_CUMPLIMIENTO_FALLBACK = (
+    TramoCumplimiento(0.0, UMBRAL_CERCA * 100, settings.COMISION_PISO_LEJOS, "Lejos (fallback)"),
+    TramoCumplimiento(UMBRAL_CERCA * 100, UMBRAL_META * 100, settings.COMISION_MULT_CERCA, "Cerca (fallback)"),
+    TramoCumplimiento(UMBRAL_META * 100, UMBRAL_EXCELENTE * 100, 1.0, "Meta (fallback)"),
+    TramoCumplimiento(UMBRAL_EXCELENTE * 100, None, settings.COMISION_MULT_EXCELENTE, "Excelente (fallback)"),
+)
+
+
 @dataclass(frozen=True)
 class ResultadoComisionVariable:
     montos: dict[str, float]
@@ -59,6 +74,13 @@ class ResultadoComisionVariable:
     desglose_cobranza: tuple[DesgloseTramoCobranza, ...] | None
     comision_final: float
     traza_formula: tuple[dict, ...]
+    # Auditoría 45: el tramo de cumplimiento efectivamente aplicado (etiqueta,
+    # multiplicador, bono fijo) y el % de cumplimiento sobre el que se resolvió --
+    # `nivel`/`NivelCumplimiento` se conservan sin cambios por compatibilidad con
+    # `ComisionVariableCalculada`/los snapshots ya congelados; estos campos son la
+    # fuente real del multiplicador desde la auditoría 45.
+    pct_cumplimiento: float = 0.0
+    tramo: TramoCumplimiento | None = None
 
 
 def resolver_componentes_formula(commission_config_repo: CommissionConfigRepository):
@@ -70,6 +92,19 @@ def resolver_componentes_formula(commission_config_repo: CommissionConfigReposit
     cada llamada dispare su propia consulta."""
     formula_activa = commission_config_repo.get_formula_activa()
     return formula_activa[1] if formula_activa is not None else COMPONENTES_FALLBACK
+
+
+def resolver_tramos_cumplimiento(
+    commission_config_repo: CommissionConfigRepository, perfil: str | None, fecha_config: datetime.date,
+) -> list[TramoCumplimiento]:
+    """Igual que `resolver_componentes_formula` pero para los tramos de cumplimiento
+    (auditoría 45): los llamadores que iteran muchos vendedores/períodos (el
+    simulador) deben resolverlos UNA vez por período/perfil y pasarlos como
+    `tramos_cumplimiento`. A diferencia de la fórmula, los tramos SÍ tienen vigencia
+    por fecha (igual que la matriz de categorías) -- se resuelven a `fecha_config`, no
+    "hoy"."""
+    tramos = commission_config_repo.get_tramos_cumplimiento_as_tramos(perfil, fecha_config)
+    return tramos if tramos else list(TRAMOS_CUMPLIMIENTO_FALLBACK)
 
 
 def calcular_comision_variable_completa(
@@ -86,6 +121,7 @@ def calcular_comision_variable_completa(
     formula_componentes=None,
     matriz=None,
     rangos_credito=None,
+    tramos_cumplimiento=None,
 ) -> ResultadoComisionVariable:
     """Resuelve el monto real de CADA componente activo de la fórmula vigente y evalúa
     la tubería declarativa (`evaluar_formula`) -- usado tanto por el cálculo real
@@ -93,9 +129,10 @@ def calcular_comision_variable_completa(
     ambos calculen exactamente lo mismo.
 
     `fecha_config`: fecha a la que se resuelven matriz de categorías, factores de
-    crédito, tramos de cobranza y (salvo que se pase `fecha_config_vendedor_meta`) el
-    tipo/factor/agencia del vendedor -- "vigente al cierre del período" en el cálculo
-    real, "vigente hoy" en la reconstrucción retroactiva de un mes específico.
+    crédito, tramos de cobranza, tramos de cumplimiento y (salvo que se pase
+    `fecha_config_vendedor_meta`) el tipo/factor/agencia del vendedor -- "vigente al
+    cierre del período" en el cálculo real, "vigente hoy" en la reconstrucción
+    retroactiva de un mes específico.
     `fecha_config_vendedor_meta`: caso especial de `reconstruir_mes_especifico` -- el
     tipo de vendedor para DESHACER el ajuste de la meta debe ser el vigente EN ESE
     período histórico, no el de hoy, aunque el resto de la configuración sí sea la de hoy.
@@ -104,9 +141,9 @@ def calcular_comision_variable_completa(
     `resolver_meta_sin_ajuste_tipo` (dividiría por el factor y rompería la neutralidad).
     `incluir_bonos`/`incluir_devoluciones`: la proyección los omite a propósito (eventos
     puntuales del mes ya cerrado, no un patrón proyectable).
-    `formula_componentes`/`matriz`/`rangos_credito`: pre-resueltos por el llamador
-    cuando itera muchos vendedores de un mismo período (el simulador) -- evita repetir
-    la misma consulta de vigencia una vez por vendedor. `None` (el caso de
+    `formula_componentes`/`matriz`/`rangos_credito`/`tramos_cumplimiento`: pre-resueltos
+    por el llamador cuando itera muchos vendedores de un mismo período (el simulador) --
+    evita repetir la misma consulta de vigencia una vez por vendedor. `None` (el caso de
     `CommissionService`, una sola vez por llamada) los resuelve aquí mismo."""
     componentes = formula_componentes if formula_componentes is not None else resolver_componentes_formula(commission_config_repo)
     activos = [c for c in componentes if c.activo]
@@ -150,9 +187,11 @@ def calcular_comision_variable_completa(
             for l in lineas_repo
         ]
         matriz_resuelta = matriz if matriz is not None else commission_config_repo.get_matriz_as_reglas(fecha_config)
-        rangos_credito_resueltos = (
-            rangos_credito if rangos_credito is not None else commission_config_repo.get_factores_credito_as_rangos(fecha_config)
-        )
+        # Retirado (Fase 3, R-7, auditoría 30 H4): el factor de plazo de crédito no
+        # discrimina nada real (solo hay datos de 0 y 30 días en el EDW) -- ya no se
+        # consulta `comision_factores_credito`; `_factor_credito` es neutro (1.0)
+        # sin importar qué se pase aquí.
+        rangos_credito_resueltos: list = []
         config = ConfigComisionVariable(
             tope_descuento_pct=settings.COMISION_TOPE_DESCUENTO_PCT,
             tasa_minima_sin_costo_pct=settings.COMISION_TASA_MINIMA_SIN_COSTO_PCT,
@@ -170,6 +209,8 @@ def calcular_comision_variable_completa(
         )
 
     nivel = NivelCumplimiento.LEJOS
+    pct_cumplimiento = 0.0
+    tramo: TramoCumplimiento | None = None
     if "multiplicador_cumplimiento" in claves_activas:
         if aplicar_ajuste_meta_por_tipo:
             config_vendedor_meta = (
@@ -185,14 +226,17 @@ def calcular_comision_variable_completa(
         else:
             meta_cumplimiento = monto_meta
         fraccion = (venta_real / meta_cumplimiento) if meta_cumplimiento > 0 else 0.0
+        # `nivel`/`NivelCumplimiento` se conservan sin cambios (compatibilidad con
+        # `ComisionVariableCalculada`/snapshots ya congelados) -- el multiplicador
+        # REAL desde la auditoría 45 sale de `tramo`, resuelto en % (no fracción).
         nivel = calcular_nivel(fraccion) if meta_cumplimiento > 0 else NivelCumplimiento.LEJOS
-        multiplicadores = {
-            NivelCumplimiento.EXCELENTE: settings.COMISION_MULT_EXCELENTE,
-            NivelCumplimiento.META: 1.0,
-            NivelCumplimiento.CERCA: settings.COMISION_MULT_CERCA,
-            NivelCumplimiento.LEJOS: settings.COMISION_PISO_LEJOS,
-        }
-        montos["multiplicador_cumplimiento"] = multiplicadores[nivel]
+        pct_cumplimiento = round(fraccion * 100, 4)
+        tramos_resueltos = (
+            tramos_cumplimiento if tramos_cumplimiento is not None
+            else resolver_tramos_cumplimiento(commission_config_repo, perfil, fecha_config)
+        )
+        tramo = resolver_tramo_cumplimiento(pct_cumplimiento, tramos_resueltos)
+        montos["multiplicador_cumplimiento"] = tramo.multiplicador
 
     if "devoluciones" in claves_activas:
         if incluir_devoluciones:
@@ -230,12 +274,53 @@ def calcular_comision_variable_completa(
             ]
             referencia_bonos = evaluar_formula(pasos_referencia_formula).comision_final
             bonos_total = calcular_bonos_periodo(goal_repo, vendedor_origen, anio, mes, referencia_bonos)
+            # Bono fijo del tramo de cumplimiento alcanzado (auditoría 45, §3.2 punto 2
+            # del plan) -- sembrado en $0, se suma aquí solo si gerencia lo activa desde
+            # el panel. Se omite en la proyección igual que los demás bonos
+            # (`incluir_bonos=False`): es un evento del mes ya cerrado, no proyectable.
+            if tramo is not None:
+                bonos_total = round(bonos_total + tramo.bono_fijo, 4)
         montos["bonos"] = bonos_total
 
     pasos = [PasoFormula(c.orden, c.componente, c.operador, montos.get(c.componente, 0.0)) for c in activos]
     resultado = evaluar_formula(pasos)
 
+    # Compuerta de cumplimiento sobre la comisión COMPLETA (docs/features/
+    # plan_motor_metas_v3_y_comisiones_unificadas.md, Fase 2, R-2, auditoría 47 §1.3):
+    # antes, `bonos` era un paso `sumar` POSTERIOR al `multiplicar` de
+    # `multiplicador_cumplimiento` en la tubería -- un vendedor bajo el umbral de pago
+    # (tramo con multiplicador 0.0, "Sin comisión") igual cobraba el 100% de sus bonos,
+    # dejando RN-CM16 ("no comisiona bajo el 90%") falsa en la práctica para ese
+    # componente. La regla de negocio es literal: "si no alcanza la meta, no
+    # comisiona" -- sin excepción para bonos. Se aplica como compuerta FINAL sobre el
+    # resultado ya acumulado (bonos incluidos), no reordenando la tubería configurable
+    # (que sigue calculando exactamente lo mismo para cualquier tramo con
+    # multiplicador > 0 -- Meta, Sobrecumplimiento -- donde el gate no cambia nada).
+    comision_final = resultado.comision_final
+    traza_formula = resultado.pasos
+    if "multiplicador_cumplimiento" in claves_activas and tramo is not None and tramo.multiplicador <= 0.0:
+        comision_final = 0.0
+        # Bug real encontrado en vivo (auditoría 47, continuación de la Fase 2): la
+        # compuerta ya forzaba `comision_final=0.0`, pero la TRAZA (`traza_formula`,
+        # expuesta al usuario como el desglose "componentes" de cada vendedor) seguía
+        # mostrando `evaluar_formula` operando sobre el acumulado sin la compuerta --
+        # `devoluciones`/`bonos` posteriores al paso `multiplicador_cumplimiento`
+        # aparecían restando/sumando sobre un acumulado que ya debía estar en $0,
+        # terminando en un "acumulado_tras_paso" final distinto de cero pese a que
+        # `comision_devengada` real era $0 -- gerencia veía un desglose que parecía
+        # decir "este vendedor sí cobra $X" contradiciendo el total mostrado. Se
+        # reescribe la traza desde el paso `multiplicador_cumplimiento` (inclusive) en
+        # adelante para que quede en $0, consistente con la comisión final real.
+        pasos_reescritos = []
+        compuerta_alcanzada = False
+        for paso in traza_formula:
+            if paso["componente"] == "multiplicador_cumplimiento":
+                compuerta_alcanzada = True
+            pasos_reescritos.append({**paso, "acumulado_tras_paso": 0.0} if compuerta_alcanzada else paso)
+        traza_formula = tuple(pasos_reescritos)
+
     return ResultadoComisionVariable(
         montos=montos, nivel=nivel, desglose_lineas=desglose_lineas, desglose_cobranza=desglose_cobranza,
-        comision_final=resultado.comision_final, traza_formula=resultado.pasos,
+        comision_final=comision_final, traza_formula=traza_formula,
+        pct_cumplimiento=pct_cumplimiento, tramo=tramo,
     )

@@ -1,5 +1,5 @@
 # backend/app/services/system_service.py
-"""Procedencia de datos del sistema: última carga del DW + estado real de los 6
+"""Procedencia de datos del sistema: última carga del DW + estado real de los 4
 modelos ML. Reemplaza el mock `PROVENANCE_FACTS` del frontend (docs/auditoria/
 33_actualizacion_modulo_gerencia.md, H4) -- sin modelos ML nuevos, reutiliza
 `ModelLoader` (mismo patrón de `admin_ml.py::get_models_status`)."""

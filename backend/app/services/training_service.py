@@ -35,7 +35,7 @@ from app.core.exceptions import ExternalDataError
 
 logger = logging.getLogger("Backend.TrainingService")
 
-CLAVES_VALIDAS = ["sales_rf", "demand_rf", "churn_rf", "segmentation", "association", "anomaly"]
+CLAVES_VALIDAS = ["demand_rf", "churn_rf", "segmentation", "association"]
 
 ML_IMAGE = "proyect_bi-ml"
 COMPOSE_NETWORK = "proyect_bi_default"

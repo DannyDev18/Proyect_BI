@@ -117,7 +117,7 @@ export const DashboardVentas = () => {
             />
             <KpiCard
               title="Próximo pago de comisión"
-              value={fmtMoney(data.comision.comision_variable ?? data.comision.comision_devengada)}
+              value={fmtMoney(data.comision.comision_devengada)}
               subValue={`Tasa ${data.comision.tasa_aplicada_pct.toFixed(2)}% · ${data.comision.dias_restantes_mes} días restantes`}
               icon={Wallet}
               trend="neutral"

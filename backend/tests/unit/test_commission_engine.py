@@ -4,9 +4,9 @@ import datetime
 import pytest
 
 from app.services.commission_engine import (
-    ConfigComisionVariable, LineaComisionable, NivelCumplimiento, RangoCredito, ReglaCategoria,
+    ConfigComisionVariable, LineaComisionable, NivelCumplimiento, RangoCredito, ReglaCategoria, TramoCumplimiento,
     calcular_comision, calcular_comision_variable, calcular_nivel, es_vendedor_nuevo,
-    resolver_meta_sin_ajuste_tipo,
+    resolver_meta_sin_ajuste_tipo, resolver_tramo_cumplimiento,
 )
 
 
@@ -130,16 +130,20 @@ def test_ejemplo_numerico_propuesta_grupo_a_b_c_s():
     assert r.comision_final == pytest.approx(67.50 * 1.2)
 
 
-def test_factor_credito_reduce_comision_de_la_linea():
-    """docs/features/nueva_propuesta_comision.md §4, Caso 2: venta a 30 días,
-    margen $3.500, categoría A tasa 13% -> $455 base, factor 0.85 -> $386.75."""
+def test_factor_credito_retirado_no_afecta_la_comision_de_la_linea():
+    """docs/features/plan_motor_metas_v3_y_comisiones_unificadas.md, Fase 3, R-7
+    (auditoría 30, H4): el factor de plazo de crédito se retiró del cálculo -- sin
+    datos discriminantes reales en el EDW (solo 0 y 30 días). `_factor_credito` es
+    neutro (1.0) sin importar qué rangos se pasen, incluso rangos que antes habrían
+    penalizado la línea (factor 0.85 a 30 días)."""
     matriz = [ReglaCategoria(clase="A", subclase=None, grupo="A", tasa_pct=13.0, base="margen", factor_estrategico=1.0)]
     lineas = [_linea(codart="P1", clase="A", subtotal_neto=10000.0, margen_bruto=3500.0, dias_plazo=30)]
     r = calcular_comision_variable(
         lineas=lineas, matriz=matriz, rangos_credito=CREDITO, factor_tipo_vendedor=1.0,
         venta_real=10000.0, monto_meta=10000.0, devoluciones_mes=0.0, bonos_total=0.0, config=CONFIG,
     )
-    assert r.comision_base == pytest.approx(455.0 * 0.85, rel=1e-3)
+    assert r.comision_base == pytest.approx(455.0, rel=1e-3)
+    assert r.desglose_lineas[0].factor_credito == pytest.approx(1.0)
 
 
 def test_linea_sin_costo_usa_tasa_minima_sobre_valor():
@@ -361,3 +365,43 @@ def test_interno_no_gana_excelente_solo_por_meta_floja():
     )
     fraccion_corregida = venta_real / meta_corregida
     assert calcular_nivel(fraccion_corregida) == NivelCumplimiento.META  # corregido: sin bono falso
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tramos de cumplimiento (auditoría 45, docs/features/plan_comisiones_
+# sobrecumplimiento_umbral_y_desglose.md): umbral mínimo de pago al 90% y escala de
+# sobrecumplimiento configurable -- reemplaza los tramos fijos como fuente del
+# multiplicador del componente `multiplicador_cumplimiento`.
+# ══════════════════════════════════════════════════════════════════════════════
+TRAMOS_SEMILLA = [
+    TramoCumplimiento(0.0, 90.0, 0.0, "Sin comisión (< 90% de la meta)"),
+    TramoCumplimiento(90.0, 100.0, 1.0, "Meta"),
+    TramoCumplimiento(100.0, 110.0, 1.2, "Sobrecumplimiento"),
+    TramoCumplimiento(110.0, 125.0, 1.35, "Sobrecumplimiento alto"),
+    TramoCumplimiento(125.0, None, 1.5, "Excelencia"),
+]
+
+
+def test_resolver_tramo_cumplimiento_umbral_90():
+    assert resolver_tramo_cumplimiento(89.99, TRAMOS_SEMILLA).multiplicador == 0.0
+    assert resolver_tramo_cumplimiento(89.99, TRAMOS_SEMILLA).etiqueta == "Sin comisión (< 90% de la meta)"
+    assert resolver_tramo_cumplimiento(90.0, TRAMOS_SEMILLA).multiplicador == 1.0
+
+
+def test_resolver_tramo_cumplimiento_escala_sobrecumplimiento():
+    assert resolver_tramo_cumplimiento(100.0, TRAMOS_SEMILLA).multiplicador == 1.2
+    assert resolver_tramo_cumplimiento(109.99, TRAMOS_SEMILLA).multiplicador == 1.2
+    assert resolver_tramo_cumplimiento(110.0, TRAMOS_SEMILLA).multiplicador == 1.35
+    assert resolver_tramo_cumplimiento(125.0, TRAMOS_SEMILLA).multiplicador == 1.5
+    assert resolver_tramo_cumplimiento(500.0, TRAMOS_SEMILLA).multiplicador == 1.5  # sin tope superior
+
+
+def test_resolver_tramo_cumplimiento_sin_tramos_usa_ultimo_recurso():
+    """Dato corrupto (ningún tramo cubre el rango, o la lista viene vacía sin fallback
+    del llamador): se devuelve el tramo de mayor `pct_desde` en vez de reventar un
+    cálculo de dinero real."""
+    tramos_con_hueco = [TramoCumplimiento(0.0, 50.0, 0.0, "Bajo"), TramoCumplimiento(200.0, None, 2.0, "Alto")]
+    assert resolver_tramo_cumplimiento(100.0, tramos_con_hueco).etiqueta == "Alto"
+
+    with pytest.raises(ValueError):
+        resolver_tramo_cumplimiento(50.0, [])

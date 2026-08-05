@@ -13,9 +13,10 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.models.commission_config import (
     ComisionConfigAuditoria, ComisionConfigVendedor, ComisionFactorCredito, ComisionFormula,
     ComisionFormulaComponente, ComisionLiquidacion, ComisionMatrizCategoria, ComisionTramoCobranza,
+    ComisionTramoCumplimiento,
 )
 from app.models.user import User
-from app.services.commission_engine import RangoCredito, ReglaCategoria, TramoCobranza
+from app.services.commission_engine import RangoCredito, ReglaCategoria, TramoCobranza, TramoCumplimiento
 
 
 class CommissionConfigRepository:
@@ -237,6 +238,98 @@ class CommissionConfigRepository:
         nuevos = [
             ComisionTramoCobranza(
                 perfil=perfil, dias_hasta=t.get("dias_hasta"), tasa_pct=t["tasa_pct"],
+                vigente_desde=hoy, creado_por=creado_por,
+            )
+            for t in tramos
+        ]
+        self.db.add_all(nuevos)
+        self.db.commit()
+        for n in nuevos:
+            self.db.refresh(n)
+        return nuevos
+
+    # ── Tramos de cumplimiento (auditoría 45: multiplicador de sobrecumplimiento y ──
+    # ── umbral mínimo de pago, configurables en vez de constantes de módulo) ────────
+    def get_tramos_cumplimiento_vigentes(
+        self, perfil: str | None = None, fecha: datetime.date | None = None,
+    ) -> list[ComisionTramoCumplimiento]:
+        """Resuelve por perfil específico si existen tramos vigentes para él; si no
+        (caso normal hoy: la semilla solo tiene `perfil IS NULL`), cae a los tramos
+        genéricos -- mismo criterio de especificidad que `ComisionMatrizCategoria`
+        (clase/subclase vs. comodín `'*'`)."""
+        fecha = fecha or datetime.date.today()
+        if perfil is not None:
+            especificos = (
+                self.db.query(ComisionTramoCumplimiento)
+                .filter(
+                    ComisionTramoCumplimiento.perfil == perfil,
+                    ComisionTramoCumplimiento.vigente_desde <= fecha,
+                    (ComisionTramoCumplimiento.vigente_hasta.is_(None)) | (ComisionTramoCumplimiento.vigente_hasta >= fecha),
+                )
+                .order_by(ComisionTramoCumplimiento.pct_desde.asc())
+                .all()
+            )
+            if especificos:
+                return especificos
+        return (
+            self.db.query(ComisionTramoCumplimiento)
+            .filter(
+                ComisionTramoCumplimiento.perfil.is_(None),
+                ComisionTramoCumplimiento.vigente_desde <= fecha,
+                (ComisionTramoCumplimiento.vigente_hasta.is_(None)) | (ComisionTramoCumplimiento.vigente_hasta >= fecha),
+            )
+            .order_by(ComisionTramoCumplimiento.pct_desde.asc())
+            .all()
+        )
+
+    def get_todos_tramos_cumplimiento_vigentes(self, fecha: datetime.date | None = None) -> list[ComisionTramoCumplimiento]:
+        """Todos los tramos vigentes (genéricos + los específicos por perfil que
+        existan) -- para el panel de configuración de gerencia."""
+        fecha = fecha or datetime.date.today()
+        return (
+            self.db.query(ComisionTramoCumplimiento)
+            .filter(
+                ComisionTramoCumplimiento.vigente_desde <= fecha,
+                (ComisionTramoCumplimiento.vigente_hasta.is_(None)) | (ComisionTramoCumplimiento.vigente_hasta >= fecha),
+            )
+            .order_by(ComisionTramoCumplimiento.perfil.asc().nulls_first(), ComisionTramoCumplimiento.pct_desde.asc())
+            .all()
+        )
+
+    def get_tramos_cumplimiento_as_tramos(
+        self, perfil: str | None = None, fecha: datetime.date | None = None,
+    ) -> list[TramoCumplimiento]:
+        return [
+            TramoCumplimiento(
+                pct_desde=float(t.pct_desde), pct_hasta=(float(t.pct_hasta) if t.pct_hasta is not None else None),
+                multiplicador=float(t.multiplicador), etiqueta=t.etiqueta, bono_fijo=float(t.bono_fijo),
+            )
+            for t in self.get_tramos_cumplimiento_vigentes(perfil, fecha)
+        ]
+
+    def replace_tramos_cumplimiento(
+        self, perfil: str | None, tramos: list[dict], creado_por: int | None,
+    ) -> list[ComisionTramoCumplimiento]:
+        """Reemplaza los tramos vigentes de un `perfil` (o los genéricos si
+        `perfil=None`) -- mismo patrón que `replace_tramos_cobranza`: cierra las filas
+        vigentes de ese `perfil` exacto e inserta las nuevas. Los tramos de otros
+        perfiles no se tocan."""
+        hoy = datetime.date.today()
+        vigentes = (
+            self.db.query(ComisionTramoCumplimiento)
+            .filter(
+                ComisionTramoCumplimiento.perfil == perfil if perfil is not None else ComisionTramoCumplimiento.perfil.is_(None),
+                ComisionTramoCumplimiento.vigente_hasta.is_(None),
+            )
+            .all()
+        )
+        for t in vigentes:
+            t.vigente_hasta = hoy - datetime.timedelta(days=1)
+
+        nuevos = [
+            ComisionTramoCumplimiento(
+                perfil=perfil, pct_desde=t["pct_desde"], pct_hasta=t.get("pct_hasta"),
+                multiplicador=t["multiplicador"], etiqueta=t["etiqueta"], bono_fijo=t.get("bono_fijo", 0.0),
                 vigente_desde=hoy, creado_por=creado_por,
             )
             for t in tramos

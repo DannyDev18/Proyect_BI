@@ -1,12 +1,12 @@
 # backend/app/repositories/prediction_repository.py
-"""SQL de features "de un registro vivo" para inferencia puntual: churn, anomalías,
-recomendaciones y segmentación RFM de un cliente/transacción específico.
+"""SQL de features "de un registro vivo" para inferencia puntual: churn, recomendaciones
+y segmentación RFM de un cliente/transacción específico.
 
 Fase 4 (docs/ml_contracts.md): las columnas y su semántica se alinean EXACTAMENTE con
 el contrato de cada modelo (`ml/contracts/models/*.json`), construido durante el
 entrenamiento (Fase 3) en `ml/src/data/make_dataset.py`. Antes había un mismatch de
-nombres y semántica entre entrenamiento y serving (H-03 churn, H-04 anomalías, H-14
-RFM) que hacía que estos endpoints nunca produjeran una predicción válida."""
+nombres y semántica entre entrenamiento y serving (H-03 churn, H-14 RFM) que hacía que
+estos endpoints nunca produjeran una predicción válida."""
 from typing import NamedTuple
 
 import pandas as pd
@@ -24,14 +24,6 @@ class ChurnFeatures(NamedTuple):
     frequency: float
     monetary_value: float
     average_ticket: float
-
-
-class AnomalyFeatures(NamedTuple):
-    """Mismas 4 columnas que ml/contracts/models/anomalies.json (H-04, cerrado)."""
-    subtotal_neto: float
-    cantidad: float
-    costo_total: float
-    margen: float
 
 
 class ClientPurchaseHistory(NamedTuple):
@@ -106,27 +98,6 @@ class PredictionRepository:
             lambda r: r["monetary_value"] / r["frequency"] if r["frequency"] > 0 else 0.0, axis=1,
         )
         return df
-
-    def get_transaction_features(self, transaccion_id: str) -> AnomalyFeatures | None:
-        query = """
-            SELECT fvd.subtotal_neto, fvd.cantidad, fvd.costo_total,
-                   (fvd.subtotal_neto - fvd.costo_total) AS margen
-            FROM edw.fact_ventas_detalle fvd
-            WHERE fvd.num_factura = :tx_id
-            LIMIT 1;
-        """
-        res = self.db.execute(text(query), {"tx_id": transaccion_id}).fetchone()
-        if not res or res[2] is None:
-            # costo_total NULL: misma política de nulos del entrenamiento (H-19, cerrado
-            # en Fase 3) -- se excluye en vez de imputar con 0 (reintroduciría el margen
-            # 100% artificial que el EDW nuevo eliminó como centinela).
-            return None
-        return AnomalyFeatures(
-            subtotal_neto=float(res[0]),
-            cantidad=float(res[1]),
-            costo_total=float(res[2]),
-            margen=float(res[3]),
-        )
 
     def get_client_purchase_history(self, cliente_id: str, limit: int = 10) -> ClientPurchaseHistory:
         query = """

@@ -1,12 +1,12 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, Line, ComposedChart,
   PieChart, Pie, Cell, Legend, Brush
 } from 'recharts';
 import { DollarSign, TrendingUp, ShoppingBag, Target, FileSpreadsheet } from 'lucide-react';
 import {
-  useGerenciaKPIs, useSalesPrediction, useRevenueByCategory, useCategories, useVendedores, useAlmacenes,
+  useGerenciaKPIs, useEvolucionMensualVentas, useRevenueByCategory, useCategories, useVendedores, useAlmacenes,
 } from '../hooks/gerencia';
 import { descargarReporteDashboardExcel } from '../services/gerencia';
 import { MODO_COMPARACION_LABEL, type ModoComparacion } from '../types/gerencia';
@@ -33,16 +33,33 @@ export const DashboardGerencia = () => {
     // G-04: período de referencia de las tendencias. Solo aplica con fechas explícitas.
     modo_comparacion: 'periodo_anterior' as ModoComparacion,
   });
-  const [granularidad, setGranularidad] = useState<'semana' | 'mes'>('semana');
+  const [ventanaMeses, setVentanaMeses] = useState<12 | 24>(24);
   const [descargando, setDescargando] = useState(false);
   const toast = useToast();
 
   const kpi  = useGerenciaKPIs(filters);
-  const pred = useSalesPrediction({ granularidad, vendedor: filters.vendedor, almacen: filters.almacen });
+  // Auditoría 49 (decomisión de `sales_rf`): reemplaza al panel de predicción ML por
+  // histórico real mes a mes -- sin ningún modelo.
+  const evolucion = useEvolucionMensualVentas({ vendedor: filters.vendedor, almacen: filters.almacen, meses: ventanaMeses });
   const revCat = useRevenueByCategory(filters);
   const { data: categoriasLista } = useCategories();
   const { data: vendedoresLista } = useVendedores();
   const { data: almacenesLista } = useAlmacenes();
+
+  // Promedio móvil de 3 meses -- aritmética simple sobre la serie real (no un modelo),
+  // es la "línea" del gráfico de barras+líneas que pidió el usuario.
+  const evolucionConPromedio = useMemo(() => {
+    const serie = evolucion.data ?? [];
+    return serie.map((punto, idx) => {
+      const ventana = serie.slice(Math.max(0, idx - 2), idx + 1);
+      const promedio = ventana.reduce((acc, p) => acc + p.venta_neta, 0) / ventana.length;
+      return {
+        fecha: `${punto.anio}-${String(punto.mes).padStart(2, '0')}-01`,
+        venta_neta: punto.venta_neta,
+        promedio_movil_3m: promedio,
+      };
+    });
+  }, [evolucion.data]);
 
   // Switch between Branch logic or Seller logic for the Donut Chart based on active branch filter
   // Updated: even when "Todas las Sucursales" is selected, show "Distribución por Vendedor" to align with goals and commissions
@@ -94,7 +111,7 @@ export const DashboardGerencia = () => {
         </div>
         <div className="flex items-center gap-2">
           <Badge variant="info" dot>
-            Modelo {pred.data?.metricas.algoritmo ?? 'ML'} activo
+            Datos reales del Data Warehouse
           </Badge>
           <Button
             variant="success" size="sm" onClick={exportarExcel} disabled={kpi.loading}
@@ -211,11 +228,8 @@ export const DashboardGerencia = () => {
               title="Ingresos Totales (ventas-devoluciones)"
               value={kpi.data ? fmtMoney(kpi.data.ingresos_totales) : '—'}
               icon={DollarSign}
-              tooltip="Últimas semanas de venta neta real, tomadas de la misma serie del forecast de ventas"
-              sparkline={pred.data?.historial_y_prediccion
-                .map((d) => d.monto_real)
-                .filter((v): v is number => v != null)
-                .slice(-12)}
+              tooltip="Últimos meses de venta neta real, misma serie del gráfico de evolución mensual"
+              sparkline={evolucion.data?.map((d) => d.venta_neta).slice(-12)}
               {...tendencia(kpi.data?.ingresos_totales_tendencia_pct)}
             />
             <KpiCard
@@ -250,196 +264,94 @@ export const DashboardGerencia = () => {
         )}
       </div>
 
-      {/* Panel Ejecutivo de Predicción */}
-      {pred.data && !pred.loading && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in">
-          <div className="col-span-1 md:col-span-2">
-            <ChartCard
-              title="Histórico y Predicción de Ventas (ML)"
-              badge={{ label: pred.data.metricas.algoritmo ?? 'ML', variant: 'ml' }}
-              actions={
-                <div className="flex items-center gap-1 bg-slate-800/70 border border-slate-700/50 rounded-full p-0.5">
-                  {(['semana', 'mes'] as const).map((g) => (
-                    <button
-                      key={g}
-                      type="button"
-                      onClick={() => setGranularidad(g)}
-                      className={`px-3 py-1 text-xs font-medium rounded-full transition-colors focus-ring ${
-                        granularidad === g ? 'bg-primary/20 text-primary' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {g === 'semana' ? 'Semanas' : 'Meses'}
-                    </button>
-                  ))}
-                </div>
-              }
-            >
-              {/* G-1 (docs/auditoria/33_actualizacion_modulo_gerencia.md, H1): el modelo
-                  sales_rf no fue entrenado con la columna categoría y usa una ventana
-                  continua de historial (no un rango arbitrario), así que "Fecha" y
-                  "Categoría" de la barra de filtros no afectan esta predicción -- solo
-                  a los KPIs e ingresos por categoría de abajo. Aclarado en vez de fingir
-                  que el forecast los respeta. */}
-              <p className="text-xs text-slate-500 mb-3 -mt-2">
-                Este forecast respeta los filtros de <span className="text-slate-400 font-medium">vendedor</span> y{' '}
-                <span className="text-slate-400 font-medium">almacén</span>; el modelo no soporta filtrar por fecha ni categoría
-                (usa siempre el historial continuo completo).
-              </p>
-              <ResponsiveContainer width="100%" height={380}>
-                <AreaChart
-                  data={pred.data.historial_y_prediccion}
-                  margin={{ top: 20, right: 30, left: 0, bottom: 0 }}
-                >
-                  <defs>
-                    <linearGradient id="gradHist" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={chartTheme.palette[0]} stopOpacity={0.3} />
-                      <stop offset="95%" stopColor={chartTheme.palette[0]} stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="gradPred" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={chartTheme.live} stopOpacity={0.4} />
-                      <stop offset="95%" stopColor={chartTheme.live} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
-                  <XAxis
-                    dataKey="fecha"
-                    stroke={chartTheme.grid}
-                    tick={axisTick}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v) => formatEjeFecha(v, granularidad)}
-                    minTickGap={30}
-                  />
-                  <YAxis
-                    stroke={chartTheme.grid}
-                    tick={axisTick}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v) => `$${v / 1000}k`}
-                    width={55}
-                  />
-                  <Tooltip
-                    content={({ active, payload, label }) => {
-                      if (!active || !payload?.length) return null;
-                      const rows = payload
-                        .filter((p) => p.value != null)
-                        .map((p) => ({
-                          label: p.name === 'monto_real' ? 'Real' : p.name === 'monto_predicho' ? 'Predicho' : String(p.name),
-                          value: `$${Number(p.value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-                          color: p.color,
-                        }));
-                      return <ChartTooltip title={formatEjeFecha(String(label), granularidad)} rows={rows} />;
-                    }}
-                  />
-                  <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px', color: chartTheme.axisLabel }} />
-
-                  {/* Historic Area */}
-                  <Area
-                    connectNulls={true}
-                    type="monotone"
-                    dataKey="monto_real"
-                    stroke={chartTheme.palette[0]}
-                    strokeWidth={2.5}
-                    fill="url(#gradHist)"
-                    name="Histórico Real"
-                    dot={false}
-                    activeDot={{ r: 4, fill: chartTheme.palette[0], stroke: chartTheme.cardBg, strokeWidth: 2 }}
-                  />
-
-                  {/* Prediction Area */}
-                  <Area
-                  connectNulls={true}
-                    type="monotone"
-                    dataKey="monto_predicho"
-                    stroke={chartTheme.live}
-                    strokeWidth={2.5}
-                    strokeDasharray="5 5"
-                    fill="url(#gradPred)"
-                    name="Predicción Futura"
-                    dot={false}
-                    activeDot={{ r: 6, fill: chartTheme.live, stroke: chartTheme.cardBg, strokeWidth: 2 }}
-                  />
-
-                  {/* Confidence Interval Lines */}
-                  {pred.data.historial_y_prediccion.some(d => d.intervalo_superior) && (
-                    <>
-                      <Area type="monotone" dataKey="intervalo_superior" stroke={chartTheme.live} strokeWidth={1} strokeDasharray="3 3" fill="none" name="Límite Superior (95%)" dot={false} />
-                      <Area type="monotone" dataKey="intervalo_inferior" stroke={chartTheme.live} strokeWidth={1} strokeDasharray="3 3" fill="none" name="Límite Inferior (95%)" dot={false} />
-                    </>
-                  )}
-
-                  {/* Zoom/selección de rango (F7.4) — serie temporal larga (histórico + predicción) */}
-                  <Brush
-                    dataKey="fecha"
-                    height={24}
-                    stroke="var(--color-primary)"
-                    fill="var(--color-bg-elevated)"
-                    tickFormatter={(v) => formatEjeFecha(String(v), granularidad)}
-                    travellerWidth={8}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </ChartCard>
+      {/* Evolución mensual de ventas -- reemplaza al panel de predicción ML retirado
+          (auditoría 49, decomisión de `sales_rf`): 100% histórico real (Venta Neta),
+          sin ningún modelo. Barras = venta neta del mes; línea = promedio móvil de 3
+          meses (aritmética simple sobre la misma serie, calculada en el frontend). */}
+      <ChartCard
+        title="Evolución mensual de ventas"
+        badge={{ label: 'DW PostgreSQL', variant: 'hist' }}
+        loading={evolucion.loading}
+        error={evolucion.error ?? undefined}
+        onRetry={evolucion.refetch}
+        empty={!evolucion.loading && !evolucion.error && evolucionConPromedio.length === 0}
+        actions={
+          <div className="flex items-center gap-1 bg-slate-800/70 border border-slate-700/50 rounded-full p-0.5">
+            {([12, 24] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setVentanaMeses(m)}
+                className={`px-3 py-1 text-xs font-medium rounded-full transition-colors focus-ring ${
+                  ventanaMeses === m ? 'bg-primary/20 text-primary' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {m} meses
+              </button>
+            ))}
           </div>
-
-          <div className="col-span-1 space-y-4 flex flex-col">
-            {/* Insights panel */}
-            <div className="card p-5 border border-slate-700/50 bg-slate-800/40 rounded-xl flex-grow">
-              <h3 className="text-lg font-medium tracking-tight text-slate-100 flex items-center gap-2 mb-4">
-                <Target className="w-5 h-5 text-primary" /> Inteligencia Comercial
-              </h3>
-              <ul className="space-y-4 text-sm text-slate-300">
-                {pred.data.insights.map((insight, idx) => (
-                  <li key={idx} className="flex gap-3">
-                    <span className="flex-shrink-0 w-1.5 h-1.5 mt-2 rounded-full bg-primary"></span>
-                    <span className="leading-snug">{insight}</span>
-                  </li>
-                ))}
-              </ul>
-
-              {/* metricas llega vacía (todo null) cuando la serie filtrada no tiene datos:
-                  el backend degrada con gracia en vez de responder 500 (doc 22). */}
-              <div className="mt-6 pt-6 border-t border-slate-700/50 grid grid-cols-2 gap-4">
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">Crecimiento Est.</div>
-                  <div className={`text-lg font-semibold ${(pred.data.metricas.crecimiento_esperado ?? 0) > 0 ? 'text-success' : 'text-danger'}`}>
-                    {pred.data.metricas.crecimiento_esperado != null
-                      ? `${pred.data.metricas.crecimiento_esperado > 0 ? '+' : ''}${pred.data.metricas.crecimiento_esperado.toFixed(1)}%`
-                      : '—'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">
-                    Proyección ({pred.data.periodos_proyectados} {granularidad === 'semana' ? 'sem' : 'meses'})
-                  </div>
-                  <div className="text-lg font-semibold text-info">
-                    {pred.data.metricas.venta_esperada != null ? fmt(pred.data.metricas.venta_esperada) : '—'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">Mes Mayor Venta</div>
-                  <div className="text-sm font-medium text-slate-200">{pred.data.metricas.mes_mayor_venta ?? '—'}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-slate-500 mb-1">Error MAE (ML)</div>
-                  <div className="text-sm font-medium text-slate-200">
-                    {pred.data.metricas.mae_modelo != null ? `± ${fmt(pred.data.metricas.mae_modelo)}` : '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {pred.loading && (
-        <div className="card p-12 text-center text-slate-400 border border-slate-700/50">
-           Generando inferencias y conectando al Data Warehouse...
-        </div>
-      )}
-      {pred.error && (
-        <ErrorState message={pred.error} onRetry={pred.refetch} />
-      )}
+        }
+      >
+        <p className="text-xs text-slate-500 mb-3 -mt-2">
+          Venta Neta real (ventas - devoluciones) por mes; respeta los filtros de{' '}
+          <span className="text-slate-400 font-medium">vendedor</span> y{' '}
+          <span className="text-slate-400 font-medium">almacén</span> de arriba.
+        </p>
+        <ResponsiveContainer width="100%" height={380}>
+          <ComposedChart data={evolucionConPromedio} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
+            <XAxis
+              dataKey="fecha"
+              stroke={chartTheme.grid}
+              tick={axisTick}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v) => formatEjeFecha(v, 'mes')}
+              minTickGap={30}
+            />
+            <YAxis
+              stroke={chartTheme.grid}
+              tick={axisTick}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v) => `$${v / 1000}k`}
+              width={55}
+            />
+            <Tooltip
+              content={({ active, payload, label }) => {
+                if (!active || !payload?.length) return null;
+                const rows = payload
+                  .filter((p) => p.value != null)
+                  .map((p) => ({
+                    label: p.dataKey === 'venta_neta' ? 'Venta Neta' : 'Promedio móvil (3m)',
+                    value: `$${Number(p.value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+                    color: p.color,
+                  }));
+                return <ChartTooltip title={formatEjeFecha(String(label), 'mes')} rows={rows} />;
+              }}
+            />
+            <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '12px', color: chartTheme.axisLabel }} />
+            <Bar dataKey="venta_neta" name="Venta Neta" fill={chartTheme.palette[0]} radius={[4, 4, 0, 0]} />
+            <Line
+              type="monotone"
+              dataKey="promedio_movil_3m"
+              name="Promedio móvil (3m)"
+              stroke={chartTheme.live}
+              strokeWidth={2.5}
+              dot={false}
+              activeDot={{ r: 5, fill: chartTheme.live, stroke: chartTheme.cardBg, strokeWidth: 2 }}
+            />
+            <Brush
+              dataKey="fecha"
+              height={24}
+              stroke="var(--color-primary)"
+              fill="var(--color-bg-elevated)"
+              tickFormatter={(v) => formatEjeFecha(String(v), 'mes')}
+              travellerWidth={8}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </ChartCard>
 
       {/* Secondary Charts */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

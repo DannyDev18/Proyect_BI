@@ -1,7 +1,7 @@
 # backend/app/api/routes/api.py
 from fastapi import APIRouter
 
-from app.api.routes import admin, admin_ml, analytics, auth, cartera360, goals, notifications, roles, ruta, sales, system, users, warehouse
+from app.api.routes import admin, admin_ml, analytics, auth, cartera360, goals, notifications, replenishment, roles, ruta, sales, system, users, warehouse
 from app.core.config import settings
 
 api_router = APIRouter()
@@ -11,6 +11,7 @@ api_router.include_router(users.router, prefix="/users", tags=["👥 Usuarios (C
 api_router.include_router(roles.router, prefix="/roles", tags=["🏷️ Roles"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["📊 Analytics & KPIs (Gerencia)"])
 api_router.include_router(warehouse.router, prefix="/analytics/bodega", tags=["📦 Analytics (Bodega)"])
+api_router.include_router(replenishment.router, prefix="/analytics/bodega/reabastecimiento", tags=["🧠 Reabastecimiento Inteligente"])
 api_router.include_router(sales.router, prefix="/analytics/ventas", tags=["🛒 Analytics (Ventas)"])
 api_router.include_router(cartera360.router, prefix="/analytics/ventas/cartera360", tags=["📇 Analytics (Ventas · Cartera 360)"])
 # "Mi Ruta Inteligente de Ventas" (docs/features/plan_refactor_cartera360_ruta_inteligente.md,

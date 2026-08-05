@@ -1,22 +1,3 @@
-export interface AnomaliaResponse {
-  transaccion_id: string;
-  score: number;
-  es_anomalia: boolean;
-}
-
-export type AnomaliaEstado = 'nueva' | 'revisada' | 'descartada' | 'confirmada';
-
-export interface AnomaliaRevision {
-  id: number;
-  transaccion_id: string;
-  score: number;
-  estado: AnomaliaEstado;
-  revisor_id: number | null;
-  nota: string | null;
-  fecha_deteccion: string;
-  fecha_revision: string | null;
-}
-
 export interface RoleData {
   id: number;
   nombre: string;

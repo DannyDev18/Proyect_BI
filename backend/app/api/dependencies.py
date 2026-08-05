@@ -9,13 +9,20 @@ from fastapi import Depends, Request
 from app.core.deps import CurrentUserDep, SessionDep
 from app.ml.model_loader import ModelLoader
 from app.repositories.analytics_repository import AnalyticsRepository
-from app.repositories.anomalia_revision_repository import AnomaliaRevisionRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.cartera360_repository import Cartera360Repository
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.goal_repository import GoalRepository
+from app.repositories.meta_config_modulo_repository import MetaConfigModuloRepository
+from app.inventory import (
+    ReplenishmentConfigRepository,
+    ReplenishmentConfigService,
+    ReplenishmentProposalRepository,
+    ReplenishmentService,
+)
+from app.repositories.meta_config_repository import MetaConfigRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.ml_model_run_repository import MLModelRunRepository
 from app.repositories.prediction_repository import PredictionRepository
@@ -25,7 +32,6 @@ from app.repositories.system_repository import SystemRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.warehouse_repository import WarehouseRepository
 from app.services.analytics_service import AnalyticsService
-from app.services.anomalia_revision_service import AnomaliaRevisionService
 from app.services.audit_service import AuditService
 from app.services.cartera360_service import Cartera360Service
 from app.services.commission_config_service import CommissionConfigService
@@ -35,6 +41,8 @@ from app.services.cross_sell_engine_service import CrossSellEngineService
 from app.services.gestion_service import GestionService
 from app.services.goal_ml_service import GoalMLService
 from app.services.goals_service import GoalsService
+from app.services.meta_config_modulo_service import MetaConfigModuloService
+from app.services.meta_config_service import MetaConfigService
 from app.services.notification_service import NotificationService
 from app.services.prediction_service import PredictionService
 from app.services.role_service import RoleService
@@ -56,6 +64,10 @@ def get_role_repository(db: SessionDep) -> RoleRepository:
 
 def get_goal_repository(db: SessionDep) -> GoalRepository:
     return GoalRepository(db)
+
+
+def get_meta_config_repository(db: SessionDep) -> MetaConfigRepository:
+    return MetaConfigRepository(db)
 
 
 def get_analytics_repository(db: SessionDep) -> AnalyticsRepository:
@@ -98,12 +110,16 @@ def get_catalog_repository(db: SessionDep) -> CatalogRepository:
     return CatalogRepository(db)
 
 
+def get_replenishment_config_repository(db: SessionDep) -> ReplenishmentConfigRepository:
+    return ReplenishmentConfigRepository(db)
+
+
+def get_replenishment_proposal_repository(db: SessionDep) -> ReplenishmentProposalRepository:
+    return ReplenishmentProposalRepository(db)
+
+
 def get_audit_repository(db: SessionDep) -> AuditRepository:
     return AuditRepository(db)
-
-
-def get_anomalia_revision_repository(db: SessionDep) -> AnomaliaRevisionRepository:
-    return AnomaliaRevisionRepository(db)
 
 
 def get_recommendation_event_repository(db: SessionDep) -> RecommendationEventRepository:
@@ -170,8 +186,9 @@ def get_analytics_service(
 
 def get_goals_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
 ) -> GoalsService:
-    return GoalsService(goal_repo)
+    return GoalsService(goal_repo, catalog_repo)
 
 
 def get_prediction_service(
@@ -197,6 +214,24 @@ def get_warehouse_service(
     inventario + `DatasetRepository` (serie de producto para el forecast) + `ModelLoader`
     (reutiliza `demand_rf`, sin modelos nuevos)."""
     return WarehouseService(warehouse_repo, dataset_repo, model_loader)
+
+
+def get_replenishment_config_service(
+    config_repo: Annotated[ReplenishmentConfigRepository, Depends(get_replenishment_config_repository)],
+) -> ReplenishmentConfigService:
+    return ReplenishmentConfigService(config_repo)
+
+
+def get_replenishment_service(
+    warehouse_repo: Annotated[WarehouseRepository, Depends(get_warehouse_repository)],
+    config_repo: Annotated[ReplenishmentConfigRepository, Depends(get_replenishment_config_repository)],
+    proposal_repo: Annotated[ReplenishmentProposalRepository, Depends(get_replenishment_proposal_repository)],
+) -> ReplenishmentService:
+    """Módulo Reabastecimiento Inteligente (docs/features/plan_reabastecimiento_
+    inteligente.md): reutiliza `WarehouseRepository` (misma RLS por almacén, RN-B10,
+    que el resto de Bodega) + la configuración editable de política/lead time +
+    `ReplenishmentProposalRepository` (F9, propuestas de compra persistidas)."""
+    return ReplenishmentService(warehouse_repo, config_repo, proposal_repo)
 
 
 def get_cartera360_service(
@@ -252,23 +287,44 @@ def get_commission_simulation_service(
 def get_notification_service(
     notification_repo: Annotated[NotificationRepository, Depends(get_notification_repository)],
     warehouse_service: Annotated[WarehouseService, Depends(get_warehouse_service)],
-    prediction_service: Annotated[PredictionService, Depends(get_prediction_service)],
     cartera360_service: Annotated[Cartera360Service, Depends(get_cartera360_service)],
     commission_simulation_service: Annotated[CommissionSimulationService, Depends(get_commission_simulation_service)],
+    replenishment_service: Annotated[ReplenishmentService, Depends(get_replenishment_service)],
 ) -> NotificationService:
     """Módulo de Notificaciones (docs/auditoria/31_modulo_notificaciones.md): compone el
     repositorio de notificaciones persistidas con `WarehouseService` (generador calculado de
-    Bodega + salud de modelos de Admin), `PredictionService` (desvío de forecast de
-    Gerencia, reutiliza `get_sales_forecast`), `Cartera360Service` (churn alto de la
-    cartera propia de Ventas, reutiliza `get_lista_trabajo` -- RLS ya resuelto ahí, RN-V3)
-    y `CommissionSimulationService` (divergencia plano vs variable del piloto en sombra,
+    Bodega + salud de modelos de Admin), `Cartera360Service` (churn alto de la
+    cartera propia de Ventas, reutiliza `get_lista_trabajo` -- RLS ya resuelto ahí, RN-V3),
+    `CommissionSimulationService` (divergencia plano vs variable del piloto en sombra,
     Fase 2 ítem 3 de plan_actualizacion_modulo_metas_comisiones.md -- reutiliza `simular`,
-    el mismo cálculo que ya sirve `POST /commission-simulation`). Sin modelos ML nuevos.
+    el mismo cálculo que ya sirve `POST /commission-simulation`) y `ReplenishmentService`
+    (F7 de docs/features/plan_reabastecimiento_inteligente.md: cambio brusco de demanda y
+    tendencia decreciente sostenida -- las 2 señales que el generador de Bodega nunca
+    calculó; el riesgo de quiebre y el sobrestock NO se duplican aquí, ver docstring de
+    `ReplenishmentService.get_alertas`). Sin modelos ML nuevos. (`PredictionService` se
+    retiró de esta composición junto con el desvío de forecast de Gerencia, auditoría 49.)
     Definido antes de `get_goal_ml_service` porque ese servicio la inyecta para emitir
     `metas_generadas` (RN-N2)."""
     return NotificationService(
-        notification_repo, warehouse_service, prediction_service, cartera360_service, commission_simulation_service,
+        notification_repo, warehouse_service, cartera360_service,
+        commission_simulation_service, replenishment_service,
     )
+
+
+def get_meta_config_service(
+    meta_config_repo: Annotated[MetaConfigRepository, Depends(get_meta_config_repository)],
+) -> MetaConfigService:
+    return MetaConfigService(meta_config_repo)
+
+
+def get_meta_config_modulo_repository(db: SessionDep) -> MetaConfigModuloRepository:
+    return MetaConfigModuloRepository(db)
+
+
+def get_meta_config_modulo_service(
+    meta_config_modulo_repo: Annotated[MetaConfigModuloRepository, Depends(get_meta_config_modulo_repository)],
+) -> MetaConfigModuloService:
+    return MetaConfigModuloService(meta_config_modulo_repo)
 
 
 def get_goal_ml_service(
@@ -277,16 +333,23 @@ def get_goal_ml_service(
     model_loader: ModelLoaderDep,
     commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
     notification_service: Annotated[NotificationService, Depends(get_notification_service)],
+    meta_config_modulo_service: Annotated[MetaConfigModuloService, Depends(get_meta_config_modulo_service)],
 ) -> GoalMLService:
-    """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_...md):
-    compone `GoalRepository` + `DatasetRepository` + `ModelLoader` (para `anomaly` y
-    `sales_rf`, no para metas -- `goals_rf` fue decomisionado) + `CommissionConfigRepository`
-    (ajuste de meta por tipo de vendedor, docs/features/plan_integracion_comisiones_variables.md)
-    + `NotificationService` (emite `metas_generadas` a gerencia al final de
-    `generate_proposals`, docs/auditoria/31_modulo_notificaciones.md)."""
+    """Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_.../
+    46_motor_metas_configurable.md): compone `GoalRepository` + `DatasetRepository` +
+    `ModelLoader` (para `association`, no para metas -- `goals_rf` fue decomisionado)
+    + `CommissionConfigRepository` (ajuste de meta por tipo de vendedor,
+    docs/features/plan_integracion_comisiones_variables.md) + `NotificationService`
+    (emite `metas_generadas` a gerencia al final de `generate_proposals`, docs/auditoria/
+    31_modulo_notificaciones.md) + la configuración modular del motor v3 (docs/features/
+    plan_motor_metas_v3_y_comisiones_unificadas.md §9, Fase 6 -- reemplaza a
+    `MetaConfigService`/`metas_config_parametros` como fuente real, resuelta UNA VEZ por
+    request, no una consulta por vendedor dentro de `generate_proposals`)."""
+    motor_parametros, pipeline_config = meta_config_modulo_service.get_pipeline_config()
     return GoalMLService(
         goal_repo, dataset_repo, model_loader,
         commission_config_repo=commission_config_repo, notification_service=notification_service,
+        meta_motor_parametros=motor_parametros, pipeline_config=pipeline_config,
     )
 
 
@@ -294,12 +357,6 @@ def get_audit_service(
     audit_repo: Annotated[AuditRepository, Depends(get_audit_repository)],
 ) -> AuditService:
     return AuditService(audit_repo)
-
-
-def get_anomalia_revision_service(
-    repo: Annotated[AnomaliaRevisionRepository, Depends(get_anomalia_revision_repository)],
-) -> AnomaliaRevisionService:
-    return AnomaliaRevisionService(repo)
 
 
 def get_system_service(
@@ -310,7 +367,7 @@ def get_system_service(
 ) -> SystemService:
     """Procedencia de datos (docs/auditoria/33_actualizacion_modulo_gerencia.md, H4):
     compone `SystemRepository` (última carga del DW) + `ModelLoader` (estado real de
-    los 6 modelos, mismo patrón que `admin_ml.py`). Fase 5 §5.5 suma `UserRepository`/
+    los 4 modelos, mismo patrón que `admin_ml.py`). Fase 5 §5.5 suma `UserRepository`/
     `CatalogRepository` para el resumen de métricas del dashboard de Admin."""
     return SystemService(system_repo, model_loader, user_repo, catalog_repo)
 
@@ -318,12 +375,15 @@ def get_system_service(
 def get_commission_service(
     goal_repo: Annotated[GoalRepository, Depends(get_goal_repository)],
     commission_config_repo: Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)],
+    catalog_repo: Annotated[CatalogRepository, Depends(get_catalog_repository)],
 ) -> CommissionService:
     """Liquidación de comisiones (docs/modulo_metas.md, docs/features/
     plan_integracion_comisiones_variables.md): compone `GoalRepository` (venta real vs.
     meta) + `CommissionConfigRepository` (matriz/crédito/tipo vendedor del esquema
-    variable, activo según `settings.COMISION_MODO`)."""
-    return CommissionService(goal_repo, commission_config_repo)
+    variable, activo según `settings.COMISION_MODO`) + `CatalogRepository` (estado
+    activo/inactivo del vendedor, para filtrar el panel "Cumplimiento real y comisión
+    por vendedor")."""
+    return CommissionService(goal_repo, commission_config_repo, catalog_repo)
 
 
 def get_commission_config_service(
@@ -353,14 +413,17 @@ AnalyticsServiceDep = Annotated[AnalyticsService, Depends(get_analytics_service)
 GoalsServiceDep = Annotated[GoalsService, Depends(get_goals_service)]
 PredictionServiceDep = Annotated[PredictionService, Depends(get_prediction_service)]
 GoalMLServiceDep = Annotated[GoalMLService, Depends(get_goal_ml_service)]
+MetaConfigServiceDep = Annotated[MetaConfigService, Depends(get_meta_config_service)]
+MetaConfigModuloServiceDep = Annotated[MetaConfigModuloService, Depends(get_meta_config_modulo_service)]
 CommissionServiceDep = Annotated[CommissionService, Depends(get_commission_service)]
 CommissionSimulationServiceDep = Annotated[CommissionSimulationService, Depends(get_commission_simulation_service)]
 CommissionConfigServiceDep = Annotated[CommissionConfigService, Depends(get_commission_config_service)]
 VendorDashboardServiceDep = Annotated[VendorDashboardService, Depends(get_vendor_dashboard_service)]
 CommissionConfigRepositoryDep = Annotated[CommissionConfigRepository, Depends(get_commission_config_repository)]
 WarehouseServiceDep = Annotated[WarehouseService, Depends(get_warehouse_service)]
+ReplenishmentServiceDep = Annotated[ReplenishmentService, Depends(get_replenishment_service)]
+ReplenishmentConfigServiceDep = Annotated[ReplenishmentConfigService, Depends(get_replenishment_config_service)]
 AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
-AnomaliaRevisionServiceDep = Annotated[AnomaliaRevisionService, Depends(get_anomalia_revision_service)]
 CatalogRepositoryDep = Annotated[CatalogRepository, Depends(get_catalog_repository)]
 Cartera360ServiceDep = Annotated[Cartera360Service, Depends(get_cartera360_service)]
 CrossSellEngineServiceDep = Annotated[CrossSellEngineService, Depends(get_cross_sell_engine_service)]

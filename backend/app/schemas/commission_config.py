@@ -113,6 +113,35 @@ class TodosTramosCobranzaResponse(BaseModel):
     jefe_agencia: List[TramoCobranzaResponse]
 
 
+# ── Tramos de cumplimiento (auditoría 45, docs/features/plan_comisiones_
+# sobrecumplimiento_umbral_y_desglose.md) -- multiplicador de
+# `multiplicador_cumplimiento` de la fórmula variable. Un solo juego de tramos
+# GENÉRICOS (sin diferenciar por perfil, decisión explícita del usuario, §5.3 del
+# plan) -- reemplaza los umbrales fijos (90/80/100%) y el escalón plano de
+# sobrecumplimiento (1.2x único) por una escala editable desde el panel.
+class TramoCumplimientoResponse(BaseModel):
+    id: int
+    pct_desde: float
+    pct_hasta: Optional[float] = None
+    multiplicador: float
+    etiqueta: str
+    bono_fijo: float
+    vigente_desde: datetime.date
+    vigente_hasta: Optional[datetime.date] = None
+
+
+class TramoCumplimientoPayload(BaseModel):
+    pct_desde: float = Field(..., ge=0.0, description="Cota inferior del tramo, en % de cumplimiento (ej. 90.0).")
+    pct_hasta: Optional[float] = Field(None, description="Cota superior del tramo. None = sin tope (último tramo).")
+    multiplicador: float = Field(..., ge=0.0, description="Factor aplicado al acumulado de la fórmula en este tramo.")
+    etiqueta: str = Field(..., min_length=1, max_length=50)
+    bono_fijo: float = Field(0.0, ge=0.0, description="Monto fijo en $ que se suma a los bonos al alcanzar el tramo.")
+
+
+class TramosCumplimientoPayload(BaseModel):
+    tramos: List[TramoCumplimientoPayload]
+
+
 # ── Fórmula de comisión (auditoría 44 §2.2: estructura editable, no quemada) ────
 class FormulaComponenteResponse(BaseModel):
     id: int
@@ -174,6 +203,29 @@ class ProyeccionComisionRequest(BaseModel):
     meses_historico: Optional[int] = Field(None, description="Ventana de historial para proyectar el próximo mes: 3 o 6. No usar junto con anio/mes.")
     anio: Optional[int] = Field(None, description="Año del mes específico a reconstruir. Requiere `mes`.")
     mes: Optional[int] = Field(None, ge=1, le=12, description="Mes específico a reconstruir (1-12). Requiere `anio`.")
+    # Fase 4 (docs/features/plan_motor_metas_v3_y_comisiones_unificadas.md, R-4): solo
+    # aplica junto con anio/mes. `True` (default, compatibilidad) = "qué se hubiera
+    # pagado con la config de HOY"; `False` = "reconstrucción fiel" con la config
+    # vigente al cierre de ese período, la que debe coincidir con lo que realmente se
+    # liquidó/liquidaría.
+    usar_configuracion_de_hoy: bool = Field(
+        True, description="Solo con anio/mes: True = config vigente hoy, False = reconstrucción fiel con la config vigente al cierre del período.",
+    )
+
+
+class ComponenteComisionResponse(BaseModel):
+    """Un paso de la tubería de la fórmula, con etiqueta legible -- auditoría 45
+    (docs/features/plan_comisiones_sobrecumplimiento_umbral_y_desglose.md §3.3): "cómo
+    se construye la comisión, cuánto gané de cada cosa". `monto` es dinero ($) para
+    `sumar`/`restar`; para `multiplicar` es un FACTOR adimensional (`es_factor=True`,
+    el frontend no debe formatearlo como moneda)."""
+    orden: int
+    componente: str
+    etiqueta: str
+    operador: str
+    monto: float
+    es_factor: bool
+    acumulado_tras_paso: float
 
 
 class ProyeccionVendedorResponse(BaseModel):
@@ -185,6 +237,11 @@ class ProyeccionVendedorResponse(BaseModel):
     margen_bruto_promedio: float
     comision_variable_proyectada: float
     tasa_efectiva_pct: float
+    pct_cumplimiento: Optional[float] = None
+    nivel: Optional[str] = None
+    multiplicador_cumplimiento: float = 1.0
+    comisiona: bool = True
+    componentes: List[ComponenteComisionResponse] = Field(default_factory=list)
 
 
 class ProyeccionComisionResponse(BaseModel):
@@ -195,6 +252,11 @@ class ProyeccionComisionResponse(BaseModel):
     margen_bruto_total_promedio: float
     tasa_efectiva_pct_global: float
     detalle: List[ProyeccionVendedorResponse]
+    # Fase 4 (R-4): "reconstruccion_fiel" (config al cierre, coincide con lo real) |
+    # "config_actual" (config de hoy sobre un mes pasado, un "qué pasaría si") |
+    # "proyeccion" (mes futuro, sin bonos/devoluciones -- eventos puntuales del mes
+    # cerrado, no proyectables).
+    modo: str = "proyeccion"
 
 
 # ── Perfil de margen por categoría (Fase 1) ─────────────────────────────────────

@@ -18,6 +18,10 @@ class GoalCommissionReportItem(BaseModel):
     monto_meta: float
     comision_base_pct: float
     estado: str
+    # Petición explícita del usuario: verificar si el vendedor está activo o no en el
+    # EDW (edw.dim_vendedor.activo) -- enriquecido en lote por GoalsService, nunca
+    # inferido del solo hecho de tener una propuesta de meta.
+    activo: bool = True
 
 class GoalTrackingResponse(BaseModel):
     reporte_cumplimiento: List[GoalCommissionReportItem]

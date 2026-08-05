@@ -16,7 +16,6 @@ from src.features.cross_sell_ranker_features import (
     construir_dataset_ranking, construir_features_candidatos, preparar_matriz_features,
 )
 
-from src.training.train_sales_prediction import train_sales_model, evaluate_model, save_model as save_sales_model
 from src.training.train_customer_segmentation import evaluar_estabilidad_k, save_segmentation_model, train_rfm_segmentation
 from src.training.train_churn_prediction import train_churn_model, evaluate_churn_classifier, save_churn_model
 from src.training.train_recommendation_engine import construir_item_item, recomendar_desde_reglas, save_recommendation_rules
@@ -41,7 +40,6 @@ RECOMMENDATION_HORIZONTE_TEST_DIAS = 90
 RANKER_LINEA_BASE_PRECISION_AT_5 = 0.0769
 RANKER_LINEA_BASE_COBERTURA = 0.979
 from src.training.train_demand_forecasting import train_demand_forecaster, evaluate_demand_model, save_demand_model
-from src.training.train_anomaly_detection import estimar_contamination_iqr, save_anomaly_model, train_isolation_forest
 from src.utils.stats_baseline import fit_ols_baseline, guardar_diagnostico_ols
 from src.utils.model_export import resolve_models_dir
 
@@ -57,65 +55,6 @@ logger = logging.getLogger("MLOps.Orchestrator")
 # ver ml/REPORTE_MEJORA_MODELOS.md). Restringir a una ventana reciente evita ese quiebre
 # estructural y mejoró el R2 a +0.21 en el mismo backtest.
 VENTANA_ENTRENAMIENTO_VENTAS_ANIOS = 3
-
-def train_general_sales_prediction(extractor: SalesTimeSerieExtractor):
-    logger.info("=== 1. ENTRENANDO PREDICCIÓN DE VENTAS GENERALES (GERENCIA) ===")
-    df_raw = extractor.fetch_daily_sales()
-    if len(df_raw) < 30:
-        logger.error("Data insuficiente en la EDW (> 30 días solicitados) para entrenar el modelo.")
-        return
-
-    pipeline = build_preprocessing_pipeline()
-    df_features = pipeline.fit_transform(df_raw)
-
-    # Ventana reciente: ver VENTANA_ENTRENAMIENTO_VENTAS_ANIOS arriba.
-    fecha_corte = df_features.index.max() - pd.DateOffset(years=VENTANA_ENTRENAMIENTO_VENTAS_ANIOS)
-    df_features = df_features.loc[df_features.index >= fecha_corte]
-
-    train_size = int(len(df_features) * 0.8)
-    df_train = df_features.iloc[:train_size]
-    df_test = df_features.iloc[train_size:]
-    
-    X_train, y_train = select_features_and_target(df_train, 'y_sales_net')
-    X_test, y_test = select_features_and_target(df_test, 'y_sales_net')
-
-    # y_train/y_test se pasan en escala real (USD): train_sales_model aplica log1p
-    # internamente y devuelve un TransformedTargetRegressor autocontenido (H-01).
-    model = train_sales_model(X_train, y_train, hyperparameter_search=False)
-    y_pred = model.predict(X_test)
-    metrics = evaluate_model(y_test, y_pred, is_log_transformed=False)
-
-    for k, v in metrics.items():
-        logger.info(f"  > METRICA {k}: {v:.4f}")
-
-    # Fase 4 (§6): baseline OLS de referencia sobre el mismo split de entrenamiento (nunca
-    # el holdout) -- si el RandomForest no supera claramente este OLS, es señal de alerta.
-    diagnostico_ols = fit_ols_baseline(df_train, list(X_train.columns), 'y_sales_net')
-    ruta_ols = guardar_diagnostico_ols("sales", diagnostico_ols, resolve_models_dir())
-    if "error" in diagnostico_ols:
-        logger.warning(f"  > Baseline OLS no disponible: {diagnostico_ols['error']}")
-    else:
-        logger.info(f"  > BASELINE OLS: R2_ajustado={diagnostico_ols['r2_ajustado']:.4f}, F_pvalue={diagnostico_ols['f_pvalue']:.4g}")
-
-    save_sales_model(
-        model,
-        metrics=metrics,
-        features=list(X_train.columns),
-        data_range={"desde": str(df_features.index.min().date()), "hasta": str(df_features.index.max().date())},
-        extra_meta={
-            "statsmodels_baseline": {
-                "r2": diagnostico_ols.get("r2"),
-                "r2_ajustado": diagnostico_ols.get("r2_ajustado"),
-                "f_statistic": diagnostico_ols.get("f_statistic"),
-                "f_pvalue": diagnostico_ols.get("f_pvalue"),
-                "p_values_significativas": diagnostico_ols.get("p_values_significativas"),
-                "vif": diagnostico_ols.get("vif"),
-                "summary_path": ruta_ols,
-            } if "error" not in diagnostico_ols else {"error": diagnostico_ols["error"]},
-        },
-    )
-    logger.info("Modelo de Ventas guardado con éxito.\n")
-
 
 def train_demand_forecasting(extractor: SalesTimeSerieExtractor):
     logger.info("=== 2. ENTRENANDO PREDICCION DE DEMANDA DE PRODUCTOS (BODEGA) ===")
@@ -323,55 +262,6 @@ def train_recommendations(extractor: SalesTimeSerieExtractor):
             },
         )
     logger.info("Reglas guardadas con éxito.\n")
-
-
-def train_anomaly_detection(extractor: SalesTimeSerieExtractor):
-    logger.info("=== 6. ENTRENANDO DETECTOR DE ANOMALÍAS (ADMINISTRADOR) ===")
-    df_txs = extractor.fetch_transactions_for_anomalies()
-    if df_txs.empty:
-        logger.error("No hay transacciones suficientes.")
-        return
-
-    # H-19 (docs/auditoria/11_auditoria_tecnica_modelos_ml.md): con el EDW nuevo,
-    # costo_total/margen ahora son NULLables REALES (cambio C-2) cuando el artículo no
-    # tiene costo en SAP. El legacy hacía fillna(0.0), lo que reintroducía exactamente el
-    # "margen 100% artificial" que el EDW acaba de eliminar como centinela -- ese 100%
-    # artificial se aprendía como patrón normal, no como anomalía real. Se excluyen esas
-    # filas en vez de imputarlas: no hay evidencia suficiente para asumir una mediana por
-    # producto en esta pasada.
-    n_antes = len(df_txs)
-    df_txs = df_txs.dropna(subset=['costo_total', 'margen'])
-    n_excluidas = n_antes - len(df_txs)
-    if n_excluidas:
-        logger.info(f"Excluidas {n_excluidas} filas ({n_excluidas / n_antes:.1%}) sin costo_total (H-19).")
-
-    # Fase 4 (§6): contamination data-driven (regla IQR sobre 'margen'), no un 1% fijo.
-    contamination = estimar_contamination_iqr(df_txs, columna="margen")
-    model = train_isolation_forest(df_txs, contamination=contamination)
-
-    scores = model.decision_function(df_txs)
-    metrics = {
-        "pct_flagged_outlier": float((model.predict(df_txs) == -1).mean()),
-        "decision_function_mean": float(scores.mean()),
-        "decision_function_std": float(scores.std()),
-        "contamination_usado": contamination,
-    }
-    for k, v in metrics.items():
-        logger.info(f"  > METRICA ANOMALIAS {k}: {v:.4f}")
-
-    save_anomaly_model(
-        model,
-        metrics=metrics,
-        features=list(df_txs.columns),
-        data_range={"n_filas_entrenamiento": len(df_txs), "n_excluidas_sin_costo": n_excluidas},
-        extra_meta={
-            "criterio_contamination": (
-                "IQR sobre 'margen' (Q1-1.5*IQR, Q3+1.5*IQR), acotado a "
-                "[0.005, 0.05] -- reemplaza el valor fijo 0.01 sin evidencia (Fase 4)."
-            ),
-        },
-    )
-    logger.info("Detector de Anomalías guardado con éxito.\n")
 
 
 def train_cross_sell_ranker(extractor: SalesTimeSerieExtractor):
@@ -631,12 +521,10 @@ def run_ml_pipeline():
     logger.info("=== INICIANDO EXPERIMENTO ML OPS ORQUESTADO ===")
     extractor = SalesTimeSerieExtractor()
 
-    train_general_sales_prediction(extractor)
     train_demand_forecasting(extractor)
     train_customer_segmentation(extractor)
     train_customer_churn(extractor)
     train_recommendations(extractor)
-    train_anomaly_detection(extractor)
     train_cross_sell_ranker(extractor)
 
     logger.info("=== ML PIPELINE ORQUESTADO COMPLETADO EXITOSAMENTE ===")

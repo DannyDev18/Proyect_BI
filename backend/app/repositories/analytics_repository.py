@@ -176,6 +176,57 @@ class AnalyticsRepository:
             "vend_map": {row[0]: float(row[1]) for row in res_vend} if res_vend else {},
         }
 
+    def get_evolucion_mensual_ventas(
+        self, vendedor: str | None = None, almacen: str | None = None, meses: int = 24,
+    ) -> list[dict[str, Any]]:
+        """Venta Neta real (venta bruta - devoluciones, mismo criterio G-02 que el resto
+        del dashboard) agregada por mes sobre los últimos `meses` meses -- reemplaza al
+        panel de predicción ML retirado (`sales_rf`, auditoría 49): 100% histórico real,
+        sin ningún modelo. Respeta vendedor/almacén (mismos filtros que el resto de
+        Gerencia); no respeta categoría ni fechas explícitas del usuario -- es una vista
+        de tendencia de largo plazo, independiente del rango que se haya fijado en la
+        barra de filtros (mismo criterio documentado que ya tenía el panel retirado)."""
+        filtro_vendedor = "AND v.nombre_vendedor = :vendedor" if vendedor else ""
+        filtro_almacen = "AND al.nombre_almacen = :almacen" if almacen else ""
+        query = f"""
+            WITH ventas_mes AS (
+                SELECT d.anio, d.mes, {SQL_VENTA_BRUTA} AS venta_bruta
+                FROM edw.fact_ventas_detalle f
+                JOIN edw.dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
+                JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_producto p ON f.producto_sk = p.producto_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                LEFT JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON f.almacen_sk = al.almacen_sk
+                WHERE {FILTRO_ESTADO_VALIDO}
+                  AND d.fecha_completa >= (CURRENT_DATE - (:meses || ' months')::interval)
+                  {filtro_vendedor} {filtro_almacen}
+                GROUP BY d.anio, d.mes
+            ),
+            devoluciones_mes AS (
+                SELECT d.anio, d.mes, COALESCE(SUM(dev.total_linea_devolucion), 0) AS total_devoluciones
+                FROM edw.fact_devoluciones dev
+                JOIN edw.dim_sucursal s ON dev.sucursal_sk = s.sucursal_sk
+                JOIN edw.dim_fecha d ON dev.fecha_sk = d.fecha_sk
+                LEFT JOIN edw.dim_vendedor v ON dev.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_almacen al ON dev.almacen_sk = al.almacen_sk
+                WHERE d.fecha_completa >= (CURRENT_DATE - (:meses || ' months')::interval)
+                  {filtro_vendedor} {filtro_almacen}
+                GROUP BY d.anio, d.mes
+            )
+            SELECT vm.anio, vm.mes, vm.venta_bruta - COALESCE(dm.total_devoluciones, 0) AS venta_neta
+            FROM ventas_mes vm
+            LEFT JOIN devoluciones_mes dm ON dm.anio = vm.anio AND dm.mes = vm.mes
+            ORDER BY vm.anio, vm.mes
+        """
+        params: dict[str, Any] = {"meses": meses, "estado_valido": settings.ESTADO_DOCUMENTO_VALIDO}
+        if vendedor:
+            params["vendedor"] = vendedor
+        if almacen:
+            params["almacen"] = almacen
+        rows = self.db.execute(text(query), params).fetchall()
+        return [{"anio": int(r[0]), "mes": int(r[1]), "venta_neta": float(r[2])} for r in rows]
+
     def get_revenue_by_category(
         self, sucursal: str | None = None, start_date: str | None = None,
         end_date: str | None = None, vendedor: str | None = None, almacen: str | None = None,

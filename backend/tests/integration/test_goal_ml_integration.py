@@ -1,11 +1,13 @@
 # backend/tests/integration/test_goal_ml_integration.py
-"""Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_...md). A
+"""Integración ML del módulo Metas y Comisiones (docs/auditoria/15_.../20_.../49_.../51_...md). A
 diferencia de `test_goals_generation.py` (removido: probaba el generador `goals_rf`
 decomisionado), estas pruebas son de solo lectura: validan el flujo completo
 ModelLoader -> ContractValidator -> Modelo -> validación de salida -> GoalMLService
-contra el EDW y los `.pkl` reales de los modelos que SÍ sigue usando Metas y Comisiones
-(`anomaly`, `association`, `sales_rf` para el pronóstico de cierre) -- ya no `goals_rf`,
-decomisionado: la meta oficial es 100% estadística (`IQRGoalCalculationEngine`)."""
+contra el EDW y los `.pkl` reales del modelo que SÍ sigue usando Metas y Comisiones
+(`association`) -- ni `goals_rf` (decomisionado, auditoría 20) ni `sales_rf`
+(decomisionado, auditoría 49, incluido su consumidor `forecast_cierre`) ni `anomaly`
+(decomisionado, auditoría 51): la meta oficial es 100% estadística
+(`IQRGoalCalculationEngine`)."""
 import pytest
 
 from app.database.session import SessionLocal
@@ -41,13 +43,15 @@ def goal_ml_service(loader):
         db.close()
 
 
-def test_model_loader_carga_los_6_modelos_y_sus_contratos(loader):
-    for key in ["sales_rf", "demand_rf", "churn_rf", "segmentation", "association", "anomaly"]:
+def test_model_loader_carga_los_4_modelos_y_sus_contratos(loader):
+    for key in ["demand_rf", "churn_rf", "segmentation", "association"]:
         assert loader.is_loaded(key), f"Modelo '{key}' no cargó desde {MODELS_DIR}"
         contrato = loader.get_contract(key)
         assert contrato is not None, f"Contrato de '{key}' no cargó desde {CONTRACTS_DIR}"
         assert contrato.is_active, f"Contrato de '{key}' debería estar 'active' (Fase 3 de la reconstrucción ML)"
     assert not loader.is_loaded("goals_rf"), "goals_rf fue decomisionado (docs/auditoria/20_...md), no debe cargar"
+    assert not loader.is_loaded("sales_rf"), "sales_rf fue decomisionado (docs/auditoria/49_...md), no debe cargar"
+    assert not loader.is_loaded("anomaly"), "anomaly fue decomisionado (docs/auditoria/51_...md), no debe cargar"
 
 
 def test_suggest_goal_devuelve_meta_estadistica_y_trazabilidad(goal_ml_service):
@@ -56,17 +60,11 @@ def test_suggest_goal_devuelve_meta_estadistica_y_trazabilidad(goal_ml_service):
     assert resultado.vendedor_origen == VENDEDOR_ORIGEN
     assert resultado.meta_sugerida_estadistica >= 0
     assert resultado.meses_historico_usados >= 1
-    assert resultado.metodo_estadistico in ("estadistico_iqr_v1", "estadistico_iqr_ml_v1")
-
-
-def test_forecast_cierre_pasa_por_contrato_y_devuelve_prediccion_en_rango_plausible(goal_ml_service):
-    resultado = goal_ml_service.forecast_cierre(sucursal=None, meta_mensual=50000.0)
-
-    assert resultado.dias_restantes >= 0
-    # Si contract_validation.py NO hubiera bloqueado una predicción fuera de rango
-    # (ml/contracts/models/sales.json: plausible_range=[0, 5000000]), esta aserción
-    # es la que lo detectaría -- la validación real ya ocurrió dentro de inference.predict_sales.
-    assert 0 <= resultado.proyeccion_cierre <= 5_000_000 * 30  # 30 días acumulados, cota generosa
+    # Motor v2 (docs/auditoria/46_motor_metas_configurable.md): escalera de degradación
+    # explícita según el respaldo estadístico real disponible para el vendedor probado.
+    assert resultado.metodo_estadistico in (
+        "estacional_propio_v2", "estacional_empresa_v2", "tendencia_robusta_v2", "equipo_prorrateado_v2",
+    )
 
 
 def test_get_commercial_recommendations_no_lanza_si_hay_top_productos(goal_ml_service):

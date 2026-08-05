@@ -9,7 +9,7 @@ Reemplaza dos mecanismos previos e inconsistentes:
 Se instancia UNA vez en el `lifespan` de `main.py` y vive en `app.state.model_loader`
 (Singleton gestionado por el ciclo de vida de FastAPI, no por import). El único punto de
 extensión para agregar un modelo nuevo es el diccionario `_MODEL_FILES`: no se justifica
-un Factory Pattern formal porque los 6 modelos son 100% joblib/sklearn-compatible
+un Factory Pattern formal porque los 4 modelos son 100% joblib/sklearn-compatible
 (incluyendo XGBoost/CatBoost/LightGBM vía wrapper sklearn) -- no hay una segunda familia
 de carga (ONNX, etc.) hoy que amerite esa indirection.
 
@@ -36,24 +36,20 @@ logger = logging.getLogger("Backend.ModelLoader")
 # clave usada por services/ml -> nombre de archivo .pkl reconstruido bajo contrato
 # (ml/contracts/models/*.json); coincide con `contract_name` en el sidecar .meta.json.
 _MODEL_FILES: dict[str, str] = {
-    'sales_rf': 'sales.pkl',
     'demand_rf': 'demand.pkl',
     'churn_rf': 'churn.pkl',
     'segmentation': 'segmentation.pkl',
     'association': 'recommendation.pkl',
-    'anomaly': 'anomalies.pkl',
 }
 
 # Nombre de negocio por modelo, compartido entre el panel MLOps de Administrador
 # (`admin_ml.py`, M-02) y la barra de procedencia de datos (`system.py`, docs/auditoria/
 # 33_actualizacion_modulo_gerencia.md H4) -- antes duplicado solo en `admin_ml.py`.
 MODEL_DISPLAY_NAMES: dict[str, str] = {
-    "sales_rf": "Random Forest (Ventas)",
     "demand_rf": "Random Forest (Demanda)",
     "churn_rf": "Clasificador de Churn",
     "segmentation": "K-Means RFM (Segmentación)",
     "association": "Apriori (Venta Cruzada)",
-    "anomaly": "Isolation Forest (Anomalías)",
 }
 
 

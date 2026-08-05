@@ -6,7 +6,7 @@ export const qk = {
     sucursales: () => ['gerencia', 'sucursales'] as const,
     vendedores: () => ['gerencia', 'vendedores'] as const,
     almacenes: () => ['gerencia', 'almacenes'] as const,
-    salesPrediction: (filters: unknown) => ['gerencia', 'sales-prediction', filters] as const,
+    evolucionMensual: (filters: unknown) => ['gerencia', 'evolucion-mensual', filters] as const,
     cumplimientoMeta: (anio: number, mes: number) => ['gerencia', 'cumplimiento-meta', anio, mes] as const,
   },
   bodega: {
@@ -29,10 +29,21 @@ export const qk = {
     prediccionComprasMes: (filters: unknown, productoCod: string | null | undefined) =>
       ['bodega', 'prediccion-compras-mes', filters, productoCod] as const,
   },
+  reabastecimiento: {
+    lista: (filters: unknown, extra: unknown, pagination: unknown) =>
+      ['reabastecimiento', 'lista', filters, extra, pagination] as const,
+    resumen: (filters: unknown, horizonte: number | null | undefined) =>
+      ['reabastecimiento', 'resumen', filters, horizonte] as const,
+    politica: () => ['reabastecimiento', 'politica'] as const,
+    leadTimes: () => ['reabastecimiento', 'lead-times'] as const,
+    alertas: (filters: unknown, horizonte: number | null | undefined) =>
+      ['reabastecimiento', 'alertas', filters, horizonte] as const,
+    propuestas: () => ['reabastecimiento', 'propuestas'] as const,
+    propuestaDetalle: (id: number) => ['reabastecimiento', 'propuestas', id] as const,
+  },
   ventas: {
     goals: (anio?: number, mes?: number) => ['ventas', 'goals', anio, mes] as const,
     myGoalTracking: () => ['ventas', 'my-goal-tracking'] as const,
-    forecastCierre: () => ['ventas', 'goal-forecast-cierre'] as const,
     metaSugerida: () => ['ventas', 'goal-meta-sugerida'] as const,
     goalRecommendations: () => ['ventas', 'goal-recommendations'] as const,
     myCommission: () => ['ventas', 'my-commission'] as const,
@@ -46,7 +57,10 @@ export const qk = {
     aiSummary: () => ['goals', 'ai-summary'] as const,
     commissionTracking: (anio: number, mes: number, vendedor?: string | null) =>
       ['goals', 'commission-tracking', anio, mes, vendedor ?? null] as const,
-    metaSugeridaGerencia: (vendedorOrigen: string) => ['goals', 'meta-sugerida', vendedorOrigen] as const,
+    metaSugeridaGerencia: (vendedorOrigen: string, anio?: number | null, mes?: number | null) =>
+      ['goals', 'meta-sugerida', vendedorOrigen, anio ?? null, mes ?? null] as const,
+    metaConfigCatalogo: () => ['goals', 'meta-config', 'catalogo'] as const,
+    metaConfigModulos: () => ['goals', 'meta-config', 'modulos'] as const,
   },
   commissionConfig: {
     matriz: () => ['commission-config', 'matriz'] as const,
@@ -59,6 +73,7 @@ export const qk = {
     searchClases: (q: string) => ['commission-config', 'search-clases', q] as const,
     searchVendedores: (q: string) => ['commission-config', 'search-vendedores', q] as const,
     tramosCobranza: () => ['commission-config', 'tramos-cobranza'] as const,
+    tramosCumplimiento: () => ['commission-config', 'tramos-cumplimiento'] as const,
     formulas: () => ['commission-config', 'formulas'] as const,
   },
   cartera360: {

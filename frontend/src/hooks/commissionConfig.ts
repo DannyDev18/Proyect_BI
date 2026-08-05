@@ -1,19 +1,19 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getMatrizCategorias, upsertMatrizCategoria, deleteMatrizCategoria, getFactoresCredito, replaceFactoresCredito,
+  getMatrizCategorias, upsertMatrizCategoria, deleteMatrizCategoria,
   getConfigVendedores, upsertConfigVendedor, postCommissionSimulation, getPerfilCategorias, getLineasSinCosto,
   getComisionConfigAuditoria, searchClasesProducto, searchVendedoresComision,
-  getTramosCobranza, replaceTramosCobranza, getFormulas, replaceFormulaComponentes,
+  getTramosCobranza, replaceTramosCobranza, getTramosCumplimiento, replaceTramosCumplimiento, getFormulas,
+  replaceFormulaComponentes,
 } from '../services/commissionConfig';
 import { qk } from '../constants/queryKeys';
 import type {
-  ComisionConfigAuditoriaEntrada, ConfigVendedor, FactorCredito, LineaSinCosto, MatrizCategoria, PerfilCategoria,
-  SimulacionComisionPayload, TipoVendedor, TodosTramosCobranza, FormulaComponentePayload, Formulas,
+  ComisionConfigAuditoriaEntrada, ConfigVendedor, LineaSinCosto, MatrizCategoria, PerfilCategoria,
+  SimulacionComisionPayload, TipoVendedor, TodosTramosCobranza, TramoCumplimiento, FormulaComponentePayload, Formulas,
 } from '../types/commissionConfig';
 import { getApiErrorMessage as errorMessage } from '../utils/apiError';
 
 const EMPTY_MATRIZ: MatrizCategoria[] = [];
-const EMPTY_CREDITO: FactorCredito[] = [];
 const EMPTY_VENDEDORES: ConfigVendedor[] = [];
 const EMPTY_PERFILES: PerfilCategoria[] = [];
 const EMPTY_LINEAS: LineaSinCosto[] = [];
@@ -52,26 +52,6 @@ export const useDeleteMatrizCategoria = () => {
     },
   });
   return { remove: mutation.mutateAsync, loading: mutation.isPending };
-};
-
-export const useFactoresCredito = () => {
-  const query = useQuery({
-    queryKey: qk.commissionConfig.credito(),
-    queryFn: () => getFactoresCredito().then((r) => r.data.factores),
-  });
-  return { data: query.data ?? EMPTY_CREDITO, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
-};
-
-export const useReplaceFactoresCredito = () => {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: replaceFactoresCredito,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.credito() });
-      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.auditoria() });
-    },
-  });
-  return { replace: mutation.mutateAsync, loading: mutation.isPending };
 };
 
 export const useConfigVendedores = () => {
@@ -175,6 +155,33 @@ export const useReplaceTramosCobranza = () => {
     mutationFn: replaceTramosCobranza,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.commissionConfig.tramosCobranza() });
+      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.auditoria() });
+    },
+  });
+  return { replace: mutation.mutateAsync, loading: mutation.isPending };
+};
+
+// ── Tramos de cumplimiento (auditoría 45, docs/features/plan_comisiones_
+// sobrecumplimiento_umbral_y_desglose.md) ────────────────────────────────────────
+const EMPTY_TRAMOS_CUMPLIMIENTO: TramoCumplimiento[] = [];
+
+export const useTramosCumplimiento = () => {
+  const query = useQuery({
+    queryKey: qk.commissionConfig.tramosCumplimiento(),
+    queryFn: () => getTramosCumplimiento().then((r) => r.data),
+  });
+  return {
+    data: query.data ?? EMPTY_TRAMOS_CUMPLIMIENTO, loading: query.isLoading,
+    error: errorMessage(query.error), refetch: query.refetch,
+  };
+};
+
+export const useReplaceTramosCumplimiento = () => {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: replaceTramosCumplimiento,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.commissionConfig.tramosCumplimiento() });
       queryClient.invalidateQueries({ queryKey: qk.commissionConfig.auditoria() });
     },
   });

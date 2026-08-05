@@ -27,11 +27,9 @@ LEGACY_XFAIL_REASON: dict[str, str] = {}
 # Patrón de archivo legacy en ml/models/ para cada contrato (los nombres
 # legacy no siempre coinciden con el nombre del contrato nuevo).
 LEGACY_ARTIFACT_GLOB = {
-    "sales": "sales*.pkl",
     "demand": "demand*.pkl",
     "segmentation": "segmentation*.pkl",
     "churn": "churn.pkl",
-    "anomalies": "anomalies.pkl",
     "recommendation": "recommendation.pkl",
     "goals": "goals.pkl",
 }

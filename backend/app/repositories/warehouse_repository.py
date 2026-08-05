@@ -175,6 +175,96 @@ class WarehouseRepository:
         """
         return int(self.db.execute(text(query), params).scalar() or 0)
 
+    # ── Reabastecimiento Inteligente (docs/features/plan_reabastecimiento_
+    # inteligente.md §6.4, auditoría docs/auditoria/50_..md) ────────────────
+    def get_metricas_reabastecimiento(
+        self, sucursal: str | None = None, almacen: str | None = None,
+        categoria: str | None = None, proveedor: str | None = None,
+        tipo_movimiento: str | None = None, meses_ventana: int = 12,
+    ) -> list[dict[str, Any]]:
+        """Insumo crudo del motor puro (`replenishment_engine`): stock/costo actual
+        (último snapshot, mismo criterio que `get_inventario_productos`), valor de
+        consumo de `meses_ventana` meses (para ABC, ordenado por el llamador -- esta
+        consulta no calcula el acumulado de Pareto, eso es responsabilidad del
+        servicio, que ya tiene TODO el catálogo en memoria) y estadística mensual de
+        salidas (para XYZ y para `estadistica_demanda`: media/sigma sobre unidades
+        mensuales, más `meses_con_venta` para decidir el método). Reutiliza
+        `_filtros_snapshot` -- mismo choke point de RLS que el resto del repositorio."""
+        where_extra, params = self._filtros_snapshot(sucursal, almacen, categoria, proveedor, tipo_movimiento)
+        params["meses_ventana"] = meses_ventana
+
+        query = f"""
+            WITH ultimo AS (SELECT MAX(fecha_sk) AS fecha_sk FROM edw.fact_inventario_snapshot),
+            snap AS (
+                SELECT p.codart,
+                       MAX(p.nombre_articulo)              AS nombre,
+                       MAX(COALESCE(p.clase, 'SIN-CLASE'))  AS categoria,
+                       SUM(s.stock_actual)                  AS stock_actual,
+                       MAX(s.costo_promedio)                AS costo_unitario,
+                       SUM(s.punto_reorden)                 AS punto_reorden_config
+                FROM edw.fact_inventario_snapshot s
+                JOIN ultimo u ON s.fecha_sk = u.fecha_sk
+                JOIN edw.dim_producto p ON s.producto_sk = p.producto_sk
+                JOIN edw.dim_almacen  al ON s.almacen_sk = al.almacen_sk
+                JOIN edw.dim_sucursal su ON s.sucursal_sk = su.sucursal_sk
+                WHERE p.producto_sk <> -1 {where_extra}
+                GROUP BY p.codart
+            ),
+            valor_consumo AS (
+                SELECT p.codart, SUM(v.cantidad * v.costo_unitario) AS valor_consumo
+                FROM edw.fact_ventas_detalle v
+                JOIN edw.dim_producto p ON p.producto_sk = v.producto_sk
+                JOIN edw.dim_fecha d ON d.fecha_sk = v.fecha_sk
+                JOIN edw.dim_almacen  al ON v.almacen_sk = al.almacen_sk
+                JOIN edw.dim_sucursal su ON v.sucursal_sk = su.sucursal_sk
+                WHERE p.producto_sk <> -1
+                  AND d.fecha_completa >= CURRENT_DATE - (:meses_ventana * INTERVAL '1 month')
+                  {where_extra}
+                GROUP BY p.codart
+            ),
+            mensual AS (
+                SELECT p.codart, d.anio, d.mes, SUM(m.cantidad_movimiento) AS unidades
+                FROM edw.fact_movimientos_inventario m
+                JOIN edw.dim_producto p ON p.producto_sk = m.producto_sk
+                JOIN edw.dim_fecha d ON d.fecha_sk = m.fecha_sk
+                JOIN edw.dim_almacen  al ON m.almacen_sk = al.almacen_sk
+                JOIN edw.dim_sucursal su ON m.sucursal_sk = su.sucursal_sk
+                WHERE m.es_salida AND p.producto_sk <> -1
+                  AND d.fecha_completa >= CURRENT_DATE - (:meses_ventana * INTERVAL '1 month')
+                  {where_extra}
+                GROUP BY p.codart, d.anio, d.mes
+            ),
+            demanda AS (
+                SELECT codart,
+                       COUNT(*)                                    AS meses_con_venta,
+                       ARRAY_AGG(unidades ORDER BY anio, mes)       AS unidades_mensuales
+                FROM mensual GROUP BY codart
+            )
+            SELECT snap.codart, snap.nombre, snap.categoria, snap.stock_actual,
+                   snap.costo_unitario, snap.punto_reorden_config,
+                   COALESCE(vc.valor_consumo, 0)      AS valor_consumo,
+                   COALESCE(d.meses_con_venta, 0)      AS meses_con_venta,
+                   COALESCE(d.unidades_mensuales, ARRAY[]::numeric[]) AS unidades_mensuales
+            FROM snap
+            LEFT JOIN valor_consumo vc ON vc.codart = snap.codart
+            LEFT JOIN demanda d ON d.codart = snap.codart
+        """
+        res = self.db.execute(text(query), params).fetchall()
+        return [
+            {
+                "codart": str(r[0]),
+                "nombre": str(r[1]),
+                "categoria": str(r[2]),
+                "stock_actual": float(r[3] or 0),
+                "costo_unitario": float(r[4] or 0),
+                "punto_reorden_config": float(r[5] or 0),
+                "valor_consumo": float(r[6] or 0),
+                "meses_con_venta": int(r[7] or 0),
+                "unidades_mensuales": [float(u) for u in (r[8] or [])],
+            }
+            for r in res
+        ]
+
     # ── Catálogos para los filtros globales (§1.1) ──────────────────────────
     def get_proveedores(self, categoria: str | None = None) -> list[str]:
         """Catálogo de proveedores para el filtro de bodega. `categoria` (Fase 2,

@@ -5,6 +5,9 @@ export interface GoalProposal {
   monto_meta: number;
   comision_base_pct: number;
   estado: string;
+  // Estado real del vendedor en el EDW (edw.dim_vendedor.activo) -- petición explícita
+  // del usuario: verificar si el vendedor sigue activo antes de aprobar su meta.
+  activo: boolean;
 }
 
 // Desglose del motor estadístico IQR para un vendedor -- transparencia del cálculo
@@ -21,7 +24,58 @@ export interface MetaSugeridaDesglose {
   componente_tendencia: number;
   factor_tendencia_aplicado: number;
   coeficiente_variacion: number;
+  // Motor v2 (docs/auditoria/46_motor_metas_configurable.md, plan_motor_metas_configurable.md):
+  anio_objetivo: number;
+  mes_objetivo: number;
+  indice_estacional_aplicado: number;
+  fuente_indice_estacional: 'propio' | 'empresa' | 'neutro';
+  referencia_alcanzable: number;
+  banda_actuo: boolean;
+  meta_pre_banda: number;
+  meta_unidades_estadistica: number;
+  es_trazabilidad_persistida: boolean;
 }
+
+/** Configuración modular del motor de metas v3 (docs/features/plan_motor_metas_v3_y_
+ * comisiones_unificadas.md §9/§18, Fase 6): una fila por etapa del pipeline -- reemplaza
+ * por completo al motor v2 plano de 13 constantes como fuente real del motor (ese
+ * endpoint se conserva en el backend por compatibilidad, sin cliente frontend). */
+export interface MetaConfigModulo {
+  etapa: string;
+  metodo: string | null;
+  activo: boolean;
+  orden: number;
+  parametros: Record<string, unknown>;
+  razon_desactivacion: string | null;
+  actualizado_en: string;
+}
+
+export interface MetaConfigModuloMetodo {
+  implementado: boolean;
+  descripcion: string;
+  motivo: string | null;
+}
+
+/** Un parámetro numérico editable de la etapa -- fuente única para que el frontend
+ * genere un campo de formulario (no un editor de JSON crudo). */
+export interface MetaConfigModuloParametro {
+  clave: string;
+  label: string;
+  tipo: 'int' | 'float';
+  min: number;
+  max: number;
+  paso: number;
+  default: number;
+}
+
+export interface MetaConfigModuloCatalogoEtapa {
+  orden: number;
+  nombre: string;
+  metodos: Record<string, MetaConfigModuloMetodo>;
+  parametros: MetaConfigModuloParametro[];
+}
+
+export type MetaConfigCatalogo = Record<string, MetaConfigModuloCatalogoEtapa>;
 
 export interface GoalPeriod {
   anio: number;
@@ -58,18 +112,27 @@ export interface GoalsAISummary {
 // ── Comisiones (docs/modulo_metas.md, docs/auditoria/17_...) ────────────────────────
 export type NivelComision = 'EXCELENTE' | 'META' | 'CERCA' | 'LEJOS';
 
+export interface ComponenteFormulaTraza {
+  orden: number;
+  componente: string;
+  operador: 'sumar' | 'restar' | 'multiplicar';
+  monto: number;
+  acumulado_tras_paso: number;
+}
+
 export interface VendorCommissionRow {
   id: number;
   vendedor: string;
   monto_meta: number;
   venta_real: number;
   pct_cumplimiento: number;
-  nivel: NivelComision;
+  // Tramo real de cumplimiento configurable (auditoría 45), no el enum fijo legacy.
+  nivel: string;
   tasa_aplicada_pct: number;
   comision_devengada: number;
   estado: string;
-  // Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md):
-  // null salvo que el backend corra en modo "sombra"/"variable" (COMISION_MODO).
-  comision_variable?: number | null;
-  nivel_variable?: NivelComision | null;
+  // Comisión única y variable (docs/features/plan_motor_metas_v3_y_comisiones_
+  // unificadas.md, Fase 1, R-1/R-3) -- sin esquema plano paralelo. `componentes` es
+  // el desglose de los 7 pasos de la fórmula, expandible en la tabla.
+  componentes: ComponenteFormulaTraza[];
 }

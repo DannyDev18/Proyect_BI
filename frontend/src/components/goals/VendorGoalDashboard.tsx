@@ -1,6 +1,6 @@
-import { Target, Wallet, TrendingUp, CalendarClock, Trophy, Sparkles, Brain, Receipt, Gift } from 'lucide-react';
+import { Target, Wallet, TrendingUp, Trophy, Sparkles, Receipt, Gift } from 'lucide-react';
 import {
-  useMyGoalTracking, useGoalForecastCierre, useMetaSugerida, useGoalRecommendations,
+  useMyGoalTracking, useMetaSugerida, useGoalRecommendations,
   useMyCommission, usePostGoalInvoices,
 } from '../../hooks/ventas';
 import { KpiCard, KpiCardSkeleton } from '../ui/KpiCard';
@@ -8,7 +8,6 @@ import { ChartCard } from '../ui/ChartCard';
 import { Badge } from '../ui/Badge';
 import { GoalProgressGauge } from './GoalProgressGauge';
 import { fmt, fmtMoney, pct } from '../../utils/format';
-import type { NivelComision } from '../../types/ventas';
 
 type EstadoMeta = 'riesgo' | 'cerca' | 'proxima' | 'alcanzada';
 
@@ -28,36 +27,8 @@ const estadoDeMeta = (cumplimientoPct: number): EstadoMeta => {
   return 'riesgo';
 };
 
-// Mismos 4 niveles que commission_engine.py::NivelCumplimiento -- la fuente de verdad del
-// tramo es el backend, esto solo mapea la etiqueta a mostrar y su color.
-const NIVEL_CONFIG: Record<NivelComision, { label: string; badgeVariant: 'danger' | 'warning' | 'info' | 'success' }> = {
-  LEJOS:     { label: 'Lejos',     badgeVariant: 'danger' },
-  CERCA:     { label: 'Cerca',     badgeVariant: 'warning' },
-  META:      { label: 'Meta',      badgeVariant: 'info' },
-  EXCELENTE: { label: 'Excelente', badgeVariant: 'success' },
-};
-
-// Auditoría 43 (H43-15, docs/auditoria/43_correcciones_sesion_ventas_y_datos.md): el
-// panel dual mostraba SIEMPRE "Piloto en sombra" / "no afecta tu pago actual", asumiendo
-// `COMISION_MODO=sombra` -- si se activa `variable`, esa comisión SÍ es la que se paga, y
-// el texto anterior sería falso. El badge y el copy se derivan ahora del modo real que
-// reporta el backend (`MiComision.modo_comision`).
-const PANEL_VARIABLE_CONFIG: Record<'sombra' | 'variable', { badge: string; titulo: string; nota: string }> = {
-  sombra: {
-    badge: 'Piloto en sombra',
-    titulo: 'Con el sistema nuevo habrías ganado',
-    nota: 'Comparación simulada — no afecta tu pago actual mientras el piloto esté en sombra.',
-  },
-  variable: {
-    badge: 'Esquema oficial',
-    titulo: 'Tu comisión por margen y categoría',
-    nota: 'Este es el esquema con el que se calcula tu pago actual.',
-  },
-};
-
 export const VendorGoalDashboard = () => {
   const { data, loading, error } = useMyGoalTracking();
-  const forecast = useGoalForecastCierre();
   const metaSugerida = useMetaSugerida();
   const recomendaciones = useGoalRecommendations();
   const comision = useMyCommission();
@@ -113,57 +84,30 @@ export const VendorGoalDashboard = () => {
         </div>
       </ChartCard>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Última semana / pronóstico de cierre -- modelo sales_rf */}
-        <ChartCard title="Pronóstico de cierre del mes" badge={{ label: 'Random Forest', variant: 'ml' }} loading={forecast.loading} error={forecast.error ?? undefined} height="h-[220px]">
-          <div className="grid grid-cols-2 gap-4 h-full items-center">
-            <div className="flex flex-col items-center text-center gap-1">
-              <CalendarClock size={20} className="text-info" aria-hidden="true" />
-              <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data?.dias_restantes ?? '—'}</span>
-              <span className="text-xs text-slate-500">Días restantes</span>
-            </div>
-            <div className="flex flex-col items-center text-center gap-1">
-              <TrendingUp size={20} className="text-info" aria-hidden="true" />
-              <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data ? fmt(forecast.data.proyeccion_cierre) : '—'}</span>
-              <span className="text-xs text-slate-500">Proyección de cierre</span>
-            </div>
-            <div className="flex flex-col items-center text-center gap-1">
-              <Target size={20} className="text-warning" aria-hidden="true" />
-              <span className="font-mono text-2xl font-semibold text-slate-100">{forecast.data ? pct(forecast.data.pct_cumplimiento_esperado) : '—'}</span>
-              <span className="text-xs text-slate-500">% cumplimiento esperado</span>
-            </div>
-            <div className="flex flex-col items-center text-center gap-1">
-              <Brain size={20} className="text-warning" aria-hidden="true" />
-              <span className="font-mono text-2xl font-semibold text-slate-100">
-                {forecast.data?.probabilidad_alcanzar_meta != null ? pct(forecast.data.probabilidad_alcanzar_meta) : '—'}
-              </span>
-              <span className="text-xs text-slate-500">Probabilidad de alcanzar la meta</span>
-            </div>
-          </div>
-        </ChartCard>
-
-        {/* Meta sugerida (próximo período) -- 100% estadística, sin modelo ML (goals_rf decomisionado) */}
-        <ChartCard title="Meta sugerida (próximo período)" badge={{ label: 'Estadística', variant: 'hist' }} loading={metaSugerida.loading} error={metaSugerida.error ?? undefined} height="h-[220px]">
-          <div className="flex flex-col items-center justify-center h-full gap-2">
-            <Target size={20} className="text-info" aria-hidden="true" />
-            <span className="font-mono text-2xl font-semibold text-slate-100">
-              {metaSugerida.data ? fmt(metaSugerida.data.meta_sugerida_estadistica) : '—'}
-            </span>
-            <span className="text-xs text-slate-500">Histórico limpio de picos (IQR) + tendencia reciente</span>
-            {metaSugerida.data && (
-              <p className="text-xs text-slate-500 text-center">
-                {metaSugerida.data.meses_historico_usados} meses de histórico · {metaSugerida.data.valores_atipicos_excluidos} atípicos excluidos (IQR) · {metaSugerida.data.meses_atipicos_ml_detectados} meses con transacciones atípicas (IsolationForest)
-              </p>
-            )}
-          </div>
-        </ChartCard>
-      </div>
+      {/* Meta sugerida (próximo período) -- 100% estadística, sin modelo ML (goals_rf
+          decomisionado). El "Pronóstico de cierre" (sales_rf) se retiró por completo,
+          auditoría 49. */}
+      <ChartCard title="Meta sugerida (próximo período)" badge={{ label: 'Estadística', variant: 'hist' }} loading={metaSugerida.loading} error={metaSugerida.error ?? undefined} height="h-[220px]">
+        <div className="flex flex-col items-center justify-center h-full gap-2">
+          <Target size={20} className="text-info" aria-hidden="true" />
+          <span className="font-mono text-2xl font-semibold text-slate-100">
+            {metaSugerida.data ? fmt(metaSugerida.data.meta_sugerida_estadistica) : '—'}
+          </span>
+          <span className="text-xs text-slate-500">Histórico limpio de picos (IQR) + tendencia reciente</span>
+          {metaSugerida.data && (
+            <p className="text-xs text-slate-500 text-center">
+              {metaSugerida.data.meses_historico_usados} meses de histórico · {metaSugerida.data.valores_atipicos_excluidos} atípicos excluidos (IQR) · {metaSugerida.data.meses_atipicos_ml_detectados} meses con transacciones atípicas (IsolationForest)
+            </p>
+          )}
+        </div>
+      </ChartCard>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Comisión -- Venta Neta real vs. meta, tramo y tasa aplicada (commission_engine.py) */}
+        {/* Comisión -- única y variable (docs/features/plan_motor_metas_v3_y_comisiones_
+            unificadas.md, Fase 1, R-1): ya no hay un esquema plano paralelo que comparar. */}
         <ChartCard
           title="Comisión"
-          badge={{ label: comision.data ? NIVEL_CONFIG[comision.data.nivel].label : '—', variant: 'live' }}
+          badge={{ label: comision.data?.nivel ?? '—', variant: 'live' }}
           loading={comision.loading}
           error={comision.error ?? undefined}
           height="h-[220px]"
@@ -181,76 +125,41 @@ export const VendorGoalDashboard = () => {
               <span className="font-mono text-2xl font-semibold text-slate-100">
                 {comision.data ? `${comision.data.tasa_aplicada_pct.toFixed(2)}%` : '—'}
               </span>
-              <span className="text-xs text-slate-500">Tasa aplicada</span>
+              <span className="text-xs text-slate-500">Tasa efectiva</span>
             </div>
             {comision.data && comision.data.bono_aplicado > 0 && (
               <div className="col-span-2 flex items-center justify-center gap-2 text-sm text-warning">
                 <Gift size={14} aria-hidden="true" />
-                <span>Incluye bono de sobrecumplimiento: {fmtMoney(comision.data.bono_aplicado)}</span>
+                <span>Incluye bonos (cross-sell, cliente nuevo, cobranza sana): {fmtMoney(comision.data.bono_aplicado)}</span>
               </div>
             )}
             {comision.data && (
               <p className="col-span-2 text-xs text-slate-500 text-center">
                 Venta Neta {fmtMoney(comision.data.venta_real)} de meta {fmtMoney(comision.data.monto_meta)}
+                {comision.data.comision_devengada === 0 && comision.data.pct_cumplimiento < 100 && (
+                  <span className="block text-danger mt-1">
+                    No alcanzaste el umbral mínimo de cumplimiento este período -- sin comisión.
+                  </span>
+                )}
               </p>
+            )}
+            {comision.data?.desglose_variable && (
+              <details className="col-span-2 text-xs text-slate-400">
+                <summary className="cursor-pointer text-center text-primary hover:text-primary">
+                  Ver cómo se calculó
+                </summary>
+                <ul className="mt-2 space-y-1 font-mono">
+                  <li className="flex justify-between"><span>Base por línea (categoría/margen)</span><span>{fmtMoney(comision.data.desglose_variable.comision_base)}</span></li>
+                  <li className="flex justify-between"><span>× Tipo de vendedor</span><span>{fmtMoney(comision.data.desglose_variable.comision_post_tipo)}</span></li>
+                  <li className="flex justify-between"><span>× Cumplimiento ({comision.data.desglose_variable.multiplicador_cumplimiento.toFixed(2)}×)</span><span>{fmtMoney(comision.data.desglose_variable.comision_post_cumplimiento)}</span></li>
+                  <li className="flex justify-between"><span>− Devoluciones estimadas</span><span>{fmtMoney(comision.data.desglose_variable.devoluciones_estimadas)}</span></li>
+                  <li className="flex justify-between"><span>+ Bonos (venta cruzada, cliente nuevo, cobranza)</span><span>{fmtMoney(comision.data.desglose_variable.bonos_total)}</span></li>
+                  <li className="flex justify-between border-t border-slate-800 pt-1 text-primary font-semibold"><span>Total</span><span>{fmtMoney(comision.data.desglose_variable.comision_final)}</span></li>
+                </ul>
+              </details>
             )}
           </div>
         </ChartCard>
-
-        {/* Comisiones Variables: solo se muestra si el backend está calculando el esquema
-            por margen/categoría (COMISION_MODO=sombra o variable). Auditoría 43 (H43-15):
-            badge/título/nota se derivan del modo real, no de un texto fijo asumiendo
-            "sombra" -- en modo "variable" esta comisión SÍ es la que se paga. */}
-        {comision.data?.comision_variable != null && (() => {
-          const modo = comision.data.modo_comision === 'variable' ? 'variable' : 'sombra';
-          const cfg = PANEL_VARIABLE_CONFIG[modo];
-          return (
-          <ChartCard
-            title={cfg.titulo}
-            badge={{ label: cfg.badge, variant: 'ml' }}
-            height="h-[220px]"
-          >
-            <div className="grid grid-cols-2 gap-4 h-full items-center">
-              <div className="flex flex-col items-center text-center gap-1">
-                <Wallet size={20} className={modo === 'variable' ? 'text-success' : 'text-warning'} aria-hidden="true" />
-                <span className={`font-mono text-2xl font-semibold ${modo === 'variable' ? 'text-success' : 'text-warning'}`}>
-                  {fmtMoney(comision.data.comision_variable)}
-                </span>
-                <span className="text-xs text-slate-500">
-                  {modo === 'variable' ? 'Comisión oficial (margen/categoría)' : 'Comisión variable (margen/categoría)'}
-                </span>
-              </div>
-              <div className="flex flex-col items-center text-center gap-1">
-                <Wallet size={20} className="text-primary" aria-hidden="true" />
-                <span className="font-mono text-2xl font-semibold text-slate-100">
-                  {fmtMoney(comision.data.comision_devengada)}
-                </span>
-                <span className="text-xs text-slate-500">
-                  {modo === 'variable' ? 'Esquema plano (referencia, ya no se paga)' : 'Comisión actual (tasa plana)'}
-                </span>
-              </div>
-              <p className="col-span-2 text-xs text-slate-500 text-center">
-                {cfg.nota}
-              </p>
-              {comision.data.desglose_variable && (
-                <details className="col-span-2 text-xs text-slate-400">
-                  <summary className="cursor-pointer text-center text-primary hover:text-primary">
-                    Ver cómo se calculó
-                  </summary>
-                  <ul className="mt-2 space-y-1 font-mono">
-                    <li className="flex justify-between"><span>Base por línea (categoría/margen)</span><span>{fmtMoney(comision.data.desglose_variable.comision_base)}</span></li>
-                    <li className="flex justify-between"><span>× Tipo de vendedor</span><span>{fmtMoney(comision.data.desglose_variable.comision_post_tipo)}</span></li>
-                    <li className="flex justify-between"><span>× Cumplimiento ({comision.data.desglose_variable.multiplicador_cumplimiento.toFixed(2)}×, {NIVEL_CONFIG[comision.data.desglose_variable.nivel].label})</span><span>{fmtMoney(comision.data.desglose_variable.comision_post_cumplimiento)}</span></li>
-                    <li className="flex justify-between"><span>− Devoluciones estimadas</span><span>{fmtMoney(comision.data.desglose_variable.devoluciones_estimadas)}</span></li>
-                    <li className="flex justify-between"><span>+ Bonos (venta cruzada, cliente nuevo, cobranza)</span><span>{fmtMoney(comision.data.desglose_variable.bonos_total)}</span></li>
-                    <li className="flex justify-between border-t border-slate-800 pt-1 text-primary font-semibold"><span>Total</span><span>{fmtMoney(comision.data.desglose_variable.comision_final)}</span></li>
-                  </ul>
-                </details>
-              )}
-            </div>
-          </ChartCard>
-          );
-        })()}
 
         {/* Recomendaciones de productos -- reglas de asociación */}
         <ChartCard

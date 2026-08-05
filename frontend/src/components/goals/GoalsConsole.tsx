@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
-import { TrendingUp, Trophy, Info } from "lucide-react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Loader2, Trophy, Info } from "lucide-react";
 
 import { usePeriods, useGoalsTracking, useGenerateGoals, useReviewGoal, useMetaSugeridaGerencia } from "../../hooks/goals";
 import { useVendedores } from "../../hooks/gerencia";
@@ -9,8 +9,10 @@ import { Button } from "../ui/Button";
 import { DataTable, type DataTableColumn } from "../ui/DataTable";
 import { Badge } from "../ui/Badge";
 import { Drawer } from "../ui/Drawer";
+import { Tabs } from "../ui/Tabs";
 import { useToast } from "../../store/toastStore";
 import { fmtMoney, pct } from "../../utils/format";
+import { MetaConfigPanel } from "./MetaConfigPanel";
 
 const ESTADO_BADGE: Record<string, { variant: 'success' | 'danger' | 'warning'; label: string }> = {
   APROBADA: { variant: 'success', label: 'APROBADA' },
@@ -23,8 +25,9 @@ export function GoalsConsole() {
   const [hasInitializedPeriod, setHasInitializedPeriod] = useState(false);
   const [vendedorFiltro, setVendedorFiltro] = useState<string>('');
   const [detalleVendedor, setDetalleVendedor] = useState<GoalProposal | null>(null);
+  const [tab, setTab] = useState<'propuestas' | 'formula'>('propuestas');
   const toast = useToast();
-  const desglose = useMetaSugeridaGerencia(detalleVendedor?.vendedor_origen ?? null);
+  const desglose = useMetaSugeridaGerencia(detalleVendedor?.vendedor_origen ?? null, period.anio, period.mes);
   const { data: vendedoresLista } = useVendedores();
 
   const periods = usePeriods();
@@ -40,7 +43,15 @@ export function GoalsConsole() {
 
   useEffect(() => {
     if (!hasInitializedPeriod && months.length > 0) {
-      setPeriod({ anio: months[0].anio, mes: months[0].mes });
+      // El horizonte de planificación ahora incluye meses históricos con metas ya
+      // generadas -- elegir siempre el mes calendario vigente (o, si no está en la
+      // lista, el más cercano hacia adelante) en vez de `months[0]` (el más antiguo),
+      // para que la consola abra en el período que gerencia normalmente va a revisar.
+      const hoy = new Date();
+      const actual = months.find((m) => m.anio === hoy.getFullYear() && m.mes === hoy.getMonth() + 1);
+      const siguienteFuturo = months.find((m) => m.anio > hoy.getFullYear() || (m.anio === hoy.getFullYear() && m.mes >= hoy.getMonth() + 1));
+      const inicial = actual ?? siguienteFuturo ?? months[0];
+      setPeriod({ anio: inicial.anio, mes: inicial.mes });
       setHasInitializedPeriod(true);
     }
   }, [months, hasInitializedPeriod]);
@@ -53,27 +64,38 @@ export function GoalsConsole() {
 
   const generateMut = useGenerateGoals();
   const reviewMut = useReviewGoal();
-  const loading = tracking.loading || generateMut.loading;
+  const loading = tracking.loading;
 
-  const handleGenerate = async () => {
-    const factor = 1 + pressure / 100;
-    try {
-      await generateMut.generate({ anio: period.anio, mes: period.mes, factor });
-      toast('Plan de metas generado correctamente.', 'success');
-    } catch (err) {
-      console.error("Error generando metas:", err);
-      toast('No se pudo generar el plan de metas.', 'error');
-    }
-  };
+  // La fórmula de metas (motor v3) se aplica automáticamente sobre la propuesta que
+  // luego se pasa a aprobar -- sin un botón manual "Generar Plan": al mover el factor de
+  // presión comercial o cambiar de período, las propuestas PENDIENTES se recalculan
+  // solas (debounce de 600ms mientras se arrastra el slider, para no golpear el EDW en
+  // cada pixel de movimiento). `generate_proposals` es idempotente sobre filas en
+  // estado PROPUESTA -- nunca toca una meta ya APROBADA/RECHAZADA.
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!hasInitializedPeriod) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const factor = 1 + pressure / 100;
+      generateMut.generate({ anio: period.anio, mes: period.mes, factor }).catch((err) => {
+        console.error("Error generando metas:", err);
+        toast('No se pudieron actualizar las propuestas de meta.', 'error');
+      });
+    }, 600);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period.anio, period.mes, pressure, hasInitializedPeriod]);
 
   const handleReview = async (
     id: number,
     estado: "APROBADA" | "RECHAZADA",
     monto: number,
-    comision: number,
   ) => {
     try {
-      await reviewMut.review({ id, monto_meta: monto, estado, comision_base_pct: comision });
+      await reviewMut.review({ id, monto_meta: monto, estado });
       toast(estado === 'APROBADA' ? 'Meta aprobada.' : 'Meta rechazada.', 'success');
     } catch (err) {
       console.error("Error procesando aprobacion:", err);
@@ -88,7 +110,7 @@ export function GoalsConsole() {
         <button
           className="font-semibold text-primary hover:text-primary hover:underline inline-flex items-center gap-1"
           onClick={() => setDetalleVendedor(p)}
-          title="Ver cómo se calculó la meta sugerida (IQR)"
+          title="Ver cómo se calculó la meta sugerida"
         >
           {p.vendedor}
           <Info size={12} className="text-slate-500" aria-hidden="true" />
@@ -99,12 +121,16 @@ export function GoalsConsole() {
       key: 'monto',
       header: 'Meta Propuesta ($)',
       render: (p) => {
-        const isModified = pressure !== 10 && p.estado === "PROPUESTA";
-        const baseValue = p.monto_meta;
-        const numericMonto = isModified ? (baseValue / 1.1) * (1 + pressure / 100) : baseValue;
+        // H-10 (docs/auditoria/46_motor_metas_configurable.md): antes este campo
+        // "previsualizaba" un cambio de presión recalculando en el frontend
+        // `(monto / 1.1) * (1 + pressure/100)`, asumiendo que la meta ya mostrada
+        // siempre traía un 10% incorporado -- falso para vendedores internos (×0.95) o
+        // nuevos (mediana del equipo). El monto mostrado es siempre el que el backend
+        // ya calculó con la fórmula real (motor v3) y la presión vigente -- se
+        // recalcula solo, sin botón manual, al ajustar el slider de arriba.
         const formattedMonto = new Intl.NumberFormat('es-EC', {
           style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2,
-        }).format(numericMonto);
+        }).format(p.monto_meta);
         return (
           <input
             type="text"
@@ -125,26 +151,6 @@ export function GoalsConsole() {
       },
     },
     {
-      key: 'comision',
-      header: 'Comisión (%)',
-      render: (p) => (
-        <input
-          type="number"
-          aria-label={`Comisión para ${p.vendedor}`}
-          value={p.comision_base_pct}
-          onChange={(e) => {
-            const newProposals = [...proposals];
-            const idx = newProposals.findIndex((x) => x.id === p.id);
-            if (idx !== -1) {
-              newProposals[idx].comision_base_pct = parseFloat(e.target.value) || 0;
-              setProposals(newProposals);
-            }
-          }}
-          className="bg-slate-800 w-16 p-1.5 rounded border border-slate-700 focus-ring cursor-text"
-        />
-      ),
-    },
-    {
       key: 'estado',
       header: 'Estado',
       render: (p) => {
@@ -156,31 +162,26 @@ export function GoalsConsole() {
       key: 'acciones',
       header: 'Acciones',
       numeric: true,
-      render: (p) => {
-        const isModified = pressure !== 10 && p.estado === "PROPUESTA";
-        const baseValue = p.monto_meta;
-        const numericMonto = isModified ? (baseValue / 1.1) * (1 + pressure / 100) : baseValue;
-        return (
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              loading={reviewMut.pendingId === p.id}
-              onClick={() => handleReview(p.id, "APROBADA", isModified ? numericMonto : p.monto_meta, p.comision_base_pct)}
-            >
-              Aprobar
-            </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              loading={reviewMut.pendingId === p.id}
-              onClick={() => handleReview(p.id, "RECHAZADA", isModified ? numericMonto : p.monto_meta, p.comision_base_pct)}
-            >
-              Rechazar
-            </Button>
-          </div>
-        );
-      },
+      render: (p) => (
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            loading={reviewMut.pendingId === p.id}
+            onClick={() => handleReview(p.id, "APROBADA", p.monto_meta)}
+          >
+            Aprobar
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            loading={reviewMut.pendingId === p.id}
+            onClick={() => handleReview(p.id, "RECHAZADA", p.monto_meta)}
+          >
+            Rechazar
+          </Button>
+        </div>
+      ),
     },
   ];
 
@@ -193,6 +194,20 @@ export function GoalsConsole() {
         </h2>
       </div>
 
+      <Tabs
+        className="mb-5"
+        value={tab}
+        onChange={(v) => setTab(v as typeof tab)}
+        items={[
+          { value: 'propuestas', label: 'Propuestas del período' },
+          { value: 'formula', label: 'Fórmula de metas' },
+        ]}
+      />
+
+      {tab === 'formula' ? (
+        <MetaConfigPanel />
+      ) : (
+      <>
       {/* Panel de Configuración Automática con Cursors definidos */}
       <div className="p-5 bg-slate-800/50 rounded-lg mb-6 flex flex-wrap gap-6 items-center border border-slate-700/50">
         <div className="flex flex-col gap-1">
@@ -210,6 +225,7 @@ export function GoalsConsole() {
             }}
             value={`${period.anio}-${period.mes}`}
             disabled={loading}
+            className="min-w-[190px]"
           >
             {months.map((m, idx) => (
               <option key={idx} value={`${m.anio}-${m.mes}`}>{m.label}</option>
@@ -245,15 +261,21 @@ export function GoalsConsole() {
             min="0"
             max="25"
             value={pressure}
-            disabled={loading}
             onChange={(e) => setPressure(parseInt(e.target.value))}
             className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-teal-400 focus-ring"
           />
         </div>
 
-        <Button variant="primary" onClick={handleGenerate} loading={loading} icon={<TrendingUp className="w-4 h-4" aria-hidden="true" />}>
-          Generar Plan con Inteligencia ML
-        </Button>
+        <div className="text-xs text-slate-500 flex items-center gap-1.5 min-w-[170px]">
+          {generateMut.loading ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" aria-hidden="true" />
+              Actualizando propuestas...
+            </>
+          ) : (
+            'Las propuestas se recalculan solas con la fórmula de metas al ajustar el período o la presión.'
+          )}
+        </div>
       </div>
 
       {/* Grilla Interactiva */}
@@ -270,7 +292,7 @@ export function GoalsConsole() {
           error={tracking.error ?? undefined}
           onRetry={tracking.refetch}
           emptyTitle="No hay metas propuestas para este periodo"
-          emptyDescription="Genera el plan usando la configuración de arriba."
+          emptyDescription="Las propuestas se generan solas con la fórmula de metas vigente al elegir un período con vendedores elegibles."
           maxHeight="max-h-none"
         />
       </div>
@@ -286,10 +308,17 @@ export function GoalsConsole() {
           <p className="text-sm text-danger">{desglose.error}</p>
         ) : desglose.data ? (
           <div className="space-y-4">
+            <Badge variant={desglose.data.es_trazabilidad_persistida ? 'success' : 'warning'}>
+              {desglose.data.es_trazabilidad_persistida
+                ? 'Valores reales de la meta ya generada'
+                : 'Recálculo en vivo (esta meta aún no se ha generado para este período)'}
+            </Badge>
             <div className="card p-3">
-              <p className="text-xs text-slate-500">Meta sugerida (estadística)</p>
+              <p className="text-xs text-slate-500">
+                Meta calculada para {desglose.data.mes_objetivo}/{desglose.data.anio_objetivo}
+              </p>
               <p className="text-lg font-semibold text-slate-100">{fmtMoney(desglose.data.meta_sugerida_estadistica)}</p>
-              <p className="text-xs text-slate-500 mt-1">{desglose.data.metodo_estadistico}</p>
+              <p className="text-xs text-slate-500 mt-1">{METODO_LABEL[desglose.data.metodo_estadistico] ?? desglose.data.metodo_estadistico}</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="card p-3">
@@ -309,23 +338,59 @@ export function GoalsConsole() {
                 <p className="text-base font-semibold text-slate-200">{pct(desglose.data.coeficiente_variacion * 100)}</p>
               </div>
               <div className="card p-3">
-                <p className="text-xs text-slate-500">Componente estacional</p>
+                <p className="text-xs text-slate-500">Índice estacional aplicado</p>
+                <p className="text-base font-semibold text-slate-200">
+                  {desglose.data.indice_estacional_aplicado.toFixed(3)}× <span className="text-xs text-slate-500">({FUENTE_LABEL[desglose.data.fuente_indice_estacional]})</span>
+                </p>
+              </div>
+              <div className="card p-3">
+                <p className="text-xs text-slate-500">Factor de tendencia aplicado</p>
+                <p className="text-base font-semibold text-slate-200">{desglose.data.factor_tendencia_aplicado.toFixed(3)}×</p>
+              </div>
+              <div className="card p-3">
+                <p className="text-xs text-slate-500">Meta antes de estacionalidad/tendencia</p>
                 <p className="text-base font-semibold text-slate-200">
                   {desglose.data.componente_estacional != null ? fmtMoney(desglose.data.componente_estacional) : '—'}
                 </p>
               </div>
               <div className="card p-3">
-                <p className="text-xs text-slate-500">Componente tendencia</p>
+                <p className="text-xs text-slate-500">Meta tras aplicar tendencia</p>
                 <p className="text-base font-semibold text-slate-200">{fmtMoney(desglose.data.componente_tendencia)}</p>
               </div>
             </div>
             <div className="card p-3">
-              <p className="text-xs text-slate-500">Factor de tendencia aplicado</p>
-              <p className="text-base font-semibold text-slate-200">{desglose.data.factor_tendencia_aplicado.toFixed(3)}×</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-slate-500">Banda de alcanzabilidad</p>
+                {desglose.data.banda_actuo && <Badge variant="warning">Actuó: recortó la meta</Badge>}
+              </div>
+              <p className="text-base font-semibold text-slate-200">
+                Referencia (mediana reciente × estacionalidad): {fmtMoney(desglose.data.referencia_alcanzable)}
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Meta antes de la banda: {fmtMoney(desglose.data.meta_pre_banda)} → Meta final: {fmtMoney(desglose.data.meta_sugerida_estadistica)}
+              </p>
             </div>
           </div>
         ) : null}
       </Drawer>
+      </>
+      )}
     </div>
   );
 }
+
+const METODO_LABEL: Record<string, string> = {
+  estacional_propio_v2: 'Estacionalidad propia del vendedor (≥2 años del mismo mes)',
+  estacional_empresa_v2: 'Estacionalidad de la empresa (histórico propio insuficiente)',
+  tendencia_robusta_v2: 'Tendencia reciente, sin estacionalidad (histórico corto)',
+  equipo_prorrateado_v2: 'Mediana del equipo (histórico casi nulo)',
+  sin_historico: 'Sin histórico suficiente',
+  estadistico_iqr_v1: 'Motor estadístico (legado)',
+  estadistico_iqr_ml_v1: 'Motor estadístico + señal ML (legado)',
+};
+
+const FUENTE_LABEL: Record<string, string> = {
+  propio: 'propio del vendedor',
+  empresa: 'de toda la empresa',
+  neutro: 'sin señal estacional',
+};

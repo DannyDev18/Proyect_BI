@@ -7,7 +7,7 @@ export interface RouteConfig {
   nav?: { label: string };
 }
 
-export type RouteKey = 'admin' | 'admin.usuarios' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'ventas' | 'ventas.metas' | 'ventas.cross-selling' | 'ventas.cartera360' | 'ventas.ruta' | 'settings';
+export type RouteKey = 'admin' | 'admin.usuarios' | 'gerencia' | 'gerencia.metas' | 'bodega' | 'bodega.almacenes' | 'bodega.reportes' | 'bodega.reabastecimiento' | 'ventas' | 'ventas.metas' | 'ventas.cross-selling' | 'ventas.cartera360' | 'ventas.ruta' | 'settings';
 // Nota: 'bodega.compras' (Compras y Proveedores) y 'gerencia.cartera' (Cartera y Flujo de
 // Caja) se retiraron del alcance -- ver docs/auditoria/31_.../33_... para el análisis de
 // datos que motivó su implementación original y esta decisión de descope.
@@ -50,19 +50,33 @@ export const ROUTES: Record<RouteKey, RouteConfig> = {
     allowedRoles: ['administrador', 'gerencia', 'bodega'],
     nav: { label: 'Reportes de Abastecimiento' },
   },
+  // Reabastecimiento Inteligente (docs/features/plan_reabastecimiento_inteligente.md,
+  // F0-F4 de esta sesión): sistema de apoyo a decisiones de compra por riesgo real de
+  // quiebre (stock de seguridad + punto de reorden), convive con `bodega.almacenes`.
+  'bodega.reabastecimiento': {
+    path: '/bodega/reabastecimiento',
+    allowedRoles: ['administrador', 'gerencia', 'bodega'],
+    nav: { label: 'Reabastecimiento Inteligente' },
+  },
+  // Petición explícita del usuario: gerencia deja de ver las páginas de Ventas que
+  // reflejan la operación PERSONAL de un vendedor (Gestión Comercial y sus 4 sub-páginas
+  // -- Mi Meta y Comisión, Venta Cruzada, Mi Ruta Inteligente, y el escape hatch
+  // Cartera 360) -- gerencia sigue teniendo su propia consola de Metas y Comisiones
+  // (`gerencia.metas`, la vista oficial de aprobación/configuración, no la personal del
+  // vendedor) sin cambios.
   ventas: {
     path: '/ventas',
-    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    allowedRoles: ['administrador', 'ventas'],
     nav: { label: 'Gestión Comercial' },
   },
   'ventas.metas': {
     path: '/ventas/metas',
-    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    allowedRoles: ['administrador', 'ventas'],
     nav: { label: 'Mi Meta y Comisión' },
   },
   'ventas.cross-selling': {
     path: '/ventas/cross-selling',
-    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    allowedRoles: ['administrador', 'ventas'],
     nav: { label: 'Venta Cruzada' },
   },
   // "Mi Ruta Inteligente de Ventas" (docs/features/plan_refactor_cartera360_ruta_
@@ -74,11 +88,11 @@ export const ROUTES: Record<RouteKey, RouteConfig> = {
   // página carga pero sus llamadas a /ruta/* devuelven 404).
   'ventas.cartera360': {
     path: '/ventas/cartera360',
-    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    allowedRoles: ['administrador', 'ventas'],
   },
   'ventas.ruta': {
     path: '/ventas/ruta',
-    allowedRoles: ['administrador', 'gerencia', 'ventas'],
+    allowedRoles: ['administrador', 'ventas'],
     nav: { label: 'Mi Ruta Inteligente' },
   },
   settings: {

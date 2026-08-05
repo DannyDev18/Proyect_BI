@@ -1,9 +1,13 @@
 # backend/app/schemas/commission.py
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 class VendorCommissionRowResponse(BaseModel):
+    """Comisión única y variable (docs/features/plan_motor_metas_v3_y_comisiones_
+    unificadas.md, Fase 1, R-1/R-3): sin el esquema plano paralelo -- `comision_devengada`
+    ya es la comisión variable, `componentes` es el desglose de 7 pasos (traza de
+    `evaluar_formula`) que el panel expande al hacer clic."""
     id: int
     vendedor: str
     monto_meta: float
@@ -13,8 +17,7 @@ class VendorCommissionRowResponse(BaseModel):
     tasa_aplicada_pct: float
     comision_devengada: float
     estado: str
-    comision_variable: Optional[float] = None
-    nivel_variable: Optional[str] = None
+    componentes: List[dict[str, Any]] = []
 
 
 class CommissionTrackingResponse(BaseModel):
@@ -34,6 +37,8 @@ class CumplimientoMetaPeriodoResponse(BaseModel):
 
 
 class MiComisionResponse(BaseModel):
+    """Comisión única y variable del vendedor (Fase 1, R-1) -- ya no hay un esquema
+    plano paralelo ni un `modo_comision` que condicione si se calcula."""
     vendedor_origen: str
     anio: int
     mes: int
@@ -47,12 +52,7 @@ class MiComisionResponse(BaseModel):
     dias_restantes_mes: int
     en_alerta_cierre: bool
     mensaje_alerta: Optional[str] = None
-    comision_variable: Optional[float] = None
-    nivel_variable: Optional[str] = None
     desglose_variable: Optional[dict] = None
-    # Auditoría 43 (H43-15): modo real de `COMISION_MODO` -- el frontend deja de asumir
-    # "sombra" a ciegas para etiquetar el panel dual.
-    modo_comision: str = "plana"
 
 
 class PostGoalInvoiceItemResponse(BaseModel):

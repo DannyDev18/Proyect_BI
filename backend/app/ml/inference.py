@@ -32,18 +32,6 @@ def _validate_prediction_or_raise(loader: ModelLoader, key: str, value: float) -
     enforce(contract, result, context=f"inference.{key}.prediction")
 
 
-def predict_sales(loader: ModelLoader, X: pd.DataFrame) -> pd.Series:
-    model = loader.get('sales_rf')
-    X = _select_features(loader, 'sales_rf', X)
-    _validate_features_or_raise(loader, 'sales_rf', X.columns)
-    # El artefacto es un TransformedTargetRegressor autocontenido: predict() ya
-    # devuelve USD directamente, sin expm1 manual (H-01, cerrado en Fase 3).
-    preds = pd.Series(model.predict(X))
-    for v in preds:
-        _validate_prediction_or_raise(loader, 'sales_rf', float(v))
-    return preds
-
-
 def predict_demand(loader: ModelLoader, X: pd.DataFrame) -> pd.Series:
     model = loader.get('demand_rf')
     X = _select_features(loader, 'demand_rf', X)
@@ -61,19 +49,6 @@ def predict_churn(loader: ModelLoader, X: pd.DataFrame) -> pd.DataFrame:
     preds = model.predict(X)
     probs = model.predict_proba(X)[:, 1]  # probabilidad de clase 1 (churn)
     return pd.DataFrame({'is_churn_pred': preds, 'churn_probability': probs})
-
-
-def detect_anomalies(loader: ModelLoader, X: pd.DataFrame) -> pd.DataFrame:
-    model = loader.get('anomaly')
-    X = _select_features(loader, 'anomaly', X)
-    _validate_features_or_raise(loader, 'anomaly', X.columns)
-    # H-04 (cerrado en Fase 4): se expone decision_function() real -- antes el score
-    # que llegaba al dashboard era un valor hardcodeado (-0.85/0.15) en prediction_service.
-    preds = model.predict(X)  # 1 = normal, -1 = anomalía (convención IsolationForest)
-    scores = model.decision_function(X)
-    for s in scores:
-        _validate_prediction_or_raise(loader, 'anomaly', float(s))
-    return pd.DataFrame({'is_anomaly_pred': preds, 'anomaly_score': scores})
 
 
 def get_recommendations(loader: ModelLoader, item_history: list | None = None, top_n: int = 5) -> pd.DataFrame:

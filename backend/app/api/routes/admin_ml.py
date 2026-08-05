@@ -25,7 +25,7 @@ admin_checker = PermissionChecker(allowed_roles=["administrador"])
 def trigger_model_retraining(
     body: RetrainRequest, background_tasks: BackgroundTasks, training_service: TrainingServiceDep,
 ):
-    """Desencadena el reentrenamiento (con gating) de un modelo (`body.clave`) o de los 6
+    """Desencadena el reentrenamiento (con gating) de un modelo (`body.clave`) o de los 4
     (`clave="all"`, default) en background, vía `docker compose run --rm ml ...`. Solo
     administradores tienen acceso."""
     status = training_service.get_status()
@@ -97,7 +97,7 @@ def get_mlops_status(training_service: TrainingServiceDep) -> MLOpsStatusRespons
 
 @router.get("/models", response_model=list[ModelStatusResponse], dependencies=[Depends(admin_checker)])
 def get_models_status(model_loader: ModelLoaderDep) -> list[ModelStatusResponse]:
-    """Estado de carga y métrica principal (R²) de cada uno de los 6 modelos ML servidos
+    """Estado de carga y métrica principal (R²) de cada uno de los 4 modelos ML servidos
     desde `ml/models/*.meta.json` (M-02: reemplaza el mock `MODEL_STATUS`)."""
     resultado = []
     for key in model_loader.keys():

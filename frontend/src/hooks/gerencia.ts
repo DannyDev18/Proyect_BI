@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import {
   getCumplimientoMetaPeriodo, getGerenciaKPIs, getRevenueByCategory, getCategories, getSucursales, getVendedores,
-  getAlmacenes, getSalesPrediction,
+  getAlmacenes, getEvolucionMensualVentas,
 } from '../services/gerencia';
 import { qk } from '../constants/queryKeys';
 import { getApiErrorMessage as errorMessage } from '../utils/apiError';
@@ -67,12 +67,14 @@ export const useAlmacenes = () => {
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };
 
-type SalesPredictionParams = Parameters<typeof getSalesPrediction>[0];
+type EvolucionMensualVentasParams = Parameters<typeof getEvolucionMensualVentas>[0];
 
-export const useSalesPrediction = (params: SalesPredictionParams) => {
+// Reemplaza a useSalesPrediction (auditoría 49, decomisión de `sales_rf`): histórico
+// real mes a mes, sin ningún modelo.
+export const useEvolucionMensualVentas = (params?: EvolucionMensualVentasParams) => {
   const query = useQuery({
-    queryKey: qk.gerencia.salesPrediction(params),
-    queryFn: () => getSalesPrediction(params).then((r) => r.data),
+    queryKey: qk.gerencia.evolucionMensual(params),
+    queryFn: () => getEvolucionMensualVentas(params).then((r) => r.data.serie),
   });
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };

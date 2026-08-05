@@ -183,6 +183,81 @@ class CommissionConfigService:
         if finitos and any(a >= b for a, b in zip(finitos, finitos[1:])):
             raise ValidationError("Los tramos con 'dias_hasta' finito deben ser estrictamente crecientes.")
 
+    # ── Tramos de cumplimiento (auditoría 45) ────────────────────────────────────
+    # La semilla usa un solo juego de tramos GENÉRICOS (`perfil=None`) -- la
+    # diferenciación por perfil externo/interno/jefe_agencia queda descartada
+    # explícitamente en esta fase (§5.3 del plan); la columna existe en el modelo
+    # para admitirla a futuro sin migración nueva, pero el panel solo edita los
+    # genéricos, que son los que el simulador y el cálculo real resuelven hoy.
+    def get_tramos_cumplimiento(self) -> list[dict]:
+        return [
+            {
+                "id": t.id, "pct_desde": float(t.pct_desde),
+                "pct_hasta": (float(t.pct_hasta) if t.pct_hasta is not None else None),
+                "multiplicador": float(t.multiplicador), "etiqueta": t.etiqueta,
+                "bono_fijo": float(t.bono_fijo),
+                "vigente_desde": t.vigente_desde, "vigente_hasta": t.vigente_hasta,
+            }
+            for t in self.commission_config_repo.get_tramos_cumplimiento_vigentes(None)
+        ]
+
+    def replace_tramos_cumplimiento(self, tramos: list[dict], usuario_id: int | None = None) -> list[dict]:
+        """Valida que los tramos entrantes cubran `[0, ∞)` sin huecos ni solapes antes
+        de reemplazar -- `resolver_tramo_cumplimiento` resuelve por el primer tramo que
+        cubre el % de cumplimiento; un hueco dejaría a un vendedor sin multiplicador
+        resoluble en ese rango."""
+        self._validar_tramos_cumplimiento(tramos)
+        nuevos = self.commission_config_repo.replace_tramos_cumplimiento(None, tramos, creado_por=usuario_id)
+        resultado = [
+            {
+                "id": t.id, "pct_desde": float(t.pct_desde),
+                "pct_hasta": (float(t.pct_hasta) if t.pct_hasta is not None else None),
+                "multiplicador": float(t.multiplicador), "etiqueta": t.etiqueta,
+                "bono_fijo": float(t.bono_fijo),
+                "vigente_desde": t.vigente_desde, "vigente_hasta": t.vigente_hasta,
+            }
+            for t in nuevos
+        ]
+        self.commission_config_repo.log_cambio_config(
+            usuario_id=usuario_id, tabla="comision_tramos_cumplimiento", accion="replace",
+            detalle={"tramos": [{k: str(v) for k, v in t.items()} for t in resultado]},
+        )
+        return resultado
+
+    @staticmethod
+    def _validar_tramos_cumplimiento(tramos: list[dict]) -> None:
+        if not tramos:
+            raise ValidationError("Se requiere al menos un tramo de cumplimiento.")
+        for t in tramos:
+            if float(t["multiplicador"]) < 0:
+                raise ValidationError(f"El multiplicador del tramo {t.get('etiqueta', '')!r} no puede ser negativo.")
+            if float(t.get("bono_fijo", 0.0)) < 0:
+                raise ValidationError(f"El bono fijo del tramo {t.get('etiqueta', '')!r} no puede ser negativo.")
+            if float(t["pct_desde"]) < 0:
+                raise ValidationError(f"El tramo {t.get('etiqueta', '')!r} tiene 'pct_desde' negativo.")
+            pct_hasta = t.get("pct_hasta")
+            if pct_hasta is not None and float(pct_hasta) <= float(t["pct_desde"]):
+                raise ValidationError(
+                    f"El tramo {t.get('etiqueta', '')!r} tiene 'pct_hasta' <= 'pct_desde'."
+                )
+
+        ordenados = sorted(tramos, key=lambda t: float(t["pct_desde"]))
+        if float(ordenados[0]["pct_desde"]) != 0.0:
+            raise ValidationError("Los tramos de cumplimiento deben cubrir desde 0% -- falta el tramo inicial.")
+        abiertos = [t for t in ordenados if t.get("pct_hasta") is None]
+        if len(abiertos) != 1 or ordenados[-1].get("pct_hasta") is not None:
+            raise ValidationError(
+                "Debe existir exactamente un tramo final sin 'pct_hasta' (sin tope superior), "
+                "y debe ser el de mayor 'pct_desde'."
+            )
+        for actual, siguiente in zip(ordenados, ordenados[1:]):
+            if float(actual["pct_hasta"]) != float(siguiente["pct_desde"]):
+                raise ValidationError(
+                    f"Hay un hueco o solape entre los tramos {actual.get('etiqueta', '')!r} "
+                    f"(hasta {actual['pct_hasta']}) y {siguiente.get('etiqueta', '')!r} "
+                    f"(desde {siguiente['pct_desde']}) -- deben ser contiguos."
+                )
+
     # ── Fórmula de comisión (auditoría 44 §2.2) ──────────────────────────────────
     def get_formulas(self) -> dict:
         formulas = self.commission_config_repo.get_todas_las_formulas()

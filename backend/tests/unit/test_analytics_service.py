@@ -76,15 +76,22 @@ def test_get_management_kpis_propaga_filtros_al_repositorio():
 
 # ── docs/auditoria/34_actualizacion_modulo_ventas.md, H-V3 ─────────────────────────
 def test_get_sales_kpis_usa_periodo_vigente_sin_anio_mes():
+    """El "período vigente" sin `anio`/`mes` explícitos es el mes CALENDARIO actual
+    (`datetime.now()`), no `repo.get_latest_period()` (el último mes con ventas ya
+    cargadas en el EDW, que puede ir un mes atrás del real por el lag del ETL) -- ver
+    docstring de `AnalyticsService.get_sales_kpis`: el vendedor debe ver la meta que
+    gerencia acaba de aprobarle para el mes en curso, no la de un mes anterior."""
+    import datetime
+
+    hoy = datetime.datetime.now()
     repo = MagicMock()
-    repo.get_latest_period.return_value = (2026, 7)
     repo.get_sales_performance.return_value = {"meta_mensual": 0, "cumplimiento_actual": 0, "meta_proyectada": 0, "ranking_vendedores": []}
     service = AnalyticsService(repo)
 
     service.get_sales_kpis(sucursal="GYE")
 
-    repo.get_latest_period.assert_called_once()
-    repo.get_sales_performance.assert_called_once_with(2026, 7, "GYE", None)
+    repo.get_latest_period.assert_not_called()
+    repo.get_sales_performance.assert_called_once_with(hoy.year, hoy.month, "GYE", None)
 
 
 def test_get_sales_kpis_usa_periodo_explicito_sin_consultar_el_vigente():

@@ -1,5 +1,6 @@
 # backend/app/models/goal.py
 from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, DateTime, func, CheckConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from app.database.session import Base
 
@@ -38,6 +39,13 @@ class Goal(Base):
 
     estado = Column(String(20), nullable=False, default="PROPUESTA")
     approved_by = Column(Integer, ForeignKey("public.usuarios.id", ondelete="SET NULL"), nullable=True)
+
+    # Trazabilidad real del motor v2 (docs/auditoria/46_motor_metas_configurable.md, H-5):
+    # traza completa del cálculo que produjo `monto_meta` -- histórico usado, método,
+    # índice estacional aplicado, factores, banda de alcanzabilidad. `NULL` en metas
+    # generadas antes de esta migración (el drawer cae a un recálculo en vivo, etiquetado
+    # como tal, solo para esos casos legado).
+    trazabilidad_calculo = Column(JSONB, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

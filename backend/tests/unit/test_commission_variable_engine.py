@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.services.commission_engine import TramoCumplimiento
 from app.services.commission_variable_engine import calcular_comision_variable_completa
 
 
@@ -54,6 +55,10 @@ def commission_config_repo():
     repo.get_factores_credito_as_rangos.return_value = []
     repo.get_config_vendedor.return_value = None
     repo.get_tramos_cobranza_as_rangos.return_value = []
+    # Auditoría 45: sin tramos configurados, cae al fallback defensivo
+    # (`TRAMOS_CUMPLIMIENTO_FALLBACK`) -- estos tests preexistentes no ejercitan la
+    # escala de sobrecumplimiento nueva, solo necesitan que el motor no reviente.
+    repo.get_tramos_cumplimiento_as_tramos.return_value = []
     return repo
 
 
@@ -128,3 +133,97 @@ def test_formula_fallback_sin_configuracion_reproduce_estructura_legacy(goal_rep
     assert "base_cobranza" not in resultado.montos
     assert "contado_agencia" not in resultado.montos
     assert resultado.montos["base_lineas_venta"] == pytest.approx(50.0, abs=0.01)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Auditoría 45 (docs/features/plan_comisiones_sobrecumplimiento_umbral_y_desglose.md):
+# umbral mínimo de pago al 90% -- un vendedor bajo el umbral debe recibir $0 en el
+# multiplicador de cumplimiento aunque sus bases (líneas/cobranza) sean positivas.
+# ══════════════════════════════════════════════════════════════════════════════
+TRAMOS_R3 = [
+    TramoCumplimiento(0.0, 90.0, 0.0, "Sin comisión (< 90% de la meta)"),
+    TramoCumplimiento(90.0, 100.0, 1.0, "Meta"),
+    TramoCumplimiento(100.0, 110.0, 1.2, "Sobrecumplimiento"),
+    TramoCumplimiento(110.0, 125.0, 1.35, "Sobrecumplimiento alto"),
+    TramoCumplimiento(125.0, None, 1.5, "Excelencia"),
+]
+
+
+def test_umbral_90_deja_comision_en_cero_pese_a_bases_positivas(goal_repo, commission_config_repo):
+    """R-3 del plan: un vendedor al 85% de su meta (tramo CERCA histórico, 0.7x) debe
+    quedar en $0 -- no en el 70% de la comisión que pagaba antes de la auditoría 45."""
+    linea = MagicMock(
+        codart="A1", clase="B", subclase=None, es_servicio=False,
+        subtotal_neto=1000.0, margen_bruto=1000.0, valor_descuento=0.0, dias_plazo=0,
+    )
+    goal_repo.get_commission_lines.return_value = [linea]
+    cobro = MagicMock(valor_cobrado=1000.0, dias_cobro=10)
+    goal_repo.get_cobros_periodo.return_value = [cobro]
+    commission_config_repo.get_tramos_cobranza_as_rangos.return_value = [MagicMock(dias_hasta=21, tasa_pct=2.0)]
+
+    import datetime
+    resultado = calcular_comision_variable_completa(
+        goal_repo=goal_repo, commission_config_repo=commission_config_repo,
+        vendedor_origen="VEN01", anio=2026, mes=2, venta_real=850.0, monto_meta=1000.0,
+        fecha_config=datetime.date(2026, 2, 28), tramos_cumplimiento=TRAMOS_R3,
+        aplicar_ajuste_meta_por_tipo=False,  # aísla el % de cumplimiento del ajuste por tipo de vendedor
+    )
+    assert resultado.montos["base_lineas_venta"] > 0.0
+    assert resultado.montos["base_cobranza"] > 0.0
+    assert resultado.montos["multiplicador_cumplimiento"] == 0.0
+    assert resultado.comision_final == 0.0
+    assert resultado.tramo is not None and resultado.tramo.etiqueta == "Sin comisión (< 90% de la meta)"
+    assert resultado.pct_cumplimiento == pytest.approx(85.0)
+
+
+def test_umbral_90_deja_la_traza_consistente_con_el_cero_pese_a_bonos(goal_repo, commission_config_repo):
+    """Bug real encontrado en vivo (auditoría 47, continuación de la Fase 2): la
+    compuerta forzaba `comision_final=0.0` pero dejaba la traza (`traza_formula`, el
+    desglose que ve gerencia) mostrando `devoluciones`/`bonos` restando/sumando sobre el
+    acumulado SIN la compuerta, terminando en un `acumulado_tras_paso` final distinto de
+    cero -- gerencia veía un desglose que sumaba a varios miles de dólares pese a que la
+    comisión real era $0. Desde el paso `multiplicador_cumplimiento` en adelante, la
+    traza debe quedar en $0, igual que `comision_final`."""
+    linea = MagicMock(
+        codart="A1", clase="B", subclase=None, es_servicio=False,
+        subtotal_neto=1000.0, margen_bruto=1000.0, valor_descuento=0.0, dias_plazo=0,
+    )
+    goal_repo.get_commission_lines.return_value = [linea]
+    goal_repo.get_new_or_reactivated_clients.return_value = 10  # bono de cliente nuevo > 0
+
+    import datetime
+    resultado = calcular_comision_variable_completa(
+        goal_repo=goal_repo, commission_config_repo=commission_config_repo,
+        vendedor_origen="VEN01", anio=2026, mes=2, venta_real=850.0, monto_meta=1000.0,
+        fecha_config=datetime.date(2026, 2, 28), tramos_cumplimiento=TRAMOS_R3,
+        aplicar_ajuste_meta_por_tipo=False,
+    )
+    assert resultado.montos["bonos"] > 0.0
+    assert resultado.comision_final == 0.0
+
+    compuerta_alcanzada = False
+    for paso in resultado.traza_formula:
+        if paso["componente"] == "multiplicador_cumplimiento":
+            compuerta_alcanzada = True
+        if compuerta_alcanzada:
+            assert paso["acumulado_tras_paso"] == 0.0, f"paso {paso['componente']} debería quedar en $0 tras la compuerta"
+
+
+def test_sobrecumplimiento_escala_por_encima_de_100(goal_repo, commission_config_repo):
+    """R-1 del plan: un vendedor muy por encima de la meta (130%) recibe la escala
+    (1.5x en 'Excelencia'), no el escalón plano único de 1.2x."""
+    linea = MagicMock(
+        codart="A1", clase="B", subclase=None, es_servicio=False,
+        subtotal_neto=1000.0, margen_bruto=1000.0, valor_descuento=0.0, dias_plazo=0,
+    )
+    goal_repo.get_commission_lines.return_value = [linea]
+
+    import datetime
+    resultado = calcular_comision_variable_completa(
+        goal_repo=goal_repo, commission_config_repo=commission_config_repo,
+        vendedor_origen="VEN01", anio=2026, mes=2, venta_real=1300.0, monto_meta=1000.0,
+        fecha_config=datetime.date(2026, 2, 28), tramos_cumplimiento=TRAMOS_R3,
+        aplicar_ajuste_meta_por_tipo=False,
+    )
+    assert resultado.montos["multiplicador_cumplimiento"] == 1.5
+    assert resultado.tramo is not None and resultado.tramo.etiqueta == "Excelencia"

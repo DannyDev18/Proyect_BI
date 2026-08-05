@@ -104,6 +104,13 @@ class AnalyticsService:
     ) -> list[dict[str, Any]]:
         return self.repo.get_revenue_by_category(sucursal, start_date, end_date, vendedor, almacen)
 
+    def get_evolucion_mensual_ventas(
+        self, vendedor: str | None = None, almacen: str | None = None, meses: int = 24,
+    ) -> list[dict[str, Any]]:
+        """Reemplaza al panel de predicción ML retirado (auditoría 49): Venta Neta real
+        mes a mes, sin ningún modelo."""
+        return self.repo.get_evolucion_mensual_ventas(vendedor=vendedor, almacen=almacen, meses=meses)
+
     def get_categories(self) -> list[str]:
         return self.repo.get_categories()
 
@@ -134,9 +141,19 @@ class AnalyticsService:
         `anio`/`mes` explícitos permiten consultar un período anterior (docs/auditoria/
         34_actualizacion_modulo_ventas.md, H-V3). `vendedor` (auditoría A-0.3, decisión
         B-3): RLS real del rol `ventas`, reemplaza `sucursal` -- ver docstring de
-        `AnalyticsRepository.get_sales_performance`."""
+        `AnalyticsRepository.get_sales_performance`.
+
+        El "período vigente" sin `anio`/`mes` explícitos es el mes calendario ACTUAL
+        (`datetime.now()`), no `AnalyticsRepository.get_latest_period()` (el último mes
+        con ventas ya cargadas en el EDW) -- hallazgo real: la Consola de Metas aprueba
+        metas para el mes de planificación (mes actual/siguiente, ver
+        `GoalsService.get_periods`), pero si el ETL todavía no cargó las ventas del mes
+        en curso, `get_latest_period()` devuelve el mes anterior -- el vendedor veía la
+        meta de un período distinto al que gerencia acababa de aprobarle ("solo como
+        referencia", nunca el monto real de su mes vigente)."""
         if anio is None or mes is None:
-            anio, mes = self.repo.get_latest_period()
+            hoy = datetime.datetime.now()
+            anio, mes = hoy.year, hoy.month
         return self.repo.get_sales_performance(anio, mes, sucursal, vendedor)
 
     def get_evolucion_mensual_vendedor(self, codven: str, meses: int = 6) -> list[dict[str, Any]]:

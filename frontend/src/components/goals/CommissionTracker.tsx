@@ -3,31 +3,86 @@ import { Wallet, Gift } from 'lucide-react';
 
 import { usePeriods, useCommissionTracking } from '../../hooks/goals';
 import { useVendedores } from '../../hooks/gerencia';
-import type { GoalPeriodOption, NivelComision, VendorCommissionRow } from '../../types/goals';
+import type { GoalPeriodOption, VendorCommissionRow, ComponenteFormulaTraza } from '../../types/goals';
 import { fmtMoney, pct } from '../../utils/format';
 import { Select } from '../ui/Select';
 import { DataTable, type DataTableColumn } from '../ui/DataTable';
 import { Badge } from '../ui/Badge';
 
-const NIVEL_VARIANT: Record<NivelComision, 'success' | 'info' | 'warning' | 'danger'> = {
-  EXCELENTE: 'success',
-  META: 'info',
-  CERCA: 'warning',
-  LEJOS: 'danger',
+// Misma fuente de etiquetas que `commission_engine.ETIQUETAS_COMPONENTES_FORMULA`
+// (backend) -- duplicada aquí por simplicidad, igual patrón que `COMPONENTE_LABEL`
+// en `CommissionConfigPanel.tsx`.
+const ETIQUETA_COMPONENTE: Record<string, string> = {
+  base_lineas_venta: 'Líneas de venta (margen/categoría)',
+  base_cobranza: 'Cobranza (por tramo de días de cobro)',
+  contado_agencia: 'Ventas de contado de la agencia',
+  factor_tipo_vendedor: 'Factor de tipo de vendedor',
+  multiplicador_cumplimiento: 'Multiplicador de cumplimiento de meta',
+  devoluciones: 'Devoluciones estimadas',
+  bonos: 'Bonos (cross-sell, cliente nuevo, cobranza sana)',
 };
 
-const NIVEL_LABEL: Record<NivelComision, string> = {
-  EXCELENTE: 'Excelente',
-  META: 'Meta',
-  CERCA: 'Cerca',
-  LEJOS: 'Lejos',
-};
+function badgeVariantParaNivel(nivel: string): 'success' | 'info' | 'warning' | 'danger' {
+  const n = nivel.toLowerCase();
+  if (n.includes('sin comisión') || n.includes('lejos')) return 'danger';
+  if (n.includes('sobrecumplimiento') || n.includes('excelente')) return 'success';
+  if (n.includes('cerca')) return 'warning';
+  return 'info';
+}
+
+function DesgloseComisionVendedor({ row }: { row: VendorCommissionRow }) {
+  if (row.componentes.length === 0) {
+    return <p className="p-4 text-xs text-slate-500">Sin desglose disponible para este vendedor.</p>;
+  }
+  return (
+    <div className="p-4">
+      <p className="text-xs font-semibold text-slate-400 mb-2">Cómo se construyó esta comisión</p>
+      <ol className="space-y-1.5">
+        {row.componentes.map((c: ComponenteFormulaTraza) => (
+          <li key={c.orden} className="flex items-center justify-between gap-4 text-xs">
+            <span className="text-slate-400">
+              <span className="font-mono text-slate-600 mr-2">{c.orden}.</span>
+              {c.operador === 'sumar' && <span className="text-success mr-1">+</span>}
+              {c.operador === 'restar' && <span className="text-danger mr-1">−</span>}
+              {c.operador === 'multiplicar' && <span className="text-info mr-1">×</span>}
+              {ETIQUETA_COMPONENTE[c.componente] ?? c.componente}
+            </span>
+            <span className="flex items-center gap-3 font-mono">
+              <span className="text-slate-300">
+                {c.operador === 'multiplicar' ? `${c.monto.toFixed(4)}x` : fmtMoney(c.monto)}
+              </span>
+              <span className="text-slate-600" title="Acumulado de la fórmula después de este paso">
+                = {fmtMoney(c.acumulado_tras_paso)}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
+        <span className="font-semibold text-slate-300">Comisión final</span>
+        <span className="font-mono font-semibold text-primary">{fmtMoney(row.comision_devengada)}</span>
+      </div>
+      {row.comision_devengada === 0 && row.pct_cumplimiento < 100 && (
+        <p className="mt-2 text-xs text-danger">
+          Este vendedor no alcanzó el umbral mínimo de cumplimiento ({row.nivel}) -- la comisión final es $0,
+          bonos incluidos.
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** Panel gerencial de comisiones (docs/modulo_metas.md): cumplimiento real (Venta Neta)
  * y comisión devengada por vendedor -- cierra el hallazgo R-1 de
  * docs/auditoria/14_...md (`GoalsConsole` solo muestra la meta configurada, sin venta
  * real). Componente hermano de `GoalsConsole`, mismo sistema visual (DataTable) para no
- * fragmentar el look del panel gerencial de Metas. */
+ * fragmentar el look del panel gerencial de Metas.
+ *
+ * Fase 1 (docs/features/plan_motor_metas_v3_y_comisiones_unificadas.md, R-1/R-3): una
+ * sola columna de comisión -- la variable, ya con el gate de cumplimiento (Fase 2:
+ * $0 bajo el 90%, bonos incluidos) y el techo de bonos aplicados. El esquema plano ya
+ * no forma parte del sistema. Cada fila se expande para ver el desglose de 7
+ * componentes de la fórmula. */
 export function CommissionTracker() {
   const [period, setPeriod] = useState({ anio: new Date().getFullYear(), mes: new Date().getMonth() + 1 });
   const [hasInitializedPeriod, setHasInitializedPeriod] = useState(false);
@@ -50,40 +105,24 @@ export function CommissionTracker() {
 
   const tracking = useCommissionTracking(period.anio, period.mes, vendedorFiltro || null);
   const totalComision = tracking.data.reduce((sum, f) => sum + f.comision_devengada, 0);
-  // Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md):
-  // `comision_variable` solo viene poblado cuando el backend corre en modo "sombra"/
-  // "variable" (COMISION_MODO) -- la columna se agrega dinámicamente, sin romper el
-  // panel para instalaciones que sigan en modo "plana".
-  const modoSombraActivo = tracking.data.some((f) => f.comision_variable != null);
-  const totalComisionVariable = tracking.data.reduce((sum, f) => sum + (f.comision_variable ?? 0), 0);
 
   const columns: DataTableColumn<VendorCommissionRow>[] = [
     { key: 'vendedor', header: 'Vendedor', render: (f) => <span className="font-semibold text-primary">{f.vendedor}</span> },
     { key: 'venta_real', header: 'Venta Neta', render: (f) => <span className="text-slate-300">{fmtMoney(f.venta_real)}</span> },
     { key: 'monto_meta', header: 'Meta', render: (f) => <span className="text-slate-400">{fmtMoney(f.monto_meta)}</span> },
-    { key: 'pct_cumplimiento', header: 'Cumplimiento', render: (f) => <span className="text-slate-300">{pct(f.pct_cumplimiento)}</span> },
+    { key: 'pct_cumplimiento', header: '% cumplimiento', render: (f) => <span className="text-slate-300">{pct(f.pct_cumplimiento)}</span> },
     {
       key: 'nivel',
-      header: 'Nivel',
-      render: (f) => <Badge variant={NIVEL_VARIANT[f.nivel]}>{NIVEL_LABEL[f.nivel]}</Badge>,
+      header: 'Tramo',
+      render: (f) => <Badge variant={badgeVariantParaNivel(f.nivel)}>{f.nivel}</Badge>,
     },
-    { key: 'tasa', header: 'Tasa', render: (f) => <span className="text-slate-400">{f.tasa_aplicada_pct.toFixed(2)}%</span> },
+    { key: 'tasa', header: 'Tasa efectiva', render: (f) => <span className="text-slate-400">{f.tasa_aplicada_pct.toFixed(2)}%</span> },
     {
       key: 'comision',
-      header: 'Comisión (plana)',
+      header: 'Comisión',
       numeric: true,
       render: (f) => <span className="font-semibold text-primary">{fmtMoney(f.comision_devengada)}</span>,
     },
-    ...(modoSombraActivo ? [{
-      key: 'comision_variable',
-      header: 'Comisión (variable · piloto)',
-      numeric: true,
-      render: (f: VendorCommissionRow) => (
-        f.comision_variable != null
-          ? <span className="font-semibold text-warning">{fmtMoney(f.comision_variable)}</span>
-          : <span className="text-slate-600">—</span>
-      ),
-    } as DataTableColumn<VendorCommissionRow>] : []),
   ];
 
   return (
@@ -133,14 +172,8 @@ export function CommissionTracker() {
           <div className="flex items-center gap-4 text-sm text-slate-400">
             <div className="flex items-center gap-1.5">
               <Gift size={14} className="text-primary" aria-hidden="true" />
-              Total plana: <span className="font-mono text-primary font-semibold">{fmtMoney(totalComision)}</span>
+              Total del período: <span className="font-mono text-primary font-semibold">{fmtMoney(totalComision)}</span>
             </div>
-            {modoSombraActivo && (
-              <div className="flex items-center gap-1.5">
-                <Gift size={14} className="text-warning" aria-hidden="true" />
-                Total variable: <span className="font-mono text-warning font-semibold">{fmtMoney(totalComisionVariable)}</span>
-              </div>
-            )}
           </div>
         </div>
 
@@ -153,6 +186,7 @@ export function CommissionTracker() {
           onRetry={tracking.refetch}
           emptyTitle="No hay metas configuradas para este período"
           maxHeight="max-h-none"
+          renderExpanded={(r) => <DesgloseComisionVendedor row={r} />}
         />
       </div>
     </div>

@@ -11,10 +11,6 @@ histórico del EDW:
   últimos meses. El modelo `goals_rf` fue decomisionado (docs/auditoria/20_...md): no
   aportaba mejor precisión que el motor estadístico y complicaba sin necesidad la
   generación de metas realistas.
-- **Detección de valores atípicos**: `anomaly` (IsolationForest) corrido al grano
-  correcto (línea de transacción, igual que su contrato) para señalar qué MESES del
-  histórico del vendedor tienen comportamiento extraordinario -- esos meses no se
-  eliminan, solo pesan menos en `IQRGoalCalculationEngine` (ver `PESO_MES_ATIPICO_ML`).
 - **Recomendación comercial**: `association` (reglas direccionales) aplicado sobre los
   productos que más vende el vendedor, para sugerir qué más colocar.
 - **Pronóstico de cierre**: `sales_rf` vía el mismo walk-forward que usa Gerencia
@@ -27,38 +23,36 @@ deliberadas:
   - Pronóstico de cierre y recomendaciones son el ENTREGABLE principal de su propia
     llamada: si el contrato falla, se propaga (`ModelContractError`, ya es un
     `DomainError` -> 400) en vez de degradar en silencio -- exactamente lo que la
-    auditoría 11 marcó como el bug histórico (0.0/"Error" mudo).
-  - La señal de anomalías es un INSUMO adicional del cálculo estadístico de metas: si
-    su contrato falla, se registra el error y se continúa sin esa señal (el cálculo de
-    metas no debe romperse por un modelo secundario)."""
+    auditoría 11 marcó como el bug histórico (0.0/"Error" mudo)."""
 from __future__ import annotations
 
+import dataclasses
 import datetime
+import json
 import logging
+import statistics
 from dataclasses import dataclass
-from statistics import NormalDist
-
-import pandas as pd
 
 from app.core.config import settings
-from app.core.exceptions import ExternalDataError, ModelContractError, ValidationError
+from app.core.exceptions import ValidationError
 from app.ml import inference
-from app.ml.forecasting import walk_forward_forecast
 from app.ml.model_loader import ModelLoader
 from app.repositories.commission_config_repository import CommissionConfigRepository
 from app.repositories.dataset_repository import DatasetRepository
-from app.repositories.goal_repository import GoalRepository, VendorMonthlySales
+from app.repositories.goal_repository import GoalRepository, VendorRecentSales
 from app.services.commission_engine import fecha_referencia_periodo
-from app.services.goal_calculation_engine import IQRGoalCalculationEngine, RegistroMensual
+from app.services.goal_calculation_engine import (
+    DEFAULT_PARAMETROS, METODO_SIN_HISTORICO, IQRGoalCalculationEngine, MetaMotorParametros, RegistroMensual,
+    ajustar_meta_por_madurez,
+)
+from app.services.goal_pipeline_stages import (
+    PipelineConfigV3, aplicar_capacidad_instalada, aplicar_estrategia, aplicar_factor_cartera,
+    aplicar_factor_cumplimiento_historico, aplicar_factor_tipo, aplicar_penalizacion_volatilidad, redondear_meta,
+)
+
+DEFAULT_PIPELINE_CONFIG = PipelineConfigV3()
 
 logger = logging.getLogger("Backend.GoalMLService")
-
-# Umbral RELATIVO (no absoluto): un mes pesa menos si su fracción de transacciones
-# anómalas supera 2x la mediana histórica del propio vendedor. Evita hardcodear la tasa
-# de contaminación del modelo (detalle de entrenamiento, ml/contracts/models/anomalies.json)
-# como si fuera una regla de negocio.
-FACTOR_UMBRAL_ANOMALIA_MENSUAL = 2.0
-FRACCION_MINIMA_ANOMALIA = 0.05
 
 
 @dataclass
@@ -69,25 +63,32 @@ class SugerenciaMeta:
     meses_historico_usados: int
     valores_atipicos_excluidos: int
     meses_atipicos_ml_detectados: int
-    # Trazabilidad del cálculo de Venta Neta -> propuesta del siguiente mes (ver
-    # `IQRGoalCalculationEngine._calcular_base_siguiente_mes`): permite al panel gerencial
-    # mostrar por qué se sugirió el monto, no solo el número final.
+    # Trazabilidad del cálculo de Venta Neta -> propuesta del período objetivo (motor v2,
+    # docs/auditoria/46_motor_metas_configurable.md): permite al panel gerencial mostrar
+    # por qué se sugirió el monto, no solo el número final.
     componente_estacional: float | None
     componente_tendencia: float
     factor_tendencia_aplicado: float
     coeficiente_variacion: float
+    anio_objetivo: int = 0
+    mes_objetivo: int = 0
+    indice_estacional_aplicado: float = 1.0
+    fuente_indice_estacional: str = "neutro"
+    referencia_alcanzable: float = 0.0
+    banda_actuo: bool = False
+    meta_pre_banda: float = 0.0
+    # Trazabilidad REAL persistida (H-5): si la meta ya fue generada y guardada, esto
+    # trae la traza EXACTA que produjo `monto_meta` en `metas_comerciales_operativas`,
+    # no un recálculo con la configuración de hoy. `False` cuando el valor mostrado es un
+    # recálculo en vivo (metas legado sin `trazabilidad_calculo`, o consulta sin meta
+    # generada todavía).
+    es_trazabilidad_persistida: bool = False
+    # Fase 6 (docs/features/plan_motor_metas_configurable.md §6, corrige H-7): unidades
+    # ya pasan por el MISMO motor v2 (desestacionalización, IQR, banda de
+    # alcanzabilidad) que el monto -- antes era "unidades del mes anterior × presión",
+    # sin ninguna limpieza estadística.
+    meta_unidades_estadistica: float = 0.0
 
-
-@dataclass
-class ForecastCierre:
-    sucursal: str
-    dias_restantes: int
-    ventas_mes_actual: float
-    proyeccion_cierre: float
-    meta: float
-    pct_cumplimiento_esperado: float
-    probabilidad_alcanzar_meta: float | None
-    mae_modelo: float | None
 
 
 @dataclass
@@ -133,6 +134,8 @@ class GoalMLService:
         calculation_engine: IQRGoalCalculationEngine | None = None,
         commission_config_repo: CommissionConfigRepository | None = None,
         notification_service=None,
+        meta_motor_parametros: MetaMotorParametros = DEFAULT_PARAMETROS,
+        pipeline_config: PipelineConfigV3 = DEFAULT_PIPELINE_CONFIG,
     ):
         self.goal_repo = goal_repo
         self.dataset_repo = dataset_repo
@@ -143,15 +146,34 @@ class GoalMLService:
         # sin tipar el import directo evita un ciclo (NotificationService no depende de
         # GoalMLService, pero se compone en `app.api.dependencies` en el mismo módulo).
         self.notification_service = notification_service
+        # Configuración editable del motor v2 (docs/features/plan_motor_metas_
+        # configurable.md §5.5) -- resuelta UNA VEZ por instancia (inyectada por
+        # `app.api.dependencies` desde `MetaConfigService.get_motor_parametros()`), no
+        # una consulta por vendedor.
+        self.meta_motor_parametros = meta_motor_parametros
+        # Etapas del pipeline v3 que no viven dentro de `IQRGoalCalculationEngine`
+        # (docs/features/plan_motor_metas_v3_y_comisiones_unificadas.md §9/§18, Fase 6) --
+        # resuelto UNA VEZ por instancia, mismo patrón que `meta_motor_parametros`.
+        self.pipeline_config = pipeline_config
+        # Índice estacional de empresa: se resuelve perezosamente (una sola consulta) y
+        # se cachea para toda la vida de la instancia -- `generate_proposals` calcula
+        # decenas de vendedores en el mismo lote y no debe repetir esta consulta agregada
+        # por cada uno (mismo patrón de pre-resolución que `CommissionSimulationService`).
+        self._indice_estacional_empresa_cache: dict[int, float] | None = None
 
-    # ── Generación de metas (estadística pura: IQR sobre Venta Neta, sin ML) ───────────
+    # ── Generación de metas (estadística pura sobre Venta Neta, sin ML) ────────────────
     def generate_proposals(self, anio: int, mes: int, factor_presion: float = 1.0) -> int:
         """Genera/actualiza las metas OFICIALES del período `anio`/`mes` (docs/auditoria/
-        19_.../20_...md): una fila por vendedor (no por vendedor×sucursal, ver
-        `GoalRepository.get_vendors_with_recent_sales`), usando `meta_sugerida_estadistica`
-        (`IQRGoalCalculationEngine` sobre Venta Neta, 24 meses con recorte de picos vía
-        IQR + tendencia de los últimos meses + techo/piso de sanidad contra la tendencia
-        reciente) -- sin ningún modelo ML (`goals_rf` decomisionado).
+        19_.../20_.../46_motor_metas_configurable.md): una fila por vendedor (no por
+        vendedor×sucursal, ver `GoalRepository.get_vendors_with_recent_sales`), usando
+        el motor v2 (`IQRGoalCalculationEngine`: nivel robusto desestacionalizado ×
+        índice estacional (propio o de empresa) × tendencia reciente, acotado por una
+        banda de alcanzabilidad sobre la meta final) -- sin ningún modelo ML (`goals_rf`
+        decomisionado).
+
+        **H-1 corregido (auditoría 46):** el período objetivo es SIEMPRE `(anio, mes)`,
+        el que Gerencia pidió -- antes el motor lo inferí­a como "el mes siguiente al
+        último dato disponible", que podía no coincidir con el período solicitado.
 
         `factor_presion` (el mismo slider de "presión comercial" que ya usaba el
         generador anterior) se pasa como `factor_crecimiento` del motor estadístico --
@@ -161,29 +183,90 @@ class GoalMLService:
         §2, brecha B1): si hay `commission_config_repo` disponible, la meta base se
         multiplica por `COMISION_META_FACTOR_EXTERNO`/`_INTERNO` según
         `comision_config_vendedor.tipo`; un vendedor "nuevo" (fecha_ingreso dentro de
-        `COMISION_VENDEDOR_NUEVO_MESES`) recibe `COMISION_VENDEDOR_NUEVO_FACTOR` del
-        promedio del equipo en vez de su propio histórico (insuficiente/inexistente)."""
-        vendedores = self.goal_repo.get_vendors_with_recent_sales(anio, mes)
-        base_por_vendedor: dict[str, float] = {}
-        for t in vendedores:
-            sugerencia = self.suggest_goal(t.vendedor_origen, factor_crecimiento=factor_presion)
-            base_por_vendedor[t.vendedor_origen] = sugerencia.meta_sugerida_estadistica
+        `COMISION_VENDEDOR_NUEVO_MESES`) recibe `COMISION_VENDEDOR_NUEVO_FACTOR` de la
+        **mediana** del equipo (no el promedio -- H-6/escalera de degradación: un
+        vendedor de volumen inusualmente alto no debe distorsionar la referencia de un
+        vendedor nuevo) en vez de su propio histórico (insuficiente/inexistente)."""
+        vendedores = list(self.goal_repo.get_vendors_with_recent_sales(anio, mes))
 
-        promedio_equipo = (
-            sum(base_por_vendedor.values()) / len(base_por_vendedor) if base_por_vendedor else 0.0
-        )
+        # R-8/auditoría 47 A-0.4: vendedores activos que JAMÁS vendieron nada no aparecen
+        # en `get_vendors_with_recent_sales` (exige venta el mes anterior) -- sin esto,
+        # nunca entraban al lote y jamás recibían ninguna meta. Se agregan con
+        # `unidades_anterior=0` y SIN pasar por `suggest_goal`/el motor IQR (que exige
+        # histórico y lanzaría `ValidationError`); su meta se resuelve enteramente en
+        # `_ajustar_meta_por_tipo` -> `ajustar_meta_por_madurez` con `meses_antiguedad=0`,
+        # que ya devuelve el benchmark puro del equipo (peso propio = 0.0).
+        codvens_con_venta_reciente = {t.vendedor_origen for t in vendedores}
+        vendedores_sin_historico = {
+            v for v in self.goal_repo.get_active_vendors_without_history()
+            if v not in codvens_con_venta_reciente
+        }
+        for codven in vendedores_sin_historico:
+            vendedores.append(VendorRecentSales(vendedor_origen=codven, unidades_anterior=0.0))
+
+        sugerencias_por_vendedor: dict[str, SugerenciaMeta] = {}
+        for t in vendedores:
+            if t.vendedor_origen in vendedores_sin_historico:
+                continue
+            sugerencias_por_vendedor[t.vendedor_origen] = self.suggest_goal(
+                t.vendedor_origen, anio, mes, factor_crecimiento=factor_presion,
+                usar_trazabilidad_persistida=False,
+            )
+
+        montos_base = [s.meta_sugerida_estadistica for s in sugerencias_por_vendedor.values()]
+        unidades_base = [s.meta_unidades_estadistica for s in sugerencias_por_vendedor.values()]
+        mediana_equipo_monto = statistics.median(montos_base) if montos_base else 0.0
+        mediana_equipo_unidades = statistics.median(unidades_base) if unidades_base else 0.0
+
+        for codven in vendedores_sin_historico:
+            sugerencias_por_vendedor[codven] = SugerenciaMeta(
+                vendedor_origen=codven,
+                meta_sugerida_estadistica=mediana_equipo_monto,
+                metodo_estadistico=METODO_SIN_HISTORICO,
+                meses_historico_usados=0,
+                valores_atipicos_excluidos=0,
+                meses_atipicos_ml_detectados=0,
+                componente_estacional=None,
+                componente_tendencia=1.0,
+                factor_tendencia_aplicado=1.0,
+                coeficiente_variacion=0.0,
+                anio_objetivo=anio,
+                mes_objetivo=mes,
+                referencia_alcanzable=mediana_equipo_monto,
+                meta_unidades_estadistica=mediana_equipo_unidades,
+            )
+
+        # E9/E13 comparten el mismo insumo real (cartera del vendedor, últimos 6 meses de
+        # fact_ventas_detalle) -- se resuelve UNA vez por vendedor (no una vez por monto Y
+        # por unidades) y solo si alguna de las dos etapas está activa, para no gastar una
+        # consulta al EDW por vendedor cuando ambas están desactivadas (semilla).
+        necesita_cartera = self.pipeline_config.capacidad_activa or self.pipeline_config.cartera_activa
 
         registros_afectados = 0
         for t in vendedores:
-            meta_monto = self._ajustar_meta_por_tipo(t.vendedor_origen, base_por_vendedor[t.vendedor_origen], promedio_equipo, anio, mes)
-            meta_unidades = max(0.0, float(t.unidades_anterior or 0.0) * factor_presion)
+            sugerencia = sugerencias_por_vendedor[t.vendedor_origen]
+            cartera = self.goal_repo.get_metricas_cartera_vendedor(t.vendedor_origen, anio, mes) if necesita_cartera else None
+            cumplimiento_promedio = (
+                self.goal_repo.get_cumplimiento_historico_promedio(t.vendedor_origen, anio, mes)
+                if self.pipeline_config.cumplimiento_activo else None
+            )
+            meta_monto = self._ajustar_meta_por_tipo(
+                t.vendedor_origen, sugerencia.meta_sugerida_estadistica, mediana_equipo_monto, anio, mes,
+                sugerencia=sugerencia, cartera=cartera, cumplimiento_promedio=cumplimiento_promedio,
+            )
+            meta_unidades = self._ajustar_meta_por_tipo(
+                t.vendedor_origen, sugerencia.meta_unidades_estadistica, mediana_equipo_unidades, anio, mes,
+                sugerencia=sugerencia, cartera=cartera, cumplimiento_promedio=cumplimiento_promedio,
+            )
+
+            trazabilidad_json = json.dumps(self._trazabilidad_a_dict(sugerencia, meta_monto, meta_unidades))
 
             existing = self.goal_repo.find_proposal(anio, mes, t.vendedor_origen)
             if not existing:
-                self.goal_repo.insert_proposal(anio, mes, t.vendedor_origen, meta_monto, meta_unidades)
+                self.goal_repo.insert_proposal(anio, mes, t.vendedor_origen, meta_monto, meta_unidades, trazabilidad_json)
                 registros_afectados += 1
             elif existing[1] == "PROPUESTA":
-                self.goal_repo.update_proposal_amounts(existing[0], meta_monto, meta_unidades)
+                self.goal_repo.update_proposal_amounts(existing[0], meta_monto, meta_unidades, trazabilidad_json)
                 registros_afectados += 1
 
         self.goal_repo.commit()
@@ -199,38 +282,177 @@ class GoalMLService:
             )
         return registros_afectados
 
+    def _trazabilidad_a_dict(self, sugerencia: SugerenciaMeta, meta_monto_final: float, meta_unidades_final: float) -> dict:
+        """Serializa la traza completa del cálculo (docs/auditoria/
+        46_motor_metas_configurable.md, H-5) -- persistida junto a la meta para que "ver
+        cómo se calculó" muestre los valores REALES que la produjeron, no un recálculo
+        con la configuración de hoy. `meta_monto_final`/`meta_unidades_final` son el
+        monto YA ajustado por tipo de vendedor (posterior a `meta_sugerida_estadistica`,
+        que es la salida cruda del motor)."""
+        d = dataclasses.asdict(sugerencia)
+        d["meta_monto_final"] = round(meta_monto_final, 2)
+        d["meta_unidades_final"] = round(meta_unidades_final, 2)
+        # Fase 6 (docs/features/plan_motor_metas_v3_y_comisiones_unificadas.md §20):
+        # snapshot de la configuración modular TAL COMO ESTABA al generar -- "ver cómo se
+        # calculó" debe mostrar la configuración real usada, no la de hoy (RN-MT5, mismo
+        # principio que ya rige `es_trazabilidad_persistida`).
+        d["version"] = "v3"
+        d["config_snapshot"] = self.pipeline_config.config_snapshot
+        return d
+
     def _ajustar_meta_por_tipo(
-        self, vendedor_origen: str, meta_base: float, promedio_equipo: float, anio: int, mes: int,
+        self, vendedor_origen: str, meta_base: float, mediana_equipo: float, anio: int, mes: int,
+        sugerencia: SugerenciaMeta, cartera: dict | None = None, cumplimiento_promedio: float | None = None,
     ) -> float:
-        if self.commission_config_repo is None:
-            return meta_base
-        config_vendedor = self.commission_config_repo.get_config_vendedor(
-            vendedor_origen, fecha_referencia_periodo(anio, mes)
+        """Aplica, en orden, las etapas del pipeline v3 que no viven dentro de
+        `IQRGoalCalculationEngine` (§18 del plan): E6 madurez, E7 estrategia, E8 tipo de
+        vendedor, E9 capacidad instalada, E13 factor cartera, E15 cumplimiento histórico,
+        E16 volatilidad, E11 redondeo (siempre último). Todas las etapas opcionales
+        (E7/E9/E13/E15/E16) están desactivadas en la semilla -- activarlas es una
+        decisión explícita de gerencia vía `/meta-config/modulos`.
+
+        E6+E8: primero se mezcla la meta propia con el benchmark del equipo según cuánta
+        historia real respalda a `meta_base` (`sugerencia.meses_historico_usados`, ya
+        calculado por el motor v2), y DESPUÉS se aplica el factor de tipo externo/interno
+        sobre el resultado ya mezclado -- nunca al revés, para no aplicar el ajuste de
+        tipo sobre una meta que en realidad es 100% benchmark ajeno al propio vendedor.
+        Reemplaza el escalón único anterior (cliff binario) por la transición gradual de
+        `ajustar_meta_por_madurez`."""
+        resultado_madurez = ajustar_meta_por_madurez(
+            meta_propia=meta_base, benchmark_equipo=mediana_equipo,
+            meses_antiguedad=sugerencia.meses_historico_usados,
+            umbral_nuevo_meses=self.pipeline_config.umbral_nuevo_meses,
+            umbral_maduro_meses=self.pipeline_config.umbral_maduro_meses,
+            peso_propio_intermedio=self.pipeline_config.peso_propio_intermedio,
         )
+        meta = resultado_madurez.meta_ajustada
 
-        if config_vendedor and config_vendedor.fecha_ingreso:
-            meses_antiguedad = (anio - config_vendedor.fecha_ingreso.year) * 12 + (mes - config_vendedor.fecha_ingreso.month)
-            if 0 <= meses_antiguedad < settings.COMISION_VENDEDOR_NUEVO_MESES:
-                return round(promedio_equipo * settings.COMISION_VENDEDOR_NUEVO_FACTOR, 2)
+        # E7 -- objetivo estratégico de la empresa (§18-E7): desactivado en la semilla,
+        # pendiente de que gerencia defina un % de crecimiento (§17.4 del plan).
+        if self.pipeline_config.estrategia_activa:
+            meta = aplicar_estrategia(meta, self.pipeline_config.crecimiento_pct)
 
-        tipo = config_vendedor.tipo if config_vendedor else "externo"
-        factor = settings.COMISION_META_FACTOR_EXTERNO if tipo == "externo" else settings.COMISION_META_FACTOR_INTERNO
-        return round(meta_base * factor, 2)
+        # E8 -- factor por tipo de vendedor (§18-E8): absorbe la tabla que antes vivía
+        # como `COMISION_META_FACTOR_EXTERNO`/`_INTERNO` leída directo de `settings` --
+        # ahora la fuente única es la etapa E8 de `metas_config_modulos` (auditoría 46
+        # H-10: un factor aplicándose en dos sitios a la vez ya causó un bug real).
+        if self.commission_config_repo is not None:
+            config_vendedor = self.commission_config_repo.get_config_vendedor(
+                vendedor_origen, fecha_referencia_periodo(anio, mes)
+            )
+            tipo = config_vendedor.tipo if config_vendedor else "externo"
+            meta = aplicar_factor_tipo(meta, tipo, self.pipeline_config.factores_tipo_vendedor)
+
+        # E9 -- capacidad instalada (§18-E9): tope duro con la cartera REAL del vendedor
+        # (últimos 6 meses de fact_ventas_detalle, `GoalRepository.
+        # get_metricas_cartera_vendedor`) -- sin cartera medible (vendedor nuevo,
+        # mostrador sin clientes identificados) la etapa se omite por diseño propio de
+        # `aplicar_capacidad_instalada`, nunca aplica un tope de 0.
+        if self.pipeline_config.capacidad_activa and cartera is not None:
+            meta = aplicar_capacidad_instalada(
+                meta, cartera["clientes_activos_mes"], cartera["ticket_promedio"],
+                cartera["frecuencia_compra_mensual"], holgura=self.pipeline_config.capacidad_holgura,
+            ).meta_ajustada
+
+        # E13 -- factor cartera activa (§18-E13): mismos insumos reales que E9 --
+        # compara el mes más reciente contra el promedio de la ventana, acotado a un
+        # rango estrecho (nunca deja que un cambio de cartera por sí solo duplique o
+        # anule la meta).
+        if self.pipeline_config.cartera_activa and cartera is not None:
+            meta = aplicar_factor_cartera(
+                meta, cartera["clientes_activos_mes"], cartera["promedio_clientes_activos_ventana"],
+                factor_min=self.pipeline_config.cartera_factor_min, factor_max=self.pipeline_config.cartera_factor_max,
+            )
+
+        # E15 -- factor de cumplimiento histórico (§18-E15): promedio REAL de venta/meta
+        # de los últimos meses del propio vendedor (`GoalRepository.
+        # get_cumplimiento_historico_promedio`) -- `None` (sin histórico comparable) deja
+        # la etapa neutra por diseño de `aplicar_factor_cumplimiento_historico`.
+        if self.pipeline_config.cumplimiento_activo:
+            meta = aplicar_factor_cumplimiento_historico(
+                meta, cumplimiento_promedio, peso=self.pipeline_config.cumplimiento_peso,
+            )
+
+        # E16 -- penalización por volatilidad (§18-E16): reduce el componente de
+        # CRECIMIENTO ya calculado por el motor v2 (`sugerencia.factor_tendencia_
+        # aplicado`) cuando la serie del vendedor es muy errática (`sugerencia.
+        # coeficiente_variacion`), reescalando la meta por la razón entre el factor
+        # penalizado y el original -- nunca recalcula la tendencia desde cero.
+        if self.pipeline_config.volatilidad_activa and sugerencia.factor_tendencia_aplicado > 0:
+            factor_ajustado = aplicar_penalizacion_volatilidad(
+                sugerencia.factor_tendencia_aplicado, sugerencia.coeficiente_variacion,
+                umbral_cv=self.pipeline_config.volatilidad_umbral_cv,
+                factor_reduccion=self.pipeline_config.volatilidad_factor_reduccion,
+            )
+            meta = meta * (factor_ajustado / sugerencia.factor_tendencia_aplicado)
+
+        # E11 -- redondeo (§18-E11): siempre el último paso del pipeline.
+        meta = redondear_meta(meta, self.pipeline_config.redondeo_multiplo, self.pipeline_config.redondeo_modo)
+        return round(meta, 2)
+
+    def _get_indice_estacional_empresa(self) -> dict[int, float]:
+        if self._indice_estacional_empresa_cache is None:
+            self._indice_estacional_empresa_cache = self.goal_repo.get_indice_estacional_empresa()
+        return self._indice_estacional_empresa_cache
 
     def suggest_goal(
-        self, vendedor_origen: str, factor_estacional: float = 1.0, factor_crecimiento: float = 1.0,
+        self, vendedor_origen: str, anio_objetivo: int | None = None, mes_objetivo: int | None = None,
+        factor_estacional: float = 1.0, factor_crecimiento: float = 1.0,
+        usar_trazabilidad_persistida: bool = True,
     ) -> SugerenciaMeta:
+        """Calcula la meta sugerida para `(anio_objetivo, mes_objetivo)` -- si se omiten
+        (compatibilidad con llamadores que solo quieren "la próxima meta razonable"),
+        el motor cae a su comportamiento legado (mes siguiente al último dato).
+
+        `usar_trazabilidad_persistida=False` fuerza un recálculo fresco incluso si ya
+        existe una meta guardada para ese período -- usado por `generate_proposals`
+        (regenerar SIEMPRE debe reflejar el histórico/configuración actuales, nunca
+        reciclar una traza vieja); el valor `True` por defecto es para el endpoint de
+        lectura ("ver cómo se calculó"), que debe mostrar los valores REALES que
+        produjeron la meta ya persistida (H-5), no un recálculo con datos de hoy."""
         hist = self.goal_repo.get_vendor_monthly_history(vendedor_origen)
         if not hist:
             raise ValidationError(f"Sin histórico de ventas para vendedor={vendedor_origen}.")
 
         registros = [RegistroMensual(anio=h.anio, mes=h.mes, ventas=h.ventas, unidades=h.unidades) for h in hist]
-        meses_atipicos_ml = self._detectar_meses_atipicos(vendedor_origen, hist)
 
         resultado = self.calculation_engine.calcular(
-            vendedor_origen, registros, factor_estacional, factor_crecimiento,
-            meses_atipicos_ml=meses_atipicos_ml,
+            vendedor_origen, registros, anio_objetivo, mes_objetivo, factor_estacional, factor_crecimiento,
+            indice_estacional_empresa=self._get_indice_estacional_empresa(),
+            parametros=self.meta_motor_parametros,
+            aplicar_limpieza=self.pipeline_config.aplicar_limpieza,
+            aplicar_estacionalidad=self.pipeline_config.aplicar_estacionalidad,
+            aplicar_tendencia=self.pipeline_config.aplicar_tendencia,
+            aplicar_estabilidad=self.pipeline_config.aplicar_estabilidad,
+            aplicar_banda=self.pipeline_config.aplicar_banda,
         )
+
+        trazabilidad_persistida = None
+        if usar_trazabilidad_persistida and anio_objetivo is not None and mes_objetivo is not None:
+            trazabilidad_persistida = self.goal_repo.get_trazabilidad(anio_objetivo, mes_objetivo, vendedor_origen)
+
+        if trazabilidad_persistida:
+            return SugerenciaMeta(
+                vendedor_origen=vendedor_origen,
+                meta_sugerida_estadistica=trazabilidad_persistida.get("meta_sugerida_estadistica", resultado.meta_ventas_total),
+                metodo_estadistico=trazabilidad_persistida.get("metodo_estadistico", resultado.metodo),
+                meses_historico_usados=trazabilidad_persistida.get("meses_historico_usados", resultado.meses_historico_usados),
+                valores_atipicos_excluidos=trazabilidad_persistida.get("valores_atipicos_excluidos", resultado.valores_atipicos_excluidos),
+                meses_atipicos_ml_detectados=trazabilidad_persistida.get("meses_atipicos_ml_detectados", resultado.meses_atipicos_ml_detectados),
+                componente_estacional=trazabilidad_persistida.get("componente_estacional", resultado.componente_estacional),
+                componente_tendencia=trazabilidad_persistida.get("componente_tendencia", resultado.componente_tendencia),
+                factor_tendencia_aplicado=trazabilidad_persistida.get("factor_tendencia_aplicado", resultado.factor_tendencia_aplicado),
+                coeficiente_variacion=trazabilidad_persistida.get("coeficiente_variacion", resultado.coeficiente_variacion),
+                anio_objetivo=trazabilidad_persistida.get("anio_objetivo", resultado.anio_objetivo),
+                mes_objetivo=trazabilidad_persistida.get("mes_objetivo", resultado.mes_objetivo),
+                indice_estacional_aplicado=trazabilidad_persistida.get("indice_estacional_aplicado", resultado.indice_estacional_aplicado),
+                fuente_indice_estacional=trazabilidad_persistida.get("fuente_indice_estacional", resultado.fuente_indice_estacional),
+                referencia_alcanzable=trazabilidad_persistida.get("referencia_alcanzable", resultado.referencia_alcanzable),
+                banda_actuo=trazabilidad_persistida.get("banda_actuo", resultado.banda_actuo),
+                meta_pre_banda=trazabilidad_persistida.get("meta_pre_banda", resultado.meta_pre_banda),
+                es_trazabilidad_persistida=True,
+                meta_unidades_estadistica=trazabilidad_persistida.get("meta_unidades_estadistica", resultado.meta_unidades_total),
+            )
 
         return SugerenciaMeta(
             vendedor_origen=vendedor_origen,
@@ -243,44 +465,16 @@ class GoalMLService:
             componente_tendencia=resultado.componente_tendencia,
             factor_tendencia_aplicado=resultado.factor_tendencia_aplicado,
             coeficiente_variacion=resultado.coeficiente_variacion,
+            anio_objetivo=resultado.anio_objetivo,
+            mes_objetivo=resultado.mes_objetivo,
+            indice_estacional_aplicado=resultado.indice_estacional_aplicado,
+            fuente_indice_estacional=resultado.fuente_indice_estacional,
+            referencia_alcanzable=resultado.referencia_alcanzable,
+            banda_actuo=resultado.banda_actuo,
+            meta_pre_banda=resultado.meta_pre_banda,
+            es_trazabilidad_persistida=False,
+            meta_unidades_estadistica=resultado.meta_unidades_total,
         )
-
-    # ── Detección de valores atípicos (anomaly, grano de transacción) ─────────
-    def _detectar_meses_atipicos(
-        self, vendedor_origen: str, hist: list[VendorMonthlySales],
-    ) -> frozenset[tuple[int, int]]:
-        if not hist or not self.model_loader.is_loaded("anomaly"):
-            return frozenset()
-
-        primero = min(hist, key=lambda h: (h.anio, h.mes))
-        try:
-            transacciones = self.goal_repo.get_vendor_transactions_history(vendedor_origen, primero.anio, primero.mes)
-        except Exception as e:
-            logger.error(f"Fallo consultando transacciones para detección de anomalías ({vendedor_origen}): {e}")
-            return frozenset()
-        if not transacciones:
-            return frozenset()
-
-        df = pd.DataFrame([t._asdict() for t in transacciones])
-        try:
-            resultado = inference.detect_anomalies(self.model_loader, df[["subtotal_neto", "cantidad", "costo_total", "margen"]])
-        except ModelContractError as e:
-            # Señal secundaria: si el contrato falla, se continúa sin ella (no bloquea
-            # la generación de la meta, que sigue funcionando solo con IQR).
-            logger.error(f"Contrato del modelo 'anomaly' violado, se omite la señal ML para esta meta: {e}")
-            return frozenset()
-
-        df["es_anomalia"] = (resultado["is_anomaly_pred"].to_numpy() == -1)
-        fracciones = df.groupby(["anio", "mes"])["es_anomalia"].mean()
-        if fracciones.empty:
-            return frozenset()
-
-        mediana = float(fracciones.median())
-        umbral = max(mediana * FACTOR_UMBRAL_ANOMALIA_MENSUAL, FRACCION_MINIMA_ANOMALIA)
-        atipicos = frozenset((int(a), int(m)) for (a, m), frac in fracciones.items() if frac > umbral)
-        if atipicos:
-            logger.info(f"Meses atípicos detectados (IsolationForest) para {vendedor_origen}: {sorted(atipicos)}")
-        return atipicos
 
     # ── Recomendación comercial ────────────────────────────────────────────────
     def get_commercial_recommendations(self, vendedor_origen: str, top_n: int = 5) -> list[RecomendacionComercial]:
@@ -289,60 +483,6 @@ class GoalMLService:
             return []
         recs_df = inference.get_recommendations(self.model_loader, top_productos, top_n=top_n)
         return [RecomendacionComercial(producto_cod=str(row["item_B"]), score_afinidad=float(row["score"])) for _, row in recs_df.iterrows()]
-
-    # ── Pronóstico de cierre ───────────────────────────────────────────────────
-    def forecast_cierre(
-        self, sucursal: str | None, meta_mensual: float, vendedor_nombre: str | None = None,
-    ) -> ForecastCierre:
-        """`vendedor_nombre` (auditoría A-0.3, decisión B-3, 2026-07-29): reemplaza
-        `sucursal` como filtro del rol `ventas` -- ver docstring de
-        `AnalyticsRepository.get_sales_performance` para la evidencia completa. Es el
-        `nombre_vendedor` (no el `codven`), porque `DatasetRepository.
-        get_daily_sales_history` ya filtra por ese campo (mismo filtro que usa el
-        selector de vendedor de Gerencia, Fase 3); el caller resuelve `codven ->
-        nombre_vendedor` antes de llamar. `sucursal`/`vendedor_nombre` son mutuamente
-        excluyentes en la práctica (esta función ya no recibe ambos con valor real)."""
-        hoy = datetime.date.today()
-        ultimo_dia_mes = (datetime.date(hoy.year + (hoy.month == 12), hoy.month % 12 + 1, 1) - datetime.timedelta(days=1))
-        dias_restantes = (ultimo_dia_mes - hoy).days
-
-        try:
-            df_hist = self.dataset_repo.get_daily_sales_history(sucursal=sucursal, vendedor=vendedor_nombre)
-        except Exception as e:
-            logger.error(
-                f"Fallo consultando historial de ventas para pronóstico de cierre "
-                f"(sucursal={sucursal}, vendedor={vendedor_nombre}): {e}"
-            )
-            raise ExternalDataError("No se pudo consultar el historial de ventas del EDW.") from e
-
-        if df_hist.empty:
-            return ForecastCierre(vendedor_nombre or sucursal or "Consolidado", dias_restantes, 0.0, 0.0, meta_mensual, 0.0, None, None)
-
-        df_hist["ds"] = pd.to_datetime(df_hist["ds"])
-        df_hist = df_hist.sort_values("ds").set_index("ds").resample("D").sum().fillna(0)
-
-        ventas_mes_actual = float(
-            df_hist.loc[(df_hist.index.year == hoy.year) & (df_hist.index.month == hoy.month), "y_sales_net"].sum()
-        )
-
-        generated = walk_forward_forecast(self.model_loader, df_hist, "y_sales_net", dias_restantes, inference.predict_sales)
-        proyeccion_restante = sum(v for _, v in generated)
-        proyeccion_cierre = ventas_mes_actual + proyeccion_restante
-
-        mae_modelo = self.model_loader.get_meta("sales_rf").get("metrics", {}).get("MAE")
-        pct_esperado = round((proyeccion_cierre / meta_mensual) * 100, 1) if meta_mensual > 0 else 0.0
-        probabilidad = self._probabilidad_alcanzar_meta(proyeccion_cierre, meta_mensual, mae_modelo, dias_restantes)
-
-        return ForecastCierre(
-            sucursal=vendedor_nombre or sucursal or "Consolidado",
-            dias_restantes=dias_restantes,
-            ventas_mes_actual=round(ventas_mes_actual, 2),
-            proyeccion_cierre=round(proyeccion_cierre, 2),
-            meta=meta_mensual,
-            pct_cumplimiento_esperado=pct_esperado,
-            probabilidad_alcanzar_meta=probabilidad,
-            mae_modelo=round(mae_modelo, 2) if mae_modelo is not None else None,
-        )
 
     # ── Recomendaciones por categoría (panel gerencial) ────────────────────────
     def get_category_recommendations(self, top_n: int = 10) -> list[RecomendacionPorCategoria]:
@@ -388,23 +528,3 @@ class GoalMLService:
                 pct_cumplimiento=pct_cumplimiento, pct_esperado_a_la_fecha=pct_tiempo_transcurrido, estado=estado,
             ))
         return resultados
-
-    @staticmethod
-    def _probabilidad_alcanzar_meta(
-        proyeccion_cierre: float, meta: float, mae_modelo: float | None, dias_restantes: int,
-    ) -> float | None:
-        """Aproximación estadística (no un modelo calibrado): asume que el error diario
-        del modelo (MAE real del holdout, mismo dato que usa el intervalo de Gerencia,
-        H-09) es independiente entre días y se acumula en cuadratura sobre los días
-        restantes -- una desviación estándar aproximada de la proyección total. Con esa
-        desviación, `P(cierre >= meta)` es la cola superior de una normal centrada en la
-        proyección puntual. Se documenta como aproximación explícita, no como
-        probabilidad calibrada de un clasificador."""
-        if mae_modelo is None or dias_restantes <= 0 or meta <= 0:
-            return None
-        sigma = mae_modelo * (dias_restantes ** 0.5)
-        if sigma <= 0:
-            return 100.0 if proyeccion_cierre >= meta else 0.0
-        z = (meta - proyeccion_cierre) / sigma
-        prob = 1 - NormalDist().cdf(z)
-        return round(max(0.0, min(1.0, prob)) * 100, 1)

@@ -1,16 +1,17 @@
 import { useState, type ReactNode } from 'react';
-import { Settings, Plus, CreditCard, Users, Pencil, Trash2, X, Percent, Sigma, ArrowUp, ArrowDown } from 'lucide-react';
+import { Settings, Plus, Users, Pencil, Trash2, X, Percent, Sigma, ArrowUp, ArrowDown } from 'lucide-react';
 
 import {
-  useMatrizCategorias, useUpsertMatrizCategoria, useDeleteMatrizCategoria, useFactoresCredito, useReplaceFactoresCredito,
-  useConfigVendedores, useUpsertConfigVendedor, useComisionConfigAuditoria,
+  useMatrizCategorias, useUpsertMatrizCategoria, useDeleteMatrizCategoria,
+  useConfigVendedores, useUpsertConfigVendedor,
   useSearchClasesProducto, useSearchVendedoresComision,
-  useTramosCobranza, useReplaceTramosCobranza, useFormulas, useReplaceFormulaComponentes,
+  useTramosCobranza, useReplaceTramosCobranza, useTramosCumplimiento, useReplaceTramosCumplimiento,
+  useFormulas, useReplaceFormulaComponentes,
 } from '../../hooks/commissionConfig';
 import type {
-  ClaseBusqueda, ComisionConfigAuditoriaEntrada, ConfigVendedor, FactorCreditoPayload, GrupoComision,
-  MatrizCategoria, TipoVendedor, VendedorBusqueda, TramoCobranzaPayload, FormulaComponentePayload,
-  ComponenteFormula, OperadorFormula,
+  ClaseBusqueda, ConfigVendedor, GrupoComision,
+  MatrizCategoria, TipoVendedor, VendedorBusqueda, TramoCobranzaPayload, TramoCumplimientoPayload,
+  FormulaComponentePayload, ComponenteFormula, OperadorFormula,
 } from '../../types/commissionConfig';
 import { Tabs } from '../ui/Tabs';
 import { Button } from '../ui/Button';
@@ -47,11 +48,20 @@ const GRUPO_VARIANT: Record<GrupoComision, 'success' | 'info' | 'warning' | 'dan
 
 /** Panel de configuración de gerencia para el sistema de Comisiones Variables
  * (docs/features/plan_integracion_comisiones_variables.md §3.5, Fase 5: "gerencia
- * ajusta la matriz sin programar"). 3 pestañas: matriz de categorías, factores de
- * crédito y tipo de vendedor -- cada una es un CRUD directo contra los endpoints
- * `/gerencia/goals/commission-config/*`. */
+ * ajusta la matriz sin programar"). Pestañas: matriz de categorías, tipo de
+ * vendedor, comisión sobre cobros, tramos de cumplimiento y fórmula -- cada una es
+ * un CRUD directo contra los endpoints `/gerencia/goals/commission-config/*`.
+ *
+ * El factor de plazo de crédito se retiró por completo (docs/features/
+ * plan_motor_metas_v3_y_comisiones_unificadas.md, Fase 3, R-7): la auditoría 30
+ * (H4) ya había documentado que solo hay datos reales de plazo para 0 y 30 días en
+ * el EDW -- el factor no discriminaba nada real. La bitácora de cambios se promovió
+ * a pestaña propia de primer nivel (`BitacoraPanel`, en `DashboardMetas.tsx`), fuera
+ * de este panel, porque ahora cubre también cambios de configuración de Metas. */
 export function CommissionConfigPanel() {
-  const [tab, setTab] = useState<'matriz' | 'credito' | 'vendedores' | 'cobranza' | 'formula' | 'auditoria'>('matriz');
+  const [tab, setTab] = useState<
+    'matriz' | 'vendedores' | 'cobranza' | 'cumplimiento' | 'formula'
+  >('matriz');
 
   return (
     <div className="p-6 bg-slate-900 text-white rounded-lg border border-slate-800 shadow-xl max-w-7xl mx-auto">
@@ -60,7 +70,7 @@ export function CommissionConfigPanel() {
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Configuración de Comisiones Variables</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Matriz de categorías, plazos de crédito y tipo de vendedor -- editable sin desarrollo.
+            Matriz de categorías y tipo de vendedor -- editable sin desarrollo.
           </p>
         </div>
       </div>
@@ -68,14 +78,16 @@ export function CommissionConfigPanel() {
       <div className="p-4 mb-5 bg-info/30 border border-info/50 rounded-lg text-sm text-slate-300 space-y-1.5">
         <p className="font-semibold text-info">¿Cómo se arma la comisión de una línea de venta?</p>
         <p className="font-mono text-xs text-slate-400">
-          comisión = base_comisionable × tasa × factor_estratégico × factor_de_crédito
+          comisión = base_comisionable × tasa × factor_estratégico
         </p>
         <p>
           Eso se suma para todas las líneas del vendedor en el mes, se multiplica por su{' '}
           <span className="text-slate-200 font-medium">factor de tipo</span> (pestaña "Tipo de vendedor") y por el{' '}
-          <span className="text-slate-200 font-medium">multiplicador de cumplimiento de meta</span> (100%+ paga más,
-          menos de 80% castiga fuerte), y al final se restan devoluciones estimadas y se suman bonos. Cada pestaña de
-          abajo configura uno de los factores de esa fórmula.
+          <span className="text-slate-200 font-medium">multiplicador de cumplimiento de meta</span> (tramos editables
+          en la pestaña "Tramos de cumplimiento" -- por defecto: sin comisión bajo 90% de la meta, escala creciente
+          desde el 100%), y al final se restan devoluciones estimadas y se suman bonos, acotados por un techo
+          relativo a la base ganada. Bajo el 90% de cumplimiento, la comisión final es $0 -- bonos incluidos. Cada
+          pestaña de abajo configura uno de los factores de esa fórmula.
         </p>
       </div>
 
@@ -85,20 +97,18 @@ export function CommissionConfigPanel() {
         onChange={(v) => setTab(v as typeof tab)}
         items={[
           { value: 'matriz', label: 'Matriz de categorías' },
-          { value: 'credito', label: 'Factores de crédito' },
           { value: 'vendedores', label: 'Tipo de vendedor' },
           { value: 'cobranza', label: 'Comisión sobre cobros' },
+          { value: 'cumplimiento', label: 'Tramos de cumplimiento' },
           { value: 'formula', label: 'Fórmula' },
-          { value: 'auditoria', label: 'Bitácora de cambios' },
         ]}
       />
 
       {tab === 'matriz' && <MatrizTab />}
-      {tab === 'credito' && <CreditoTab />}
       {tab === 'vendedores' && <VendedoresTab />}
       {tab === 'cobranza' && <CobranzaTab />}
+      {tab === 'cumplimiento' && <CumplimientoTab />}
       {tab === 'formula' && <FormulaTab />}
-      {tab === 'auditoria' && <AuditoriaTab />}
     </div>
   );
 }
@@ -295,89 +305,6 @@ function MatrizTab() {
         onConfirm={handleConfirmDelete}
         onCancel={() => setPendingDelete(null)}
       />
-    </div>
-  );
-}
-
-// ── Factores de crédito ─────────────────────────────────────────────────────────
-function CreditoTab() {
-  const credito = useFactoresCredito();
-  const replaceMut = useReplaceFactoresCredito();
-  const toast = useToast();
-  const [rows, setRows] = useState<FactorCreditoPayload[] | null>(null);
-
-  const activos = rows ?? credito.data.map((f) => ({
-    dias_desde: f.dias_desde, dias_hasta: f.dias_hasta, factor: f.factor,
-  }));
-
-  const updateRow = (idx: number, patch: Partial<FactorCreditoPayload>) => {
-    const next = [...activos];
-    next[idx] = { ...next[idx], ...patch };
-    setRows(next);
-  };
-
-  const addRow = () => setRows([...activos, { dias_desde: 0, dias_hasta: null, factor: 1.0 }]);
-  const removeRow = (idx: number) => setRows(activos.filter((_, i) => i !== idx));
-
-  const handleSave = async () => {
-    try {
-      await replaceMut.replace(activos);
-      toast('Matriz de crédito actualizada.', 'success');
-      setRows(null);
-    } catch (err) {
-      toast(getApiErrorMessage(err) ?? 'No se pudo guardar la matriz de crédito.', 'error');
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-slate-500">
-        Cada tramo penaliza (o no) la comisión de una línea según a cuántos días de plazo se vendió a crédito: más
-        días de plazo para el cliente suele significar factor más bajo, porque el dinero tarda más en entrar. El
-        motor busca el tramo donde cae <span className="font-mono">dias_plazo</span> de la venta y multiplica la
-        comisión de esa línea por su <span className="font-mono">Factor</span>. Auditoría 30 (H4): el EDW actual solo
-        registra tráfico real en 0 y 30 días de plazo -- los demás tramos son configuración disponible sin historial
-        que la respalde todavía.
-      </p>
-      <div className="card overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-950/60 text-slate-500 text-xs uppercase tracking-widest">
-            <tr>
-              <th className="px-4 py-2" title="Desde cuántos días de plazo de crédito empieza a aplicar este tramo (inclusive).">Días desde</th>
-              <th className="px-4 py-2" title="Hasta cuántos días de plazo aplica este tramo (inclusive). Vacío = sin tope superior.">Días hasta</th>
-              <th className="px-4 py-2" title="Multiplicador (0-2.0x) que se aplica a la comisión de la línea. 1.00 = sin penalización; menor a 1 reduce la comisión por el riesgo de cobranza a más plazo, mayor a 1 la premia.">Factor</th>
-              <th className="px-4 py-2 text-right">Acciones</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/80">
-            {activos.map((r, idx) => (
-              <tr key={idx}>
-                <td className="px-4 py-2">
-                  <input type="number" min={0} value={r.dias_desde} className="input-field w-20"
-                    onChange={(e) => updateRow(idx, { dias_desde: parseInt(e.target.value) || 0 })} />
-                </td>
-                <td className="px-4 py-2">
-                  <input type="number" min={0} value={r.dias_hasta ?? ''} placeholder="Sin tope" className="input-field w-24"
-                    onChange={(e) => updateRow(idx, { dias_hasta: e.target.value ? parseInt(e.target.value) : null })} />
-                </td>
-                <td className="px-4 py-2">
-                  <input type="number" step="0.01" min={0} max={2} value={r.factor} className="input-field w-20"
-                    onChange={(e) => updateRow(idx, { factor: parseFloat(e.target.value) || 0 })} />
-                </td>
-                <td className="px-4 py-2 text-right">
-                  <Button variant="danger" size="sm" onClick={() => removeRow(idx)}>Quitar</Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="flex gap-3">
-        <Button variant="ghost" onClick={addRow} icon={<Plus className="w-4 h-4" aria-hidden="true" />}>Agregar tramo</Button>
-        <Button variant="primary" onClick={handleSave} loading={replaceMut.loading} icon={<CreditCard className="w-4 h-4" aria-hidden="true" />}>
-          Guardar matriz de crédito
-        </Button>
-      </div>
     </div>
   );
 }
@@ -643,6 +570,104 @@ function CobranzaTab() {
   );
 }
 
+// ── Tramos de cumplimiento (auditoría 45, docs/features/plan_comisiones_
+// sobrecumplimiento_umbral_y_desglose.md) -- multiplicador de
+// `multiplicador_cumplimiento`: umbral mínimo de pago (90% por defecto) y escala de
+// sobrecumplimiento (reemplaza el escalón plano 1.2x único). Un solo juego de tramos
+// genéricos, sin selector de perfil (a diferencia de Cobranza).
+function CumplimientoTab() {
+  const tramos = useTramosCumplimiento();
+  const replaceMut = useReplaceTramosCumplimiento();
+  const toast = useToast();
+  const [rows, setRows] = useState<TramoCumplimientoPayload[] | null>(null);
+
+  const activos = rows ?? tramos.data.map((t) => ({
+    pct_desde: t.pct_desde, pct_hasta: t.pct_hasta, multiplicador: t.multiplicador,
+    etiqueta: t.etiqueta, bono_fijo: t.bono_fijo,
+  }));
+
+  const updateRow = (idx: number, patch: Partial<TramoCumplimientoPayload>) => {
+    const next = [...activos];
+    next[idx] = { ...next[idx], ...patch };
+    setRows(next);
+  };
+  const addRow = () => setRows([
+    ...activos, { pct_desde: 0, pct_hasta: null, multiplicador: 1.0, etiqueta: 'Nuevo tramo', bono_fijo: 0 },
+  ]);
+  const removeRow = (idx: number) => setRows(activos.filter((_, i) => i !== idx));
+
+  const handleSave = async () => {
+    try {
+      await replaceMut.replace({ tramos: activos });
+      toast('Tramos de cumplimiento actualizados.', 'success');
+      setRows(null);
+    } catch (err) {
+      toast(getApiErrorMessage(err) ?? 'No se pudo guardar los tramos de cumplimiento.', 'error');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-slate-500">
+        Auditoría 45 (docs/auditoria/45_sobrecumplimiento_umbral_y_desglose.md): tramos del multiplicador que se
+        aplica sobre TODA la comisión (líneas + cobranza + contado de agencia) según el % de cumplimiento de la
+        meta del vendedor. Deben cubrir desde 0% sin huecos ni solapes, y terminar en un tramo sin tope superior.
+        El "bono fijo" es un monto adicional en $ que se suma a los bonos del vendedor al alcanzar el tramo
+        (por defecto $0 en todos -- decisión de gerencia activarlo).
+      </p>
+      <div className="card overflow-hidden">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-950/60 text-slate-500 text-xs uppercase tracking-widest">
+            <tr>
+              <th className="px-4 py-2">Etiqueta</th>
+              <th className="px-4 py-2" title="Cota inferior del tramo, en % de cumplimiento de la meta.">% Desde</th>
+              <th className="px-4 py-2" title="Cota superior del tramo. Vacío = sin tope (debe ser el último tramo).">% Hasta</th>
+              <th className="px-4 py-2" title="Factor aplicado al acumulado de la fórmula en este tramo (1.00 = neutro).">Multiplicador</th>
+              <th className="px-4 py-2" title="Monto fijo en $ que se suma a los bonos del vendedor en este tramo.">Bono fijo $</th>
+              <th className="px-4 py-2 text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/80">
+            {activos.map((r, idx) => (
+              <tr key={idx}>
+                <td className="px-4 py-2">
+                  <input type="text" value={r.etiqueta} className="input-field w-48"
+                    onChange={(e) => updateRow(idx, { etiqueta: e.target.value })} />
+                </td>
+                <td className="px-4 py-2">
+                  <input type="number" step="0.01" min={0} value={r.pct_desde} className="input-field w-24"
+                    onChange={(e) => updateRow(idx, { pct_desde: parseFloat(e.target.value) || 0 })} />
+                </td>
+                <td className="px-4 py-2">
+                  <input type="number" step="0.01" min={0} value={r.pct_hasta ?? ''} placeholder="Sin tope" className="input-field w-24"
+                    onChange={(e) => updateRow(idx, { pct_hasta: e.target.value ? parseFloat(e.target.value) : null })} />
+                </td>
+                <td className="px-4 py-2">
+                  <input type="number" step="0.01" min={0} value={r.multiplicador} className="input-field w-24"
+                    onChange={(e) => updateRow(idx, { multiplicador: parseFloat(e.target.value) || 0 })} />
+                </td>
+                <td className="px-4 py-2">
+                  <input type="number" step="0.01" min={0} value={r.bono_fijo} className="input-field w-24"
+                    onChange={(e) => updateRow(idx, { bono_fijo: parseFloat(e.target.value) || 0 })} />
+                </td>
+                <td className="px-4 py-2 text-right">
+                  <Button variant="danger" size="sm" onClick={() => removeRow(idx)}>Quitar</Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex gap-3">
+        <Button variant="ghost" onClick={addRow} icon={<Plus className="w-4 h-4" aria-hidden="true" />}>Agregar tramo</Button>
+        <Button variant="primary" onClick={handleSave} loading={replaceMut.loading} icon={<Percent className="w-4 h-4" aria-hidden="true" />}>
+          Guardar tramos de cumplimiento
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ── Fórmula de comisión (auditoría 44 §2.2: estructura editable, no quemada) ─────
 // Corrección de diseño (petición explícita del usuario): las Comisiones Variables son
 // UN SOLO TOTAL por vendedor -- líneas de venta + cobranza + contado de agencia se
@@ -794,66 +819,6 @@ function FormulaTab() {
           </ol>
         )}
       </div>
-    </div>
-  );
-}
-
-// ── Bitácora de cambios (Fase 2 ítem 2) ──────────────────────────────────────────
-const TABLA_LABEL: Record<string, string> = {
-  comision_matriz_categorias: 'Matriz de categorías',
-  comision_factores_credito: 'Factores de crédito',
-  comision_config_vendedor: 'Tipo de vendedor',
-  comision_tramos_cobranza: 'Comisión sobre cobros',
-  comision_formula: 'Fórmula',
-};
-
-const ACCION_LABEL: Record<string, string> = {
-  upsert: 'Creó/actualizó',
-  replace: 'Reemplazó',
-  reemplazar_componentes: 'Reemplazó componentes',
-  activar: 'Activó',
-};
-
-function formatDetalle(detalle: Record<string, unknown>): string {
-  if ('factores' in detalle && Array.isArray(detalle.factores)) {
-    return `${detalle.factores.length} rango(s) de crédito`;
-  }
-  return Object.entries(detalle)
-    .filter(([k]) => k !== 'id')
-    .map(([k, v]) => `${k}=${v}`)
-    .join(', ');
-}
-
-function AuditoriaTab() {
-  const auditoria = useComisionConfigAuditoria();
-
-  const columns: DataTableColumn<ComisionConfigAuditoriaEntrada>[] = [
-    {
-      key: 'fecha_creacion', header: 'Fecha',
-      render: (a) => new Date(a.fecha_creacion).toLocaleString('es-EC', { dateStyle: 'medium', timeStyle: 'short' }),
-    },
-    { key: 'usuario_nombre', header: 'Usuario', render: (a) => a.usuario_nombre ?? '—' },
-    { key: 'tabla', header: 'Configuración', render: (a) => TABLA_LABEL[a.tabla] ?? a.tabla },
-    { key: 'accion', header: 'Acción', render: (a) => ACCION_LABEL[a.accion] ?? a.accion },
-    { key: 'detalle_json', header: 'Detalle', render: (a) => <span className="text-xs text-slate-400">{formatDetalle(a.detalle_json)}</span> },
-  ];
-
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-slate-500">
-        Quién cambió qué factor y cuándo -- append-only, no se puede editar ni borrar (últimas {auditoria.data.length}).
-      </p>
-      <DataTable
-        columns={columns}
-        data={auditoria.data}
-        rowKey={(a) => a.id}
-        loading={auditoria.loading}
-        error={auditoria.error ?? undefined}
-        onRetry={auditoria.refetch}
-        density="compact"
-        emptyTitle="Sin cambios registrados todavía"
-        emptyDescription="Cada ajuste de matriz, crédito o tipo de vendedor queda registrado aquí."
-      />
     </div>
   );
 }

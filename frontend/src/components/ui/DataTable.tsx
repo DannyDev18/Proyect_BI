@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronsUpDown } from 'lucide-react';
+import { Fragment, useMemo, useState } from 'react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronsUpDown } from 'lucide-react';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
 
@@ -37,6 +37,11 @@ interface DataTableProps<T> {
   responsive?: boolean;
   /** Primera columna fija al hacer scroll horizontal — para matrices anchas (Bodega). */
   stickyFirstColumn?: boolean;
+  /** Fila expandible opcional (auditoría 45, desglose del simulador de comisiones):
+   * si se define, cada fila gana un botón para desplegar contenido debajo, en una
+   * fila adicional que ocupa todas las columnas. Opt-in -- sin este prop, el
+   * comportamiento de la tabla no cambia. */
+  renderExpanded?: (row: T) => ReactNode;
 }
 
 const SkeletonRows = ({ columns, density }: { columns: number; density: 'normal' | 'compact' }) => (
@@ -63,11 +68,19 @@ export function DataTable<T>({
   columns, data, rowKey, density = 'normal', loading = false, error, onRetry,
   emptyTitle = 'Sin resultados', emptyDescription, emptyAction, rowClassName,
   maxHeight = 'max-h-[420px]', pagination, className = '', responsive = false,
-  stickyFirstColumn = false,
+  stickyFirstColumn = false, renderExpanded,
 }: DataTableProps<T>) {
   const cellPad = density === 'compact' ? 'px-4 py-2' : 'px-6 py-3';
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [expandedKeys, setExpandedKeys] = useState<Set<string | number>>(new Set());
+  const toggleExpanded = (key: string | number) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
 
   const sortedData = useMemo(() => {
     if (!sortKey) return data;
@@ -103,6 +116,7 @@ export function DataTable<T>({
 
   const headerRow = (
     <tr>
+      {renderExpanded && <th className={cellPad} style={{ width: '2.5rem' }} aria-hidden="true" />}
       {columns.map((c, i) => (
         <th
           key={c.key}
@@ -155,18 +169,43 @@ export function DataTable<T>({
                 </td>
               </tr>
             )}
-            {!loading && !error && sortedData.map((row) => (
-              <tr
-                key={rowKey(row)}
-                className={`animate-row-fade hover:bg-bg-hover transition-colors ${rowClassName?.(row) ?? ''}`}
-              >
-                {columns.map((c, i) => (
-                  <td key={c.key} className={`${cellPad} ${c.numeric ? 'text-right font-mono' : ''} ${stickyCol(i)}`}>
-                    {c.render(row)}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {!loading && !error && sortedData.map((row) => {
+              const key = rowKey(row);
+              const expanded = renderExpanded ? expandedKeys.has(key) : false;
+              return (
+                <Fragment key={key}>
+                  <tr
+                    className={`animate-row-fade hover:bg-bg-hover transition-colors ${renderExpanded ? 'cursor-pointer' : ''} ${rowClassName?.(row) ?? ''}`}
+                    onClick={renderExpanded ? () => toggleExpanded(key) : undefined}
+                  >
+                    {renderExpanded && (
+                      <td className={cellPad}>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); toggleExpanded(key); }}
+                          className="text-slate-500 hover:text-slate-300 focus-ring rounded"
+                          aria-label={expanded ? 'Contraer detalle' : 'Expandir detalle'}
+                        >
+                          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        </button>
+                      </td>
+                    )}
+                    {columns.map((c, i) => (
+                      <td key={c.key} className={`${cellPad} ${c.numeric ? 'text-right font-mono' : ''} ${stickyCol(i)}`}>
+                        {c.render(row)}
+                      </td>
+                    ))}
+                  </tr>
+                  {expanded && renderExpanded && (
+                    <tr className="bg-slate-950/40">
+                      <td colSpan={columns.length + 1} className="p-0">
+                        {renderExpanded(row)}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

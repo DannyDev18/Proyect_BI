@@ -1,7 +1,7 @@
 import { api } from './http';
 import type {
   VentasGoalsTracking, ChurnResponse, RecomendacionResponse, SegmentacionResponse,
-  ForecastCierre, MetaSugerida, RecomendacionesComerciales, MiComision, PostGoalInvoicesResponse,
+  MetaSugerida, RecomendacionesComerciales, MiComision, PostGoalInvoicesResponse,
   MiNegocio,
 } from '../types/ventas';
 
@@ -13,12 +13,10 @@ export const getSalesGoals = (anio?: number, mes?: number) =>
 export const getMyGoalTracking = () =>
   api.get<VentasGoalsTracking>('/api/v1/analytics/ventas/goals');
 
-/** Integración ML (docs/auditoria/15_.../20_...md): pronóstico de cierre (modelo
- * `sales_rf`), meta sugerida (motor estadístico, sin ML) y recomendaciones comerciales
- * (reglas de asociación) para el vendedor autenticado. */
-export const getGoalForecastCierre = () =>
-  api.get<ForecastCierre>('/api/v1/analytics/ventas/goals/forecast-cierre');
-
+/** Integración ML (docs/auditoria/15_.../20_...md): meta sugerida (motor estadístico,
+ * sin ML) y recomendaciones comerciales (reglas de asociación) para el vendedor
+ * autenticado. (`getGoalForecastCierre`, modelo `sales_rf`, se retiró por completo,
+ * auditoría 49.) */
 export const getMetaSugerida = () =>
   api.get<MetaSugerida>('/api/v1/analytics/ventas/goals/meta-sugerida');
 

@@ -215,6 +215,12 @@ class ComisionVariableCalculada:
     # valores).
     desglose_cobranza: tuple[dict, ...] | None = None
     traza_formula: tuple[dict, ...] | None = None
+    # % de cumplimiento real y etiqueta del tramo configurable que lo produjo (auditoría
+    # 45) -- distinto del `nivel`/tasa del esquema plano legacy de arriba, para que el
+    # panel de "Comisiones devengadas" (docs/auditoria/46_motor_metas_configurable.md,
+    # H-8) no muestre dos verdades distintas sobre el mismo vendedor.
+    pct_cumplimiento: float | None = None
+    tramo_etiqueta: str | None = None
 
 
 def _resolver_regla(clase: str, subclase: str | None, matriz: list[ReglaCategoria]) -> ReglaCategoria | None:
@@ -230,10 +236,15 @@ def _resolver_regla(clase: str, subclase: str | None, matriz: list[ReglaCategori
 
 
 def _factor_credito(dias_plazo: int, rangos: list[RangoCredito]) -> float:
-    for r in rangos:
-        if dias_plazo >= r.dias_desde and (r.dias_hasta is None or dias_plazo <= r.dias_hasta):
-            return r.factor
-    return 1.0  # sin rango configurado -> sin penalización (comportamiento neutro, no bloqueante)
+    """Retirado del cálculo (docs/features/plan_motor_metas_v3_y_comisiones_
+    unificadas.md, Fase 3, R-7): la auditoría 30 (H4) ya había documentado que solo
+    existen datos reales de plazo para 0 y 30 días en el EDW -- el factor era casi
+    constante y no discriminaba nada real, mientras seguía siendo un componente visible
+    y editable del panel. Se conserva la firma (recibe `rangos`, ignorado) para no
+    tener que tocar cada llamador de `_calcular_linea`/`calcular_base_lineas_venta`;
+    `rangos` deja de resolverse desde la BD en los servicios (`CommissionService`,
+    `CommissionSimulationService`, `commission_variable_engine`)."""
+    return 1.0
 
 
 def _calcular_linea(
@@ -421,6 +432,59 @@ COMPONENTES_FORMULA = frozenset({
     "base_lineas_venta", "base_cobranza", "contado_agencia",
     "factor_tipo_vendedor", "multiplicador_cumplimiento", "devoluciones", "bonos",
 })
+
+# Etiqueta legible en español de cada componente -- fuente única (auditoría 45,
+# docs/features/plan_comisiones_sobrecumplimiento_umbral_y_desglose.md §3.3): la usan
+# tanto el editor de fórmula del panel de configuración como el desglose del
+# simulador, para que el texto sea idéntico en los dos lugares.
+ETIQUETAS_COMPONENTES_FORMULA: dict[str, str] = {
+    "base_lineas_venta": "Líneas de venta (margen/categoría)",
+    "base_cobranza": "Cobranza (por tramo de días de cobro)",
+    "contado_agencia": "Ventas de contado de la agencia",
+    "factor_tipo_vendedor": "Factor de tipo de vendedor",
+    "multiplicador_cumplimiento": "Multiplicador de cumplimiento de meta",
+    "devoluciones": "Devoluciones estimadas",
+    "bonos": "Bonos (cross-sell, cliente nuevo, cobranza sana)",
+}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# Tramos de cumplimiento configurables (auditoría 45, docs/features/plan_comisiones_
+# sobrecumplimiento_umbral_y_desglose.md) -- reemplaza los 4 tramos fijos
+# (UMBRAL_EXCELENTE/META/CERCA + COMISION_MULT_*) como fuente del multiplicador del
+# componente `multiplicador_cumplimiento` de la fórmula variable. `calcular_nivel`/
+# `NivelCumplimiento` NO se tocan -- los sigue usando el esquema plano legacy
+# (`calcular_comision`) y la ruta variable legacy (`calcular_comision_variable`, sin
+# consumidores hoy pero conservada). `resolver_tramo_cumplimiento` es pura: el
+# llamador (`commission_variable_engine`) resuelve los tramos vigentes desde la BD o
+# cae al fallback derivado de las constantes actuales si la tabla está vacía.
+# ══════════════════════════════════════════════════════════════════════════════════
+@dataclass(frozen=True)
+class TramoCumplimiento:
+    """Un tramo de `comision_tramos_cumplimiento` (o del fallback derivado de
+    settings). `pct_desde`/`pct_hasta` están en PORCENTAJE (90.0, no 0.9) -- distinto
+    de `UMBRAL_*` (fracción) para que coincida con lo que gerencia ve/edita en el panel."""
+    pct_desde: float
+    pct_hasta: float | None  # None = sin tope superior
+    multiplicador: float
+    etiqueta: str
+    bono_fijo: float = 0.0
+
+
+def resolver_tramo_cumplimiento(pct_cumplimiento: float, tramos: list[TramoCumplimiento]) -> TramoCumplimiento:
+    """Primer tramo, en orden de `pct_desde` ascendente, que cubre `pct_cumplimiento`
+    (porcentaje, ej. 85.22). Los tramos deben cubrir `[0, ∞)` sin huecos -- garantizado
+    por la validación del servicio al guardar (Fase 2) y por el fallback (siempre
+    completo); si de todos modos ningún tramo cubre el valor (dato corrupto), se
+    devuelve el tramo de mayor `pct_desde` como último recurso antes que reventar un
+    cálculo de dinero real."""
+    candidatos = sorted(tramos, key=lambda t: t.pct_desde)
+    for t in candidatos:
+        if pct_cumplimiento >= t.pct_desde and (t.pct_hasta is None or pct_cumplimiento < t.pct_hasta):
+            return t
+    if candidatos:
+        return candidatos[-1]
+    raise ValueError("No hay tramos de cumplimiento configurados ni fallback disponible.")
 
 
 @dataclass(frozen=True)

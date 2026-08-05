@@ -1,22 +1,8 @@
 import { api } from './http';
 import type {
-  AdminResumen, AnomaliaEstado, AnomaliaResponse, AnomaliaRevision, AuditLogEntry, AuditLogFilters, ModelStatus,
-  SystemHealth,
+  AdminResumen, AuditLogEntry, AuditLogFilters, ModelStatus, SystemHealth,
 } from '../types/admin';
 import type { Page, PaginationQuery } from '../types/pagination';
-
-export const detectAnomaly = (transaccion_id: string) =>
-  api.get<AnomaliaResponse>('/api/v1/analytics/admin/anomalies', {
-    params: { transaccion_id },
-  });
-
-export const getAnomaliaRevisiones = (pagination: PaginationQuery, estado?: AnomaliaEstado) =>
-  api.get<Page<AnomaliaRevision>>('/api/v1/analytics/admin/anomalies/revisiones', {
-    params: { ...pagination, estado },
-  });
-
-export const actualizarAnomaliaRevision = (id: number, estado: AnomaliaEstado, nota?: string) =>
-  api.patch<AnomaliaRevision>(`/api/v1/analytics/admin/anomalies/revisiones/${id}`, { estado, nota });
 
 export const getMLOpsStatus = () =>
   api.get('/api/v1/admin/modelos/status');

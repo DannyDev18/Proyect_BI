@@ -23,20 +23,6 @@ class VendorMonthlySales(NamedTuple):
     unidades: float
 
 
-class VendorTransactionFeatures(NamedTuple):
-    """Mismas 4 columnas que `ml/contracts/models/anomalies.json` (ver también
-    `PredictionRepository.get_transaction_features`), etiquetadas con anio/mes -- se usa
-    para detectar MESES con transacciones anómalas, no para correr el modelo de
-    anomalías sobre agregados mensuales (el contrato del modelo exige el grano de línea
-    de transacción, no el de mes)."""
-    anio: int
-    mes: int
-    subtotal_neto: float
-    cantidad: float
-    costo_total: float
-    margen: float
-
-
 class CommissionLineRow(NamedTuple):
     """Una línea de venta a grano `fact_ventas_detalle` con las columnas mínimas del
     motor variable (`commission_engine.LineaComisionable`), ver
@@ -82,24 +68,62 @@ class GoalRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_vendors_with_recent_sales(self, anio: int, mes: int) -> list[VendorRecentSales]:
+    def get_vendors_with_recent_sales(self, anio: int, mes: int, meses_ventana: int = 12) -> list[VendorRecentSales]:
         """Vendedores (grano vendedor, NO vendedor×sucursal -- `edw.dim_vendedor` no tiene
-        sucursal propia, ver docs/auditoria/19_...md) con ventas en el mes anterior al
-        `anio`/`mes` objetivo, y sus unidades vendidas ese mes."""
-        mes_ant = 12 if mes == 1 else mes - 1
-        anio_ant = anio - 1 if mes == 1 else anio
+        sucursal propia, ver docs/auditoria/19_...md) ACTIVOS con al menos una venta
+        dentro de los `meses_ventana` meses anteriores al `anio`/`mes` objetivo (default
+        12), y sus unidades vendidas en esa ventana.
 
+        Ampliada de "solo el mes inmediato anterior" a una ventana de 12 meses
+        (docs/auditoria/47_metas_v3_y_comisiones_unificadas.md, hallazgo real: 11 de 24
+        vendedores "activos" no recibían NINGUNA meta porque no vendieron el mes
+        inmediato anterior, aunque varios (`VEN22` oct-2025, `VEN23` dic-2025) sí tenían
+        actividad real reciente -- decisión explícita del usuario: vendedores activos con
+        venta dentro de un histórico máximo de 12 meses respecto al mes objetivo). Los
+        vendedores sin ninguna venta en 12 meses (la mayoría de los 11 encontrados,
+        algunos sin vender desde 2018-2022) siguen correctamente sin meta -- no son
+        vendedores "nuevos sin historial" (Fase 7/E6), son vendedores inactivos en la
+        práctica pese al flag `activo` del ERP. `v.activo=TRUE` se filtra aquí por
+        primera vez (antes esta consulta no lo exigía en absoluto).
+
+        Bug real encontrado en la validación en vivo de la auditoría 46: esta consulta
+        no excluía el registro centinela `codven='-1'` ("vendedor desconocido", regla 12
+        -- llave foránea no resuelta) -- una venta con vendedor sin resolver generaba una
+        meta comercial real para "el vendedor -1", una fila sin sentido de negocio."""
         query = text("""
             SELECT v.codven AS vendedor_origen, SUM(f.cantidad) AS unidades_anterior
             FROM edw.fact_ventas_detalle f
             JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
             JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
             JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
-            WHERE ed.estado_documento_sk <> -1 AND d.anio = :anio_ant AND d.mes = :mes_ant
+            WHERE ed.estado_documento_sk <> -1 AND v.codven <> '-1' AND v.activo = TRUE
+              AND d.fecha_completa >= (make_date(:anio, :mes, 1) - (:meses_ventana || ' months')::interval)
+              AND d.fecha_completa < make_date(:anio, :mes, 1)
             GROUP BY v.codven
         """)
-        rows = self.db.execute(query, {"anio_ant": anio_ant, "mes_ant": mes_ant}).fetchall()
+        rows = self.db.execute(query, {"anio": anio, "mes": mes, "meses_ventana": meses_ventana}).fetchall()
         return [VendorRecentSales(vendedor_origen=str(r[0]), unidades_anterior=float(r[1] or 0.0)) for r in rows]
+
+    def get_active_vendors_without_history(self) -> list[str]:
+        """Vendedores activos (`edw.dim_vendedor.activo`) que JAMÁS registraron una venta
+        real (docs/auditoria/47_metas_v3_y_comisiones_unificadas.md, A-0.4: 4 vendedores
+        con "0 meses de historia") -- `get_vendors_with_recent_sales` solo exige venta en
+        el mes anterior al objetivo, así que estos vendedores nunca entraban al lote de
+        `generate_proposals` y jamás recibían ninguna meta. Sin límite de mes: un
+        vendedor sin ninguna venta histórica es el caso real que R-8 pide cubrir con un
+        benchmark del equipo, no con el motor IQR (que exige histórico)."""
+        query = text("""
+            SELECT v.codven
+            FROM edw.dim_vendedor v
+            WHERE v.activo = TRUE AND v.codven <> '-1'
+              AND NOT EXISTS (
+                  SELECT 1 FROM edw.fact_ventas_detalle f
+                  JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                  WHERE f.vendedor_sk = v.vendedor_sk AND ed.estado_documento_sk <> -1
+              )
+        """)
+        rows = self.db.execute(query).fetchall()
+        return [str(r[0]) for r in rows]
 
     def find_proposal(self, anio: int, mes: int, vendedor: str) -> tuple[int, str] | None:
         row = self.db.execute(
@@ -111,26 +135,47 @@ class GoalRepository:
         ).fetchone()
         return (row[0], row[1]) if row else None
 
-    def insert_proposal(self, anio: int, mes: int, vendedor: str, monto_meta: float, unidades_meta: float) -> None:
+    def insert_proposal(
+        self, anio: int, mes: int, vendedor: str, monto_meta: float, unidades_meta: float,
+        trazabilidad_json: str | None = None,
+    ) -> None:
         self.db.execute(
             text("""
                 INSERT INTO public.metas_comerciales_operativas
-                (anio, mes, id_vendedor_origen, monto_meta, unidades_meta, estado, comision_base_pct, bono_sobrecumplimiento)
-                VALUES (:anio, :mes, :vendedor, :meta_monto, :meta_unidades, 'PROPUESTA', 0.0, 0.0)
+                (anio, mes, id_vendedor_origen, monto_meta, unidades_meta, estado, comision_base_pct,
+                 bono_sobrecumplimiento, trazabilidad_calculo)
+                VALUES (:anio, :mes, :vendedor, :meta_monto, :meta_unidades, 'PROPUESTA', 0.0, 0.0,
+                        CAST(:trazabilidad AS JSONB))
             """),
             {"anio": anio, "mes": mes, "vendedor": vendedor,
-             "meta_monto": monto_meta, "meta_unidades": unidades_meta},
+             "meta_monto": monto_meta, "meta_unidades": unidades_meta, "trazabilidad": trazabilidad_json},
         )
 
-    def update_proposal_amounts(self, proposal_id: int, monto_meta: float, unidades_meta: float) -> None:
+    def update_proposal_amounts(
+        self, proposal_id: int, monto_meta: float, unidades_meta: float, trazabilidad_json: str | None = None,
+    ) -> None:
         self.db.execute(
             text("""
                 UPDATE public.metas_comerciales_operativas
-                SET monto_meta = :meta_monto, unidades_meta = :meta_unidades
+                SET monto_meta = :meta_monto, unidades_meta = :meta_unidades,
+                    trazabilidad_calculo = CAST(:trazabilidad AS JSONB)
                 WHERE id = :id
             """),
-            {"meta_monto": monto_meta, "meta_unidades": unidades_meta, "id": proposal_id},
+            {"meta_monto": monto_meta, "meta_unidades": unidades_meta, "id": proposal_id, "trazabilidad": trazabilidad_json},
         )
+
+    def get_trazabilidad(self, anio: int, mes: int, vendedor: str) -> dict | None:
+        """Lee la traza REAL persistida del cálculo que produjo la meta ya generada
+        (docs/auditoria/46_motor_metas_configurable.md, H-5) -- `None` si la meta no
+        existe o si se generó antes de esta migración (metas legado sin trazabilidad)."""
+        row = self.db.execute(
+            text("""
+                SELECT trazabilidad_calculo FROM public.metas_comerciales_operativas
+                WHERE anio = :anio AND mes = :mes AND id_vendedor_origen = :vendedor
+            """),
+            {"anio": anio, "mes": mes, "vendedor": vendedor},
+        ).fetchone()
+        return row[0] if row and row[0] else None
 
     def commit(self) -> None:
         self.db.commit()
@@ -299,6 +344,74 @@ class GoalRepository:
         row = self.db.execute(query, {"vendedor": vendedor_origen, "anio": anio, "mes": mes}).fetchone()
         return float(row[0]) if row and row[0] is not None else 0.0
 
+    def get_metricas_cartera_vendedor(self, vendedor_origen: str, anio: int, mes: int, meses_ventana: int = 6) -> dict:
+        """Métricas reales de cartera del vendedor sobre los `meses_ventana` meses
+        CERRADOS anteriores a (anio, mes) -- insumo de E9 (capacidad instalada) y E13
+        (factor cartera activa, docs/features/plan_motor_metas_v3_y_comisiones_
+        unificadas.md §18-E9/E13): `clientes_activos_mes` (último mes con venta dentro de
+        la ventana), `promedio_clientes_activos_ventana`, `ticket_promedio` (venta neta /
+        facturas) y `frecuencia_compra_mensual` (facturas / clientes activos promedio).
+        Todos `None` si no hay ventas en la ventana -- ambas etapas están diseñadas para
+        omitirse (no aplicar un tope/factor de 0) cuando falta el dato, nunca inventarlo."""
+        query = text("""
+            WITH Meses AS (
+                SELECT d.anio AS anio_m, d.mes AS mes_m,
+                       COUNT(DISTINCT f.cliente_sk) AS clientes_mes,
+                       COUNT(DISTINCT f.num_factura) AS facturas_mes,
+                       SUM(f.subtotal_neto) AS venta_mes
+                FROM edw.fact_ventas_detalle f
+                JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                WHERE ed.estado_documento_sk <> -1 AND v.codven = :vendedor AND f.cliente_sk <> -1
+                  AND (d.anio * 12 + d.mes) BETWEEN (:anio * 12 + :mes - :meses_ventana) AND (:anio * 12 + :mes - 1)
+                GROUP BY d.anio, d.mes
+            )
+            SELECT
+                (SELECT clientes_mes FROM Meses ORDER BY anio_m DESC, mes_m DESC LIMIT 1) AS clientes_activos_mes,
+                AVG(clientes_mes) AS promedio_clientes_activos,
+                SUM(venta_mes) / NULLIF(SUM(facturas_mes), 0) AS ticket_promedio,
+                AVG(facturas_mes) / NULLIF(AVG(clientes_mes), 0) AS frecuencia_compra_mensual
+            FROM Meses
+        """)
+        row = self.db.execute(query, {
+            "vendedor": vendedor_origen, "anio": anio, "mes": mes, "meses_ventana": meses_ventana,
+        }).fetchone()
+        if row is None or row[0] is None:
+            return {
+                "clientes_activos_mes": None, "promedio_clientes_activos_ventana": None,
+                "ticket_promedio": None, "frecuencia_compra_mensual": None,
+            }
+        return {
+            "clientes_activos_mes": float(row[0]),
+            "promedio_clientes_activos_ventana": float(row[1]) if row[1] is not None else None,
+            "ticket_promedio": float(row[2]) if row[2] is not None else None,
+            "frecuencia_compra_mensual": float(row[3]) if row[3] is not None else None,
+        }
+
+    def get_cumplimiento_historico_promedio(self, vendedor_origen: str, anio: int, mes: int, meses: int = 6) -> float | None:
+        """Promedio real de (venta neta / monto meta) de los últimos `meses` períodos
+        ANTERIORES a (anio, mes) donde el vendedor tuvo una meta registrada con monto > 0
+        -- insumo de E15 (factor de cumplimiento histórico, §18-E15). `None` si no hay
+        ningún período comparable (vendedor sin metas previas), para que la etapa se
+        omita en vez de aplicar un factor sobre un dato inexistente."""
+        query = text("""
+            SELECT m.anio, m.mes, m.monto_meta
+            FROM public.metas_comerciales_operativas m
+            WHERE m.id_vendedor_origen = :vendedor AND m.monto_meta > 0
+              AND (m.anio * 12 + m.mes) BETWEEN (:anio * 12 + :mes - :meses) AND (:anio * 12 + :mes - 1)
+            ORDER BY m.anio DESC, m.mes DESC
+        """)
+        rows = self.db.execute(query, {"vendedor": vendedor_origen, "anio": anio, "mes": mes, "meses": meses}).fetchall()
+        ratios = []
+        for anio_m, mes_m, monto_meta in rows:
+            venta = self.get_vendor_net_sales_period(vendedor_origen, int(anio_m), int(mes_m))
+            if float(monto_meta) > 0:
+                ratios.append(venta / float(monto_meta))
+        if not ratios:
+            return None
+        return sum(ratios) / len(ratios)
+
     def get_goal_for_period(self, vendedor_origen: str, anio: int, mes: int) -> Goal | None:
         return (
             self.db.query(Goal)
@@ -352,8 +465,8 @@ class GoalRepository:
             for r in rows
         ]
 
-    # ── Integración ML (Metas y Comisiones): histórico, anomalías, top productos ──
-    def get_vendor_monthly_history(self, vendedor_origen: str, meses: int = 24) -> list[VendorMonthlySales]:
+    # ── Integración ML (Metas y Comisiones): histórico, top productos ──
+    def get_vendor_monthly_history(self, vendedor_origen: str, meses: int = 40) -> list[VendorMonthlySales]:
         """Serie mensual de **Venta Neta** de un vendedor (todas sus sucursales, ver
         docs/auditoria/19_...md) -- insumo del motor estadístico
         (`goal_calculation_engine.IQRGoalCalculationEngine`), que es el generador OFICIAL
@@ -400,34 +513,35 @@ class GoalRepository:
         rows = self.db.execute(query, {"vendedor": vendedor_origen, "meses": meses}).fetchall()
         return [VendorMonthlySales(anio=int(r[0]), mes=int(r[1]), ventas=float(r[2]), unidades=float(r[3])) for r in rows]
 
-    def get_vendor_transactions_history(self, vendedor_origen: str, anio_desde: int, mes_desde: int) -> list[VendorTransactionFeatures]:
-        """Todas las líneas de transacción de un vendedor (todas sus sucursales) desde
-        `(anio_desde, mes_desde)` en adelante, con las mismas 4 columnas y política de
-        nulos que `ml/contracts/models/anomalies.json` (excluye `costo_total IS NULL`,
-        H-19) -- en un solo batch, para correr `inference.detect_anomalies` una sola vez
-        al grano correcto (línea de transacción, no agregado mensual) y luego agrupar
-        por mes en el servicio."""
+    def get_indice_estacional_empresa(self) -> dict[int, float]:
+        """Índice estacional agregado de TODA la empresa (docs/auditoria/
+        46_motor_metas_configurable.md, A-0.5): ratio-to-moving-average por mes
+        calendario sobre `SUM(subtotal_neto)` de toda la empresa, todo el histórico
+        disponible, normalizado a media 1.0 -- respaldo de `IQRGoalCalculationEngine`
+        para los meses en que un vendedor concreto no tiene suficientes años propios
+        (`MetaMotorParametros.min_anios_estacional`). Se resuelve UNA VEZ por lote
+        (`GoalMLService.generate_proposals` la cachea para todo el período, mismo patrón
+        de pre-resolución que el simulador de comisiones), no una vez por vendedor."""
         query = text("""
-            SELECT d.anio, d.mes, f.subtotal_neto, f.cantidad, f.costo_total, (f.subtotal_neto - f.costo_total) AS margen
-            FROM edw.fact_ventas_detalle f
-            JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
-            JOIN edw.dim_vendedor v ON f.vendedor_sk = v.vendedor_sk
-            JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
-            WHERE ed.estado_documento_sk <> -1
-              AND v.codven = :vendedor
-              AND (d.anio, d.mes) >= (:anio_desde, :mes_desde)
-              AND f.costo_total IS NOT NULL
+            SELECT mes, AVG(venta_mes) AS promedio_mes
+            FROM (
+                SELECT d.anio, d.mes AS mes, SUM(f.subtotal_neto) AS venta_mes
+                FROM edw.fact_ventas_detalle f
+                JOIN edw.dim_fecha d ON f.fecha_sk = d.fecha_sk
+                JOIN edw.dim_estado_documento ed ON f.estado_documento_sk = ed.estado_documento_sk
+                WHERE ed.estado_documento_sk <> -1
+                GROUP BY d.anio, d.mes
+            ) sub
+            GROUP BY mes
         """)
-        rows = self.db.execute(query, {
-            "vendedor": vendedor_origen, "anio_desde": anio_desde, "mes_desde": mes_desde,
-        }).fetchall()
-        return [
-            VendorTransactionFeatures(
-                anio=int(r[0]), mes=int(r[1]), subtotal_neto=float(r[2]), cantidad=float(r[3]),
-                costo_total=float(r[4]), margen=float(r[5]),
-            )
-            for r in rows
-        ]
+        rows = self.db.execute(query).fetchall()
+        if not rows:
+            return {}
+        promedios = {int(r[0]): float(r[1]) for r in rows}
+        promedio_general = sum(promedios.values()) / len(promedios)
+        if promedio_general <= 0:
+            return {}
+        return {mes: valor / promedio_general for mes, valor in promedios.items()}
 
     def get_vendor_top_products(self, vendedor_origen: str, limit: int = 10) -> list[str]:
         """`codart` de los productos más vendidos (por monto) del vendedor -- insumo de

@@ -33,16 +33,9 @@ def notification_repo():
 def warehouse_service():
     ws = MagicMock()
     ws.get_notificaciones.return_value = []
-    ws.model_loader.keys.return_value = ["sales_rf", "demand_rf"]
+    ws.model_loader.keys.return_value = ["demand_rf", "churn_rf"]
     ws.model_loader.is_loaded.return_value = True
     return ws
-
-
-@pytest.fixture
-def prediction_service():
-    ps = MagicMock()
-    ps.get_sales_forecast.return_value = {"metricas": {"crecimiento_esperado": 0.0}}
-    return ps
 
 
 @pytest.fixture
@@ -60,9 +53,19 @@ def commission_simulation_service():
 
 
 @pytest.fixture
-def service(notification_repo, warehouse_service, prediction_service, cartera360_service, commission_simulation_service):
+def replenishment_service():
+    rs = MagicMock()
+    rs.get_alertas.return_value = []
+    return rs
+
+
+@pytest.fixture
+def service(
+    notification_repo, warehouse_service, cartera360_service, commission_simulation_service, replenishment_service,
+):
     return NotificationService(
-        notification_repo, warehouse_service, prediction_service, cartera360_service, commission_simulation_service,
+        notification_repo, warehouse_service, cartera360_service,
+        commission_simulation_service, replenishment_service,
     )
 
 
@@ -112,29 +115,6 @@ def test_get_notificaciones_rol_desconocido_sin_generador_calculado(service, war
     resultado = service.get_notificaciones(_user("rol_inexistente"))
     assert resultado == []
     warehouse_service.get_notificaciones.assert_not_called()
-
-
-# ── Generador calculado: gerencia (desvío del forecast) ──────────────────────
-def test_get_notificaciones_gerencia_sin_desvio_no_alerta(service, prediction_service):
-    prediction_service.get_sales_forecast.return_value = {"metricas": {"crecimiento_esperado": 5.0}}
-    resultado = service.get_notificaciones(_user("gerencia"))
-    assert resultado == []
-
-
-def test_get_notificaciones_gerencia_reporta_desvio_alto(service, prediction_service):
-    prediction_service.get_sales_forecast.return_value = {"metricas": {"crecimiento_esperado": 45.0}}
-    resultado = service.get_notificaciones(_user("gerencia"))
-    assert len(resultado) == 1
-    assert resultado[0].tipo_evento == "desvio_forecast"
-    assert resultado[0].prioridad == "alta"
-    assert "por encima" in resultado[0].mensaje
-
-
-def test_get_notificaciones_gerencia_reporta_caida(service, prediction_service):
-    prediction_service.get_sales_forecast.return_value = {"metricas": {"crecimiento_esperado": -25.0}}
-    resultado = service.get_notificaciones(_user("gerencia"))
-    assert len(resultado) == 1
-    assert "por debajo" in resultado[0].mensaje
 
 
 # ── Generador calculado: divergencia plano vs variable (piloto en sombra) ────

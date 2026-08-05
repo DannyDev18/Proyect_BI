@@ -8,27 +8,15 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def test_sales_prediction_gerencia(client, auth_headers):
-    r = client.get("/api/v1/analytics/gerencia/sales-prediction", headers=auth_headers("gerencia"))
+def test_evolucion_mensual_ventas_gerencia(client, auth_headers):
+    """Reemplaza al panel de predicción ML retirado (auditoría 49, decomisión de
+    `sales_rf`): Venta Neta real mes a mes, sin ningún modelo."""
+    r = client.get("/api/v1/analytics/gerencia/evolucion-mensual", headers=auth_headers("gerencia"))
     assert r.status_code == 200
     body = r.json()
-    assert "metricas" in body
-    assert "historial_y_prediccion" in body
-    assert body["granularidad"] == "semana"
-    assert body["periodos_proyectados"] > 0
-    assert "algoritmo" in body["metricas"]
-
-
-def test_sales_prediction_gerencia_granularidad_mes(client, auth_headers):
-    r = client.get(
-        "/api/v1/analytics/gerencia/sales-prediction",
-        params={"granularidad": "mes"},
-        headers=auth_headers("gerencia"),
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["granularidad"] == "mes"
-    assert body["periodos_proyectados"] > 0
+    assert "serie" in body
+    for punto in body["serie"]:
+        assert {"anio", "mes", "venta_neta"} <= set(punto.keys())
 
 
 def test_demand_forecasting_bodega(client, auth_headers):
@@ -46,18 +34,6 @@ def test_churn_risk_gerencia_sin_restriccion_de_cartera(client, auth_headers):
     r = client.get("/api/v1/analytics/ventas/churn-risk", params={"cliente_id": "C001"}, headers=auth_headers("gerencia"))
     assert r.status_code == 200
     assert "probabilidad_abandono" in r.json()
-
-
-def test_anomaly_detection_admin(client, auth_headers):
-    r = client.get("/api/v1/analytics/admin/anomalies", params={"transaccion_id": "T001"}, headers=auth_headers("administrador"))
-    assert r.status_code == 200
-    assert "es_anomalia" in r.json()
-
-
-def test_anomaly_detection_prohibido_para_ventas(client, auth_headers):
-    """Solo administrador puede ver anomalías -- ver api/routes/admin.py."""
-    r = client.get("/api/v1/analytics/admin/anomalies", params={"transaccion_id": "T001"}, headers=auth_headers("ventas"))
-    assert r.status_code == 403
 
 
 def test_warehouse_kpis_no_es_mock(client, auth_headers):

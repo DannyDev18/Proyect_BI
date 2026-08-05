@@ -15,5 +15,5 @@ router = APIRouter()
 @router.get("/provenance", response_model=ProvenanceResponse)
 def get_provenance(_current_user: CurrentUserDep, system_service: SystemServiceDep) -> ProvenanceResponse:
     """Última carga exitosa del DW (`edw.etl_control`) + algoritmo/frescura/estado de
-    los 6 modelos ML servidos. Reemplaza el mock estático `PROVENANCE_FACTS`."""
+    los 4 modelos ML servidos. Reemplaza el mock estático `PROVENANCE_FACTS`."""
     return ProvenanceResponse(**system_service.get_provenance())

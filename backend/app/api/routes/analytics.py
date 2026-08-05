@@ -1,17 +1,17 @@
 # backend/app/api/routes/analytics.py
-"""Gerencia: KPIs de salud comercial, ingresos por categoría, catálogos, predicción
-de ventas. Los endpoints no contienen lógica de negocio -- solo validan/reciben
-parámetros HTTP y delegan a `AnalyticsService`/`PredictionService`."""
+"""Gerencia: KPIs de salud comercial, ingresos por categoría, catálogos, evolución
+mensual de ventas. Los endpoints no contienen lógica de negocio -- solo validan/reciben
+parámetros HTTP y delegan a `AnalyticsService`."""
 import datetime
-from typing import Literal, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Response
 
 from app.api.dependencies import (
-    AnalyticsServiceDep, CommissionServiceDep, PredictionServiceDep, audit_log, resolve_sucursal_filter,
+    AnalyticsServiceDep, CommissionServiceDep, audit_log, resolve_sucursal_filter,
 )
 from app.core.deps import PermissionChecker
-from app.schemas.analytics import GPKPIGerencia, PrediccionVentasResponse, ReporteDashboardResponse
+from app.schemas.analytics import EvolucionMensualVentasResponse, GPKPIGerencia, ReporteDashboardResponse
 from app.services.metricas.comparador import N_PERIODOS_DEFAULT, ModoComparacion
 from app.services.warehouse_export import reporte_a_excel
 
@@ -162,27 +162,19 @@ def get_almacenes(analytics_service: AnalyticsServiceDep):
 
 
 @router.get(
-    "/gerencia/sales-prediction", response_model=PrediccionVentasResponse,
+    "/gerencia/evolucion-mensual", response_model=EvolucionMensualVentasResponse,
     dependencies=[Depends(gerente_checker)],
 )
-def get_sales_prediction(
-    prediction_service: PredictionServiceDep,
-    sucursal_filtro: str | None = Depends(resolve_sucursal_filter(allow_override=False)),
+def get_evolucion_mensual_ventas(
+    analytics_service: AnalyticsServiceDep,
     vendedor: Optional[str] = None,
     almacen: Optional[str] = None,
-    granularidad: Literal["semana", "mes"] = "semana",
-) -> PrediccionVentasResponse:
-    """Forecast de ventas vía el modelo de series de tiempo entrenado (diario internamente,
-    bucketizado a semana/mes según `granularidad` -- docs/auditoria/21_...md). `vendedor`/
-    `almacen` filtran tanto el histórico real como la predicción (mismo criterio ya usado
-    para `sucursal`, extensión documentada de H-14b)."""
-    preds = prediction_service.get_sales_forecast(
-        sucursal=sucursal_filtro, vendedor=vendedor, almacen=almacen, granularidad=granularidad,
-    )
-    return PrediccionVentasResponse(
-        granularidad=preds.get("granularidad", granularidad),
-        periodos_proyectados=preds.get("periodos_proyectados", 0),
-        historial_y_prediccion=preds.get("historial_y_prediccion", []),
-        metricas=preds.get("metricas", {}),
-        insights=preds.get("insights", []),
-    )
+    meses: int = 24,
+) -> EvolucionMensualVentasResponse:
+    """Venta Neta real mes a mes (auditoría 49: reemplaza al panel de predicción ML
+    retirado, `sales_rf`) -- 100% histórico, sin ningún modelo. `vendedor`/`almacen`
+    filtran el histórico (mismo criterio que el resto del dashboard); no soporta
+    categoría ni fechas explícitas (vista de tendencia de largo plazo, independiente del
+    rango fijado en la barra de filtros)."""
+    serie = analytics_service.get_evolucion_mensual_ventas(vendedor=vendedor, almacen=almacen, meses=meses)
+    return EvolucionMensualVentasResponse(serie=serie)

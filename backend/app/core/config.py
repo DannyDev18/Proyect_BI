@@ -95,11 +95,12 @@ class Settings(BaseSettings):
     ANALYTICS_ROI_UMBRAL_SANO: float = float(os.getenv("ANALYTICS_ROI_UMBRAL_SANO", "10.0"))
 
     # Barrido de constantes mágicas asociado a G-01 (docs/features/plan_madurez_bi_toma_
-    # decisiones.md §1). Bandas de incertidumbre de RESPALDO: se usan solo cuando el sidecar
-    # `.meta.json` del modelo no trae MAE. No son reglas de negocio validadas, son supuestos
-    # de ingeniería declarados -- por eso quedan visibles y configurables en vez de literales
-    # enterrados en el servicio.
-    FORECAST_BANDA_FALLBACK_VENTAS_PCT: float = float(os.getenv("FORECAST_BANDA_FALLBACK_VENTAS_PCT", "0.15"))
+    # decisiones.md §1). Banda de incertidumbre de RESPALDO para demanda (Bodega): se usa
+    # solo cuando el sidecar `.meta.json` del modelo no trae MAE. No es una regla de
+    # negocio validada, es un supuesto de ingeniería declarado -- por eso queda visible y
+    # configurable en vez de un literal enterrado en el servicio. (La banda equivalente de
+    # ventas, `FORECAST_BANDA_FALLBACK_VENTAS_PCT`, se retiró junto con `sales_rf`,
+    # auditoría 49.)
     FORECAST_BANDA_FALLBACK_DEMANDA_PCT: float = float(os.getenv("FORECAST_BANDA_FALLBACK_DEMANDA_PCT", "0.20"))
 
     # ── Módulo Bodega (reglas RN-B1..B5, docs/auditoria/23_modulo_bodega.md) ──
@@ -180,10 +181,16 @@ class Settings(BaseSettings):
 
     # ── Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md,
     # docs/auditoria/30_comisiones_variables.md) ──────────────────────────────────
-    # `COMISION_MODO` ES el mecanismo de rollback: "plana" (comportamiento actual,
-    # default), "sombra" (calcula ambos esquemas, paga/expone el plano como oficial),
-    # "variable" (el esquema por margen/categoría pasa a ser el oficial).
-    COMISION_MODO: str = os.getenv("COMISION_MODO", "plana")
+    # `COMISION_MODO` ("sombra"/"variable") ES el mecanismo de rollback -- desde la
+    # Fase 1 de docs/features/plan_motor_metas_v3_y_comisiones_unificadas.md (R-1,
+    # petición explícita del usuario: "la comisión ya no debe ser plana"), el esquema
+    # plano (`commission_engine.calcular_comision`) ya NO es un modo válido: la
+    # comisión que se calcula y se muestra en todos los paneles es siempre la
+    # variable. Lo único que este valor controla es si además se PERSISTE como
+    # snapshot OFICIAL (`comision_liquidaciones.modo='oficial'`, dinero real) --
+    # "sombra" (default, calcula y muestra, no paga oficialmente) o "variable" (pasa a
+    # ser el esquema oficial que se liquida).
+    COMISION_MODO: str = os.getenv("COMISION_MODO", "sombra")
     COMISION_TOPE_DESCUENTO_PCT: float = float(os.getenv("COMISION_TOPE_DESCUENTO_PCT", "30.0"))
     COMISION_TASA_MINIMA_SIN_COSTO_PCT: float = float(os.getenv("COMISION_TASA_MINIMA_SIN_COSTO_PCT", "5.0"))
     # RN-CM1/RN-CM3 (auditoría 30, H3): líneas con |subtotal_neto| bajo este umbral se
@@ -212,6 +219,38 @@ class Settings(BaseSettings):
     COMISION_META_FACTOR_INTERNO: float = float(os.getenv("COMISION_META_FACTOR_INTERNO", "0.95"))
     COMISION_VENDEDOR_NUEVO_MESES: int = int(os.getenv("COMISION_VENDEDOR_NUEVO_MESES", "3"))
     COMISION_VENDEDOR_NUEVO_FACTOR: float = float(os.getenv("COMISION_VENDEDOR_NUEVO_FACTOR", "0.60"))
+    # Horizonte de planificación de la Consola de Metas (petición explícita del usuario:
+    # el selector "Año / Mes de Planificación" solo ofrecía el mes vigente + el
+    # siguiente, quemado en código -- `GoalsService.get_periods` amplía la lista
+    # agregando automáticamente los próximos N meses calendario a partir del mes vigente,
+    # sin tocar código para cambiar cuántos meses gerencia puede planificar por adelantado.
+    GOALS_HORIZONTE_PLANIFICACION_MESES: int = int(os.getenv("GOALS_HORIZONTE_PLANIFICACION_MESES", "6"))
+    # ── Etapa E6 (madurez del vendedor, docs/features/plan_motor_metas_v3_y_comisiones_
+    # unificadas.md §10/§18-E6, R-8) -- reemplaza el escalón único de arriba
+    # (`COMISION_VENDEDOR_NUEVO_MESES`/`_FACTOR`, que seguía usando `fecha_ingreso`) por
+    # una transición gradual basada en `meses_historico_usados` (dato real del motor de
+    # metas, más confiable que `fecha_ingreso`). Nombres deliberadamente distintos de
+    # los de arriba para no confundir las dos escaleras -- la de arriba sigue viva en
+    # `commission_variable_engine.resolver_meta_sin_ajuste_tipo` (Comisiones), esta es
+    # la de metas.
+    COMISION_VENDEDOR_NUEVO_MESES_MADUREZ: int = int(os.getenv("COMISION_VENDEDOR_NUEVO_MESES_MADUREZ", "6"))
+    COMISION_VENDEDOR_MADURO_MESES: int = int(os.getenv("COMISION_VENDEDOR_MADURO_MESES", "24"))
+    COMISION_VENDEDOR_PESO_PROPIO_INTERMEDIO: float = float(os.getenv("COMISION_VENDEDOR_PESO_PROPIO_INTERMEDIO", "0.80"))
+    # ── Fase 2 del plan de Metas v3 y Comisiones Unificadas (docs/features/
+    # plan_motor_metas_v3_y_comisiones_unificadas.md, R-2/R-6, auditoría 47): el bono
+    # de cliente nuevo/reactivado ($50/cliente, sin techo) generó en un caso real
+    # (VEN01, julio-2026) el 97.4% de la comisión final de un mostrador con alta
+    # rotación de compradores ocasionales, contra una base propia de líneas+cobranza
+    # de apenas $1.283,08 -- ya cuantificado en la auditoría 45 (H-5) sobre un mes
+    # comparable. Techo relativo: los bonos combinados no pueden exceder este % de la
+    # comisión acumulada JUSTO ANTES de sumarlos (mismo punto de referencia que ya usa
+    # el bono de cobranza sana) -- acota estructuralmente el caso sin inventar una
+    # regla ad-hoc por vendedor. Valor inicial conservador (100% = los bonos como
+    # máximo igualan la base ganada); pendiente de calibración final por gerencia con
+    # el backtest agregado de la Fase 9 (auditoría 47, A-0.1: no se completó un
+    # percentil agregado de "bonos/comisión" por falta de tiempo de la sesión, solo
+    # evidencia puntual del caso reportado).
+    COMISION_BONO_TOPE_PCT_SOBRE_BASE: float = float(os.getenv("COMISION_BONO_TOPE_PCT_SOBRE_BASE", "100.0"))
     # ── Comisión sobre COBROS (docs/auditoria/44_comisiones_sobre_cobros.md,
     # docs/features/plan_comisiones_sobre_cobros.md) -- configuración adicional del
     # esquema Variable, activable reemplazando la fórmula vigente por 'cobranza' (ver
@@ -234,8 +273,6 @@ class Settings(BaseSettings):
 
     # ── Módulo de Notificaciones (RN-N1..RN-N4, docs/auditoria/31_modulo_notificaciones.md) ──
     NOTIF_POLL_SEGUNDOS: int = int(os.getenv("NOTIF_POLL_SEGUNDOS", "60"))
-    # Umbral de desvío real vs. forecast (`sales_rf`) que dispara la alerta de gerencia (Fase 4).
-    NOTIF_DESVIO_FORECAST_PCT: float = float(os.getenv("NOTIF_DESVIO_FORECAST_PCT", "20.0"))
     # Probabilidad de abandono desde la cual se notifica churn nuevo a un vendedor (Fase 4).
     NOTIF_CHURN_UMBRAL: float = float(os.getenv("NOTIF_CHURN_UMBRAL", "0.7"))
     # Límite por tipo de notificación calculada, mismo patrón ya usado en Bodega

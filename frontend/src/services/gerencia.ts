@@ -1,7 +1,6 @@
 import { api } from './http';
 import type {
-  CumplimientoMetaPeriodo, GerenciaKPIs, ModoComparacion, SalesPredictionGranularidad,
-  SalesPredictionResponse,
+  CumplimientoMetaPeriodo, EvolucionMensualVentasResponse, GerenciaKPIs, ModoComparacion,
 } from '../types/gerencia';
 
 interface DateRangeParams {
@@ -68,9 +67,7 @@ export const getVendedores = () =>
 export const getAlmacenes = () =>
   api.get<string[]>('/api/v1/analytics/gerencia/almacenes');
 
-export const getSalesPrediction = (params: {
-  granularidad: SalesPredictionGranularidad;
-  vendedor?: string;
-  almacen?: string;
-}) =>
-  api.get<SalesPredictionResponse>('/api/v1/analytics/gerencia/sales-prediction', { params: cleanParams(params) });
+// Reemplaza a getSalesPrediction (auditoría 49, decomisión de `sales_rf`): histórico
+// real mes a mes, sin ningún modelo.
+export const getEvolucionMensualVentas = (params?: { vendedor?: string; almacen?: string; meses?: number }) =>
+  api.get<EvolucionMensualVentasResponse>('/api/v1/analytics/gerencia/evolucion-mensual', { params: cleanParams(params) });

@@ -1,7 +1,5 @@
 # backend/app/schemas/analytics.py
-from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
 # Reutilizado del contrato tipado de reportes de Bodega (Fase 5, docs/features/
@@ -55,6 +53,18 @@ class BPKPIBodega(BaseModel):
     items_riesgo_desabasto: int
     transferencias_recomendadas: List[Dict[str, Any]]
 
+# Reemplaza al panel "Histórico y Predicción de Ventas (ML)" (auditoría 49, decomisión de
+# `sales_rf`): Venta Neta real mes a mes, sin ningún modelo -- el gráfico del frontend
+# (barras + línea de promedio móvil, aritmética simple sobre esta misma serie) es el
+# análisis honesto que reemplaza a la predicción retirada.
+class EvolucionMensualVentasItem(BaseModel):
+    anio: int
+    mes: int
+    venta_neta: float
+
+class EvolucionMensualVentasResponse(BaseModel):
+    serie: List[EvolucionMensualVentasItem]
+
 class VPKPIVentas(BaseModel):
     meta_mensual: float
     cumplimiento_actual: float
@@ -62,32 +72,9 @@ class VPKPIVentas(BaseModel):
     ranking_vendedores: List[Dict[str, Any]]
 
 # Respuestas para llamadas directas de Inferencia
-class MetricasPrediccion(BaseModel):
-    # Todos opcionales: cuando la serie filtrada (vendedor/almacén/sucursal) queda vacía o
-    # la inferencia falla, el servicio degrada con gracia devolviendo metricas={} -- con
-    # campos obligatorios eso explotaba en la validación de la respuesta (500) en vez de
-    # llegar al frontend como "sin datos" (hallazgo de la verificación del doc 22).
-    ventas_acumuladas: Optional[float] = None
-    venta_esperada: Optional[float] = None
-    crecimiento_esperado: Optional[float] = None
-    mes_mayor_venta: Optional[str] = None
-    mes_menor_venta: Optional[str] = None
-    promedio_mensual: Optional[float] = None
-    mae_modelo: Optional[float] = None
-    # r2_modelo sí lo calcula el servicio (H-09, del sidecar real) pero el schema lo
-    # omitía y Pydantic lo filtraba de la respuesta.
-    r2_modelo: Optional[float] = None
-    nivel_confianza: Optional[float] = None
-    fecha_entrenamiento: Optional[str] = None
-    algoritmo: Optional[str] = None
-
-class PrediccionVentasResponse(BaseModel):
-    granularidad: str
-    periodos_proyectados: int
-    historial_y_prediccion: List[Dict[str, Any]]
-    metricas: MetricasPrediccion
-    insights: List[str]
-
+# (`MetricasPrediccion`/`PrediccionVentasResponse` -- panel ML de predicción de ventas --
+# se retiraron junto con `sales_rf`, auditoría 49. Ver `EvolucionMensualVentasResponse`
+# más abajo, su reemplazo: histórico real, sin ningún modelo.)
 class PrediccionDemandaResponse(BaseModel):
     producto_cod: str
     demanda_proxima_semana: float
@@ -101,40 +88,6 @@ class ChurnResponse(BaseModel):
     cliente_id: str
     probabilidad_abandono: float
     riesgo_alto: bool
-
-class AnomaliaResponse(BaseModel):
-    transaccion_id: str
-    score: float
-    es_anomalia: bool
-
-
-class AnomaliaRevisionResponse(BaseModel):
-    """Ítem de triage (Fase 2 Admin, docs/features/plan_correcciones_pendientes.md §3):
-    una transacción calificada como anómala, con su estado de revisión."""
-    id: int
-    transaccion_id: str
-    score: float
-    estado: str
-    revisor_id: int | None = None
-    nota: str | None = None
-    fecha_deteccion: datetime
-    fecha_revision: datetime | None = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class AnomaliaRevisionUpdate(BaseModel):
-    estado: str
-    nota: str | None = None
-
-    @field_validator("estado")
-    @classmethod
-    def estado_valido(cls, v: str) -> str:
-        permitidos = {"nueva", "revisada", "descartada", "confirmada"}
-        if v not in permitidos:
-            raise ValueError(f"estado debe ser uno de {sorted(permitidos)}")
-        return v
-
 
 class AuditLogEntryResponse(BaseModel):
     ts: str
@@ -151,16 +104,8 @@ class RecomendacionResponse(BaseModel):
     recomendaciones: List[RecomendacionProducto]
 
 # ── Integración ML: Metas y Comisiones (docs/auditoria/15_...) ──────────────────────
-class ForecastCierreResponse(BaseModel):
-    sucursal: str
-    dias_restantes: int
-    ventas_mes_actual: float
-    proyeccion_cierre: float
-    meta: float
-    pct_cumplimiento_esperado: float
-    probabilidad_alcanzar_meta: Optional[float] = None
-    mae_modelo: Optional[float] = None
-
+# (`ForecastCierreResponse` -- "Pronóstico de cierre" del vendedor -- se retiró junto con
+# `sales_rf`, auditoría 49: dependía 100% de ese modelo vía el mismo walk-forward.)
 class MetaSugeridaResponse(BaseModel):
     vendedor_origen: str
     meta_sugerida_estadistica: float
@@ -172,6 +117,19 @@ class MetaSugeridaResponse(BaseModel):
     componente_tendencia: float
     factor_tendencia_aplicado: float
     coeficiente_variacion: float
+    # Motor v2 (docs/auditoria/46_motor_metas_configurable.md, plan_motor_metas_configurable.md):
+    anio_objetivo: int = 0
+    mes_objetivo: int = 0
+    indice_estacional_aplicado: float = 1.0
+    fuente_indice_estacional: str = "neutro"
+    referencia_alcanzable: float = 0.0
+    banda_actuo: bool = False
+    meta_pre_banda: float = 0.0
+    meta_unidades_estadistica: float = 0.0
+    # `True` cuando estos valores son la traza REAL persistida junto a la meta ya
+    # generada (H-5); `False` cuando son un recálculo en vivo (meta legado sin
+    # trazabilidad, o consulta sin meta generada todavía para ese período).
+    es_trazabilidad_persistida: bool = False
 
 class RecomendacionComercialItem(BaseModel):
     producto_cod: str

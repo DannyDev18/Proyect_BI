@@ -12,6 +12,7 @@ import { DashboardMetas } from '../pages/DashboardMetas.tsx';
 import { DashboardBodega } from '../pages/DashboardBodega.tsx';
 import { BodegaAlmacenes } from '../pages/BodegaAlmacenes.tsx';
 import { BodegaReportes } from '../pages/BodegaReportes.tsx';
+import { BodegaReabastecimiento } from '../pages/BodegaReabastecimiento.tsx';
 import { DashboardVentas } from '../pages/DashboardVentas.tsx';
 import { DashboardMetasVendedor } from '../pages/DashboardMetasVendedor.tsx';
 import { VentasCrossSelling } from '../pages/VentasCrossSelling.tsx';
@@ -105,6 +106,11 @@ export const AppRouter = () => {
             <Route path="reportes" element={
               <ProtectedRoute routeKey="bodega.reportes">
                 <BodegaReportes />
+              </ProtectedRoute>
+            } />
+            <Route path="reabastecimiento" element={
+              <ProtectedRoute routeKey="bodega.reabastecimiento">
+                <BodegaReabastecimiento />
               </ProtectedRoute>
             } />
           </Route>

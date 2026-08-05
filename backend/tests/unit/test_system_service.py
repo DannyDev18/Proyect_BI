@@ -13,8 +13,8 @@ def test_get_provenance_incluye_ultima_carga_y_modelos_activos():
     system_repo.get_ultima_carga_dw.return_value = datetime(2026, 7, 15, 10, 0, 0)
 
     model_loader = MagicMock()
-    model_loader.keys.return_value = ["sales_rf", "anomaly"]
-    model_loader.is_loaded.side_effect = lambda k: {"sales_rf": True, "anomaly": False}[k]
+    model_loader.keys.return_value = ["demand_rf", "churn_rf"]
+    model_loader.is_loaded.side_effect = lambda k: {"demand_rf": True, "churn_rf": False}[k]
     model_loader.get_meta.return_value = {"algorithm": "RandomForestRegressor", "trained_at": "2026-07-11T00:00:00Z"}
 
     service = SystemService(system_repo, model_loader, MagicMock(), MagicMock())
@@ -22,13 +22,13 @@ def test_get_provenance_incluye_ultima_carga_y_modelos_activos():
 
     assert provenance["ultima_carga_dw"] == "2026-07-15T10:00:00"
     modelos_por_nombre = {m["nombre"]: m for m in provenance["modelos"]}
-    sales = modelos_por_nombre["Random Forest (Ventas)"]
-    assert sales["activo"] is True
-    assert sales["algoritmo"] == "RandomForestRegressor"
+    demand = modelos_por_nombre["Random Forest (Demanda)"]
+    assert demand["activo"] is True
+    assert demand["algoritmo"] == "RandomForestRegressor"
 
-    anomaly = modelos_por_nombre["Isolation Forest (Anomalías)"]
-    assert anomaly["activo"] is False
-    assert anomaly["algoritmo"] is None  # no se consulta meta de un modelo no cargado
+    churn = modelos_por_nombre["Clasificador de Churn"]
+    assert churn["activo"] is False
+    assert churn["algoritmo"] is None  # no se consulta meta de un modelo no cargado
 
 
 def test_get_provenance_sin_carga_exitosa_devuelve_none():

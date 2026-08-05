@@ -6,13 +6,13 @@ import datetime
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import (
-    AnalyticsServiceDep, CatalogRepositoryDep, CommissionServiceDep, CrossSellEngineServiceDep, GoalMLServiceDep,
+    AnalyticsServiceDep, CommissionServiceDep, CrossSellEngineServiceDep, GoalMLServiceDep,
     PredictionServiceDep, VendorDashboardServiceDep,
 )
 from app.core.deps import CurrentUserDep, PermissionChecker
 from app.core.exceptions import ValidationError
 from app.schemas.analytics import (
-    ChurnResponse, ForecastCierreResponse, MetaSugeridaResponse, RecomendacionComercialItem,
+    ChurnResponse, MetaSugeridaResponse, RecomendacionComercialItem,
     RecomendacionesComercialesResponse, RecomendacionProducto, RecomendacionResponse,
     SegmentacionClienteResponse, VPKPIVentas,
 )
@@ -90,34 +90,6 @@ def get_customer_segmentation(
     """Segmento comercial (RFM + K-Means) de un cliente, calculado al vuelo."""
     res = prediction_service.get_customer_segment(cliente_cod, codven_restriccion)
     return SegmentacionClienteResponse(cliente_id=cliente_cod, segmento=res["segmento"], nombre_segmento=res["nombre_segmento"])
-
-
-# ── Integración ML: Metas y Comisiones (docs/auditoria/15_...) — panel del vendedor ──
-@router.get(
-    "/goals/forecast-cierre", response_model=ForecastCierreResponse, dependencies=[Depends(vendedor_checker)],
-    summary="Pronóstico de cierre de mes (modelo de ventas) para el vendedor autenticado",
-)
-def get_goal_forecast_cierre(
-    goal_ml_service: GoalMLServiceDep,
-    analytics_service: AnalyticsServiceDep,
-    catalog_repo: CatalogRepositoryDep,
-    codven_restriccion: str | None = Depends(_codven_restriccion),
-) -> ForecastCierreResponse:
-    """% esperado de cumplimiento, ventas proyectadas al cierre y probabilidad de
-    alcanzar la meta -- modelo `sales_rf` vía el mismo walk-forward que usa Gerencia,
-    horizonte = días restantes del mes en curso. Auditoría A-0.3 (decisión B-3): ya no
-    filtra por `sucursal` (ver `_codven_restriccion`); `get_daily_sales_history` filtra
-    por `nombre_vendedor`, no por `codven`, así que se resuelve el nombre antes de
-    llamar al servicio de ML."""
-    kpis = analytics_service.get_sales_kpis(vendedor=codven_restriccion)
-    vendedor_nombre = None
-    if codven_restriccion:
-        vendedor = catalog_repo.get_vendedor_activo(codven_restriccion)
-        vendedor_nombre = vendedor["nombre_vendedor"] if vendedor else None
-    resultado = goal_ml_service.forecast_cierre(
-        sucursal=None, meta_mensual=kpis["meta_mensual"], vendedor_nombre=vendedor_nombre,
-    )
-    return ForecastCierreResponse(**resultado.__dict__)
 
 
 @router.get(

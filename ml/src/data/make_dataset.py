@@ -20,11 +20,11 @@ CHURN_UMBRAL_DIAS = int(os.getenv("ML_CHURN_UMBRAL_DIAS", "90"))
 CHURN_N_CORTES = int(os.getenv("ML_CHURN_N_CORTES", "6"))
 CHURN_ESPACIADO_DIAS = int(os.getenv("ML_CHURN_ESPACIADO_DIAS", "90"))
 
-# Tamaños de muestra para los modelos no supervisados. Se muestrean las N líneas MÁS
-# RECIENTES (ORDER BY venta_sk DESC) para que la corrida sea determinista y refleje el
-# régimen actual del negocio (antes: LIMIT sin ORDER BY = muestra arbitraria no reproducible).
+# Tamaño de muestra para el modelo no supervisado de venta cruzada. Se muestrean las N
+# líneas MÁS RECIENTES (ORDER BY venta_sk DESC) para que la corrida sea determinista y
+# refleje el régimen actual del negocio (antes: LIMIT sin ORDER BY = muestra arbitraria
+# no reproducible).
 MUESTRA_MARKET_BASKET = int(os.getenv("ML_MUESTRA_MARKET_BASKET", "50000"))
-MUESTRA_ANOMALIAS = int(os.getenv("ML_MUESTRA_ANOMALIAS", "20000"))
 
 # Umbral mínimo de meses con salida real para que una combinación (producto, almacén)
 # entre al modelo de demanda (Fase 2, docs/features/plan_mejora_pipeline_ml.md §4.1).
@@ -61,39 +61,6 @@ class SalesTimeSerieExtractor:
 
         url = f"postgresql+psycopg2://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_db}"
         self.engine = create_engine(url)
-
-    def fetch_daily_sales(self) -> pd.DataFrame:
-        """Serie diaria de ventas netas enriquecida con variables exógenas de la propia
-        `fact_ventas_detalle` (mezcla de clientes/facturas/descuento del día), además del
-        target. Se evaluaron también `fact_cobros_cxc` (cobranza del día) y
-        `fact_inventario_snapshot` (stockouts) como exógenas adicionales, pero se
-        descartaron con evidencia empírica: `fact_inventario_snapshot` casi no tiene
-        histórico (<1% de cobertura antes de 2026, es una tabla poblada solo hacia
-        adelante) y `valor_cobrado_dia` empeoró el R2 en backtest (-0.11 vs -0.02),
-        probablemente por su fuerte correlación con la misma tendencia de crecimiento
-        del negocio que el propio target, lo que confunde al `RandomizedSearchCV` con
-        pocas iteraciones. Ver ml/REPORTE_MEJORA_MODELOS.md para el detalle del experimento."""
-        sql = """
-            SELECT
-                df.fecha_completa as ds,
-                SUM(fvd.subtotal_neto) as y_sales_net,
-                SUM(fvd.cantidad) as y_quantity,
-                COUNT(DISTINCT fvd.cliente_sk) as n_clientes,
-                COUNT(DISTINCT fvd.num_factura) as n_facturas,
-                AVG(CASE WHEN fvd.subtotal_bruto > 0
-                         THEN fvd.valor_descuento / fvd.subtotal_bruto ELSE 0 END) as pct_descuento_prom
-            FROM edw.fact_ventas_detalle fvd
-            JOIN edw.dim_fecha df ON fvd.fecha_sk = df.fecha_sk
-            JOIN edw.dim_estado_documento ed ON fvd.estado_documento_sk = ed.estado_documento_sk
-            WHERE ed.estado_documento_sk <> -1
-            GROUP BY df.fecha_completa
-            ORDER BY df.fecha_completa;
-        """
-        df = pd.read_sql(sql, self.engine)
-        if not df.empty:
-            df['ds'] = pd.to_datetime(df['ds'])
-            df.set_index('ds', inplace=True)
-        return df
 
     def fetch_sales_by_dimension(self, dimension='producto') -> pd.DataFrame:
         """`dimension='producto'`: se agrupa por `codart` (llave de negocio), NO por
@@ -358,27 +325,6 @@ class SalesTimeSerieExtractor:
                 costo_promedio
             FROM edw.dim_producto
             WHERE es_vigente = TRUE AND producto_sk <> -1;
-        """
-        return pd.read_sql(sql, self.engine)
-
-    def fetch_transactions_for_anomalies(self) -> pd.DataFrame:
-        """Transacciones recientes para IsolationForest. El viejo centinela de calidad
-        pct_margen = -9999.9999 (docs/auditoria/05_auditoria_ml_calidad_datos.md, DQ-1)
-        ya no existe como tal: con el DDL nuevo, `pct_margen` es 0.0 por convención
-        (subtotal_neto=0 o margen_bruto NULL) y solo se *clipea* a ese límite numérico
-        como techo/piso de la columna NUMERIC(8,4), no como marca de calidad
-        (docs/auditoria/13_impacto_dim_estado_documento.md, H13-04). Filtrar
-        `pct_margen > -9999` hoy excluiría por error transacciones con margen
-        genuinamente extremo que clipean justo en ese límite, así que se elimina."""
-        sql = f"""
-            SELECT
-                subtotal_neto,
-                cantidad,
-                costo_total,
-                (subtotal_neto - costo_total) as margen
-            FROM edw.fact_ventas_detalle
-            ORDER BY venta_sk DESC
-            LIMIT {MUESTRA_ANOMALIAS};
         """
         return pd.read_sql(sql, self.engine)
 

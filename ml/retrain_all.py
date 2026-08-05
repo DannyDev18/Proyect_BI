@@ -24,11 +24,9 @@ import sys
 
 from main import (
     SalesTimeSerieExtractor,
-    train_anomaly_detection,
     train_customer_churn,
     train_customer_segmentation,
     train_demand_forecasting,
-    train_general_sales_prediction,
     train_recommendations,
 )
 from src.training.promotion import evaluar_y_promover
@@ -40,12 +38,10 @@ logger = logging.getLogger("MLOps.RetrainAll")
 # extensión si se agrega un modelo nuevo (mismo patrón que `_MODEL_FILES` en
 # backend/app/ml/model_loader.py).
 ENTRENADORES = {
-    "sales_rf": train_general_sales_prediction,
     "demand_rf": train_demand_forecasting,
     "churn_rf": train_customer_churn,
     "segmentation": train_customer_segmentation,
     "association": train_recommendations,
-    "anomaly": train_anomaly_detection,
 }
 
 

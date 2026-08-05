@@ -41,39 +41,16 @@ export interface ContextoComparacion {
   sin_base: string[] | null;
 }
 
-// Campos nullables: cuando la serie filtrada (vendedor/almacén/sucursal) no tiene datos,
-// el backend degrada con gracia y devuelve metricas vacías en vez de un 500 (ver
-// backend/app/schemas/analytics.py::MetricasPrediccion).
-export interface MetricasPrediccion {
-  ventas_acumuladas: number | null;
-  venta_esperada: number | null;
-  crecimiento_esperado: number | null;
-  mes_mayor_venta: string | null;
-  mes_menor_venta: string | null;
-  promedio_mensual: number | null;
-  mae_modelo: number | null;
-  r2_modelo: number | null;
-  nivel_confianza: number | null;
-  fecha_entrenamiento: string | null;
-  algoritmo: string | null;
+// Reemplaza al panel de predicción ML retirado (auditoría 49, decomisión de `sales_rf`):
+// Venta Neta real mes a mes, sin ningún modelo.
+export interface EvolucionMensualVentasItem {
+  anio: number;
+  mes: number;
+  venta_neta: number;
 }
 
-export interface SalesPredictionPoint {
-  fecha: string;
-  monto_real?: number;
-  monto_predicho?: number;
-  intervalo_inferior?: number;
-  intervalo_superior?: number;
-}
-
-export type SalesPredictionGranularidad = 'semana' | 'mes';
-
-export interface SalesPredictionResponse {
-  granularidad: SalesPredictionGranularidad;
-  periodos_proyectados: number;
-  historial_y_prediccion: SalesPredictionPoint[];
-  metricas: MetricasPrediccion;
-  insights: string[];
+export interface EvolucionMensualVentasResponse {
+  serie: EvolucionMensualVentasItem[];
 }
 
 // Fase 2 Gerencia (docs/features/plan_correcciones_pendientes.md §3): KPI de

@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from '@tanstack/react-query';
 import {
   getSalesGoals, getMyGoalTracking, getChurnRisk, getRecommendations, getCustomerSegment,
-  getGoalForecastCierre, getMetaSugerida, getGoalRecommendations, getMyCommission, getPostGoalInvoices,
+  getMetaSugerida, getGoalRecommendations, getMyCommission, getPostGoalInvoices,
   getMiNegocio,
 } from '../services/ventas';
 import { qk } from '../constants/queryKeys';
@@ -31,16 +31,8 @@ export const useMyGoalTracking = () => {
   return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error), refetch: query.refetch };
 };
 
-/** Integración ML (docs/auditoria/15_...): pronóstico de cierre del mes en curso. */
-export const useGoalForecastCierre = () => {
-  const query = useQuery({
-    queryKey: qk.ventas.forecastCierre(),
-    queryFn: () => getGoalForecastCierre().then((r) => r.data),
-  });
-  return { data: query.data ?? null, loading: query.isLoading, error: errorMessage(query.error) };
-};
-
-/** Meta sugerida por el motor estadístico (IQR + anomalías, sin ML). */
+/** Meta sugerida por el motor estadístico (IQR + anomalías, sin ML). (`useGoalForecast
+ * Cierre`, modelo `sales_rf`, se retiró por completo, auditoría 49.) */
 export const useMetaSugerida = () => {
   const query = useQuery({
     queryKey: qk.ventas.metaSugerida(),

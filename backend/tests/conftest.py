@@ -27,10 +27,8 @@ def fake_model_loader():
 
     loader = ModelLoader(models_dir="/nonexistent")
     loader._models = {
-        "sales_rf": _DummyRegressor(feature_names=["f1", "f2"]),
         "demand_rf": _DummyRegressor(feature_names=["f1", "f2"]),
         "churn_rf": _DummyClassifier(),
-        "anomaly": _DummyAnomalyDetector(),
         "segmentation": _DummyClusterer(),
         "association": _dummy_rules_df(),
     }
@@ -55,16 +53,6 @@ class _DummyClassifier:
     def predict_proba(self, X):
         import numpy as np
         return np.array([[0.7, 0.3]] * len(X))
-
-
-class _DummyAnomalyDetector:
-    def predict(self, X):
-        import numpy as np
-        return np.array([1] * len(X))  # 1 = normal
-
-    def decision_function(self, X):
-        import numpy as np
-        return np.array([0.2] * len(X))
 
 
 class _DummyClusterer:

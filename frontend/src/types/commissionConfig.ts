@@ -97,6 +97,34 @@ export interface TodosTramosCobranza {
   jefe_agencia: TramoCobranza[];
 }
 
+// ── Tramos de cumplimiento (auditoría 45, docs/features/plan_comisiones_
+// sobrecumplimiento_umbral_y_desglose.md) -- multiplicador de
+// `multiplicador_cumplimiento` de la fórmula variable: umbral mínimo de pago (90%) +
+// escala de sobrecumplimiento configurable, reemplaza el escalón plano 1.2x único.
+// Un solo juego de tramos GENÉRICOS (sin diferenciar por perfil, §5.3 del plan).
+export interface TramoCumplimiento {
+  id: number;
+  pct_desde: number;
+  pct_hasta: number | null;
+  multiplicador: number;
+  etiqueta: string;
+  bono_fijo: number;
+  vigente_desde: string;
+  vigente_hasta: string | null;
+}
+
+export interface TramoCumplimientoPayload {
+  pct_desde: number;
+  pct_hasta: number | null;
+  multiplicador: number;
+  etiqueta: string;
+  bono_fijo: number;
+}
+
+export interface TramosCumplimientoPayload {
+  tramos: TramoCumplimientoPayload[];
+}
+
 // ── Fórmula de comisión (auditoría 44 §2.2: estructura editable, no quemada) ────
 export type OperadorFormula = 'sumar' | 'restar' | 'multiplicar';
 
@@ -150,12 +178,31 @@ export interface FormulaComponentePayload {
  * la meta/bonos/devoluciones reales de ese período. */
 export type SimulacionComisionPayload =
   | { mesesHistorico: 3 | 6 }
-  | { anio: number; mes: number };
+  // Fase 4 (docs/features/plan_motor_metas_v3_y_comisiones_unificadas.md, R-4):
+  // `usarConfiguracionDeHoy` es opcional -- default `true` (compatibilidad,
+  // comportamiento histórico); `false` = "reconstrucción fiel" con la configuración
+  // vigente al cierre del período, la que coincide con lo realmente liquidado.
+  | { anio: number; mes: number; usarConfiguracionDeHoy?: boolean };
 
 /** Proyección de Comisiones Variables (panel "Simulación" de gerencia): toma los
  * últimos 3 o 6 meses YA CERRADOS como base histórica y proyecta la comisión variable
  * del próximo mes calendario -- solo esquema variable, sin comparar contra el plano
  * (ver backend/app/services/commission_simulation_service.py::proyectar_comision_variable). */
+/** Un paso de la tubería de la fórmula, con etiqueta legible -- auditoría 45
+ * (docs/features/plan_comisiones_sobrecumplimiento_umbral_y_desglose.md §3.3): "cómo
+ * se construye la comisión, cuánto gané de cada cosa". `monto` es dinero ($) para
+ * `sumar`/`restar`; para `multiplicar` es un FACTOR adimensional (`es_factor=true`,
+ * no formatear como moneda). */
+export interface ComponenteComision {
+  orden: number;
+  componente: string;
+  etiqueta: string;
+  operador: 'sumar' | 'restar' | 'multiplicar';
+  monto: number;
+  es_factor: boolean;
+  acumulado_tras_paso: number;
+}
+
 export interface ProyeccionVendedor {
   vendedor_origen: string;
   nombre_vendedor: string | null;
@@ -165,6 +212,11 @@ export interface ProyeccionVendedor {
   margen_bruto_promedio: number;
   comision_variable_proyectada: number;
   tasa_efectiva_pct: number;
+  pct_cumplimiento: number | null;
+  nivel: string | null;
+  multiplicador_cumplimiento: number;
+  comisiona: boolean;
+  componentes: ComponenteComision[];
 }
 
 export interface ProyeccionComision {
@@ -175,6 +227,8 @@ export interface ProyeccionComision {
   margen_bruto_total_promedio: number;
   tasa_efectiva_pct_global: number;
   detalle: ProyeccionVendedor[];
+  // Fase 4 (R-4): "reconstruccion_fiel" | "config_actual" | "proyeccion".
+  modo: 'reconstruccion_fiel' | 'config_actual' | 'proyeccion';
 }
 
 export interface PerfilCategoria {

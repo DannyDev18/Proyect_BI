@@ -131,6 +131,47 @@ class ComisionTramoCobranza(Base):
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class ComisionTramoCumplimiento(Base):
+    """Tramos del multiplicador de `multiplicador_cumplimiento` (auditoría 45,
+    docs/features/plan_comisiones_sobrecumplimiento_umbral_y_desglose.md) -- petición
+    explícita del usuario: (1) sin comisión bajo el 90% de cumplimiento de meta (antes
+    el tramo 80-89% pagaba 0.7x); (2) el sobrecumplimiento (>100%) deja de ser un
+    escalón plano único (1.2x) y pasa a una escala configurable. Reemplaza los umbrales
+    `UMBRAL_*`/multiplicadores `COMISION_MULT_*` de `commission_engine.py` como fuente
+    de este componente del esquema VARIABLE -- el esquema plano legacy
+    (`calcular_comision`) no se toca, sigue usando sus 4 tramos fijos.
+
+    `perfil` NULL = aplica a todos (semilla actual); admite tramos distintos por
+    externo/interno/jefe_agencia a futuro sin migración nueva, mismo patrón que
+    `ComisionTramoCobranza`. `bono_fijo`: monto adicional en $ que se suma al
+    componente `bonos` de la fórmula cuando el vendedor alcanza este tramo -- sembrado
+    en 0.00, activarlo es decisión de gerencia."""
+    __tablename__ = "comision_tramos_cumplimiento"
+    __table_args__ = (
+        CheckConstraint(
+            "perfil IS NULL OR perfil IN ('externo','interno','jefe_agencia')",
+            name="check_perfil_tramo_cumplimiento_valido",
+        ),
+        CheckConstraint("pct_desde >= 0", name="check_pct_desde_valido"),
+        CheckConstraint("pct_hasta IS NULL OR pct_hasta > pct_desde", name="check_pct_hasta_valido"),
+        CheckConstraint("multiplicador >= 0", name="check_multiplicador_cumplimiento_valido"),
+        CheckConstraint("bono_fijo >= 0", name="check_bono_fijo_valido"),
+        {"schema": "public"},
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    perfil = Column(String(15), nullable=True)
+    pct_desde = Column(Numeric(6, 2), nullable=False)
+    pct_hasta = Column(Numeric(6, 2), nullable=True)
+    multiplicador = Column(Numeric(6, 4), nullable=False)
+    etiqueta = Column(String(50), nullable=False)
+    bono_fijo = Column(Numeric(12, 2), nullable=False, default=0)
+    vigente_desde = Column(Date, nullable=False)
+    vigente_hasta = Column(Date, nullable=True)
+    creado_por = Column(Integer, ForeignKey("public.usuarios.id", ondelete="SET NULL"), nullable=True)
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class ComisionFormula(Base):
     """Estructura de la fórmula de comisión variable como configuración persistida, NO
     código (auditoría 44, pedido explícito del usuario: "la fórmula ... también puede ser
@@ -213,7 +254,7 @@ class ComisionConfigAuditoria(Base):
     __table_args__ = (
         CheckConstraint(
             "tabla IN ('comision_matriz_categorias', 'comision_factores_credito', 'comision_config_vendedor', "
-            "'comision_tramos_cobranza', 'comision_formula')",
+            "'comision_tramos_cobranza', 'comision_formula', 'comision_tramos_cumplimiento')",
             name="check_tabla_auditoria_valida",
         ),
         {"schema": "public"},

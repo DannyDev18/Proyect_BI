@@ -1,11 +1,12 @@
 # backend/app/api/routes/goals.py
 import datetime
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, status
 
 from app.api.dependencies import (
     AnalyticsServiceDep, CommissionConfigServiceDep, CommissionServiceDep, CommissionSimulationServiceDep,
-    GoalMLServiceDep, GoalsServiceDep, resolve_sucursal_filter,
+    GoalMLServiceDep, GoalsServiceDep, MetaConfigModuloServiceDep, MetaConfigServiceDep, resolve_sucursal_filter,
 )
 from app.core.deps import CurrentUserDep, PermissionChecker
 from app.core.exceptions import ValidationError
@@ -19,11 +20,15 @@ from app.schemas.commission_config import (
     LineasSinCostoResponse, LineaSinCostoResponse, MatrizCategoriaPayload, MatrizCategoriaResponse,
     MatrizCategoriasResponse, PerfilCategoriaResponse, PerfilCategoriasResponse, ProyeccionComisionRequest,
     ProyeccionComisionResponse, ProyeccionVendedorResponse, TodosTramosCobranzaResponse, TramoCobranzaResponse,
-    TramosCobranzaPayload, VendedorBusqueda,
+    TramoCumplimientoResponse, TramosCobranzaPayload, TramosCumplimientoPayload, VendedorBusqueda,
 )
 from app.schemas.analytics import MetaSugeridaResponse
 from app.schemas.goal import (
     CategoryRecommendationItem, GoalReviewPayload, GoalsAISummaryResponse, GoalTrackingResponse, VendorRiskItem,
+)
+from app.schemas.meta_config import MetaConfigAuditoriaItem, MetaConfigParametroOut, MetaConfigParametroUpdate
+from app.schemas.meta_config_modulo import (
+    MetaConfigModuloCatalogoEtapaOut, MetaConfigModuloOut, MetaConfigModuloUpdate,
 )
 
 router = APIRouter()
@@ -46,18 +51,101 @@ def get_goals_tracking(
 
 @router.get(
     "/meta-sugerida", response_model=MetaSugeridaResponse, dependencies=[Depends(only_management)],
-    summary="Desglose del motor estadístico para un vendedor (transparencia del cálculo IQR)",
+    summary="Desglose del motor v2 para un vendedor (transparencia del cálculo real)",
 )
-def get_meta_sugerida_vendedor(vendedor_origen: str, goal_ml_service: GoalMLServiceDep) -> MetaSugeridaResponse:
-    """Fase 2 Metas (docs/features/plan_correcciones_pendientes.md §3): expone la misma
-    trazabilidad que `SugerenciaMeta`/`IQRGoalCalculationEngine` ya calculaba pero
-    descartaba tras `generate_proposals` -- método, meses de histórico usados, picos
-    recortados por IQR, componente estacional/tendencia, factor de tendencia aplicado.
+def get_meta_sugerida_vendedor(
+    vendedor_origen: str, goal_ml_service: GoalMLServiceDep, anio: int | None = None, mes: int | None = None,
+) -> MetaSugeridaResponse:
+    """Fase 2 Metas (docs/features/plan_correcciones_pendientes.md §3, ampliado por
+    docs/auditoria/46_motor_metas_configurable.md): expone la trazabilidad completa del
+    motor v2 -- método, meses de histórico usados, picos recortados por IQR, índice
+    estacional aplicado (propio o de empresa), tendencia, banda de alcanzabilidad.
+
+    `anio`/`mes` (nuevos, H-1): el período sobre el que se quiere ver el cálculo -- si
+    ya existe una meta generada para ese período, se devuelve la traza REAL persistida
+    junto a ella (`es_trazabilidad_persistida=true`, H-5), no un recálculo con la
+    configuración/histórico de HOY. Sin `anio`/`mes`, cae al comportamiento legado (mes
+    siguiente al último dato, siempre en vivo).
+
     Equivalente gerencial de `GET /analytics/ventas/goals/meta-sugerida` (esa usa
     `current_user.id_vendedor_origen`; esta acepta cualquier `vendedor_origen` para que
     el drawer de revisión de gerencia pueda mostrar el desglose de cualquier fila)."""
-    resultado = goal_ml_service.suggest_goal(vendedor_origen)
+    resultado = goal_ml_service.suggest_goal(vendedor_origen, anio, mes)
     return MetaSugeridaResponse(**resultado.__dict__)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# Configuración editable del motor de metas v2 (docs/features/plan_motor_metas_
+# configurable.md §5.5, docs/auditoria/46_motor_metas_configurable.md)
+# ══════════════════════════════════════════════════════════════════════════════════
+@router.get(
+    "/meta-config/parametros", response_model=list[MetaConfigParametroOut], dependencies=[Depends(only_management)],
+    summary="Parámetros editables del motor de metas v2 (ventana, banda de alcanzabilidad, etc.)",
+)
+def get_meta_config_parametros(meta_config_service: MetaConfigServiceDep) -> list[MetaConfigParametroOut]:
+    return [MetaConfigParametroOut.model_validate(p) for p in meta_config_service.get_parametros_configurables()]
+
+
+@router.put(
+    "/meta-config/parametros/{clave}", response_model=MetaConfigParametroOut, dependencies=[Depends(only_management)],
+    summary="Actualiza un parámetro del motor de metas v2 (afecta solo a las metas que se generen desde ahora)",
+)
+def put_meta_config_parametro(
+    clave: str, payload: MetaConfigParametroUpdate, meta_config_service: MetaConfigServiceDep, current_user: CurrentUserDep,
+) -> MetaConfigParametroOut:
+    parametro = meta_config_service.update_parametro(clave, payload.valor, usuario_id=current_user.id)
+    return MetaConfigParametroOut.model_validate(parametro)
+
+
+@router.get(
+    "/meta-config/auditoria", response_model=list[MetaConfigAuditoriaItem], dependencies=[Depends(only_management)],
+    summary="Bitácora de cambios a la configuración del motor de metas (quién cambió qué y cuándo)",
+)
+def get_meta_config_auditoria(meta_config_service: MetaConfigServiceDep, limit: int = 100) -> list[MetaConfigAuditoriaItem]:
+    return [
+        MetaConfigAuditoriaItem(usuario=nombre, accion=entrada.accion, detalle=entrada.detalle_json, fecha=entrada.fecha_creacion)
+        for entrada, nombre in meta_config_service.get_auditoria(limit=limit)
+    ]
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# Configuración modular del motor de metas v3 (docs/features/plan_motor_metas_v3_y_
+# comisiones_unificadas.md §9/§18, Fase 6) -- reemplaza a /meta-config/parametros como
+# fuente real del motor; esa ruta se conserva sin cambios por compatibilidad.
+# ══════════════════════════════════════════════════════════════════════════════════
+@router.get(
+    "/meta-config/catalogo", response_model=dict[str, MetaConfigModuloCatalogoEtapaOut],
+    dependencies=[Depends(only_management)],
+    summary="Catálogo cerrado de las 14 etapas del pipeline v3 y sus métodos (implementados y declarados)",
+)
+def get_meta_config_catalogo(meta_config_modulo_service: MetaConfigModuloServiceDep) -> dict[str, MetaConfigModuloCatalogoEtapaOut]:
+    return {
+        etapa: MetaConfigModuloCatalogoEtapaOut(**info)
+        for etapa, info in meta_config_modulo_service.get_catalogo().items()
+    }
+
+
+@router.get(
+    "/meta-config/modulos", response_model=list[MetaConfigModuloOut], dependencies=[Depends(only_management)],
+    summary="Configuración modular vigente del motor de metas v3, una fila por etapa",
+)
+def get_meta_config_modulos(meta_config_modulo_service: MetaConfigModuloServiceDep) -> list[MetaConfigModuloOut]:
+    return [MetaConfigModuloOut.model_validate(m) for m in meta_config_modulo_service.get_modulos()]
+
+
+@router.put(
+    "/meta-config/modulos/{etapa}", response_model=MetaConfigModuloOut, dependencies=[Depends(only_management)],
+    summary="Activa/desactiva una etapa del pipeline v3 y edita su método/parámetros",
+)
+def put_meta_config_modulo(
+    etapa: str, payload: MetaConfigModuloUpdate, meta_config_modulo_service: MetaConfigModuloServiceDep,
+    current_user: CurrentUserDep,
+) -> MetaConfigModuloOut:
+    modulo = meta_config_modulo_service.update_modulo(
+        etapa, payload.metodo, payload.activo, payload.parametros, usuario_id=current_user.id,
+    )
+    return MetaConfigModuloOut.model_validate(modulo)
 
 
 @router.get(
@@ -277,6 +365,30 @@ def put_tramos_cobranza(
 
 
 @router.get(
+    "/commission-config/tramos-cumplimiento", response_model=list[TramoCumplimientoResponse],
+    dependencies=[Depends(only_management)],
+    summary="Tramos del multiplicador de cumplimiento (auditoría 45: umbral 90% + escala de sobrecumplimiento)",
+)
+def get_tramos_cumplimiento(commission_config_service: CommissionConfigServiceDep) -> list[TramoCumplimientoResponse]:
+    return [TramoCumplimientoResponse(**t) for t in commission_config_service.get_tramos_cumplimiento()]
+
+
+@router.put(
+    "/commission-config/tramos-cumplimiento", response_model=list[TramoCumplimientoResponse],
+    dependencies=[Depends(only_management)],
+    summary="Reemplaza los tramos del multiplicador de cumplimiento",
+)
+def put_tramos_cumplimiento(
+    payload: TramosCumplimientoPayload, commission_config_service: CommissionConfigServiceDep,
+    current_user: CurrentUserDep,
+) -> list[TramoCumplimientoResponse]:
+    nuevos = commission_config_service.replace_tramos_cumplimiento(
+        tramos=[t.model_dump() for t in payload.tramos], usuario_id=current_user.id,
+    )
+    return [TramoCumplimientoResponse(**t) for t in nuevos]
+
+
+@router.get(
     "/commission-config/formula", response_model=FormulasResponse, dependencies=[Depends(only_management)],
     summary="Fórmulas de comisión variable (estructura editable) + catálogo de componentes válidos",
 )
@@ -361,7 +473,9 @@ def post_commission_simulation(
     if (payload.anio is None) != (payload.mes is None):
         raise ValidationError("Para reconstruir un mes específico se requieren `anio` y `mes` juntos.")
     if payload.anio is not None and payload.mes is not None:
-        r = commission_simulation_service.reconstruir_mes_especifico(payload.anio, payload.mes)
+        r = commission_simulation_service.reconstruir_mes_especifico(
+            payload.anio, payload.mes, usar_configuracion_de_hoy=payload.usar_configuracion_de_hoy,
+        )
     else:
         r = commission_simulation_service.proyectar_comision_variable(payload.meses_historico or 3)
     return ProyeccionComisionResponse(
@@ -370,7 +484,11 @@ def post_commission_simulation(
         comision_variable_total_proyectada=r.comision_variable_total_proyectada,
         margen_bruto_total_promedio=r.margen_bruto_total_promedio,
         tasa_efectiva_pct_global=r.tasa_efectiva_pct_global,
-        detalle=[ProyeccionVendedorResponse(**d.__dict__) for d in r.detalle],
+        modo=r.modo,
+        detalle=[
+            ProyeccionVendedorResponse(**{**d.__dict__, "componentes": [asdict(c) for c in d.componentes]})
+            for d in r.detalle
+        ],
     )
 
 

@@ -1,5 +1,8 @@
 import { api } from './http';
-import type { GoalPeriod, GoalProposal, GoalsAISummary, MetaSugeridaDesglose, VendorCommissionRow } from '../types/goals';
+import type {
+  GoalPeriod, GoalProposal, GoalsAISummary, MetaConfigCatalogo, MetaConfigModulo,
+  MetaSugeridaDesglose, VendorCommissionRow,
+} from '../types/goals';
 
 const clean = (params: object) =>
   Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
@@ -19,7 +22,11 @@ export const generateGoals = (anio: number, mes: number, pressure_factor: number
     params: { anio, mes, pressure_factor },
   });
 
-export const reviewGoal = (id: number, data: { monto_meta: number; estado: 'APROBADA' | 'RECHAZADA'; comision_base_pct: number }) =>
+// `comision_base_pct` ya no se edita desde este flujo (petición explícita del usuario:
+// la comisión real siempre es variable, este campo del esquema plano legado no tiene
+// ningún efecto sobre lo que se paga -- ver docstring de GoalsConsole.tsx). El backend
+// conserva el campo opcional por compatibilidad; el frontend deja de enviarlo.
+export const reviewGoal = (id: number, data: { monto_meta: number; estado: 'APROBADA' | 'RECHAZADA' }) =>
   api.put(`/api/v1/gerencia/goals/${id}/review`, data);
 
 /** Integración ML (docs/auditoria/15_...): metas sugeridas por IA, vendedores en
@@ -39,7 +46,22 @@ export const getCommissionTracking = (anio: number, mes: number, vendedor?: stri
  * (plan_actualizacion_modulo_metas_comisiones.md Fase 2 ítem 1) -- equivalente
  * gerencial de `getMetaSugerida` (services/ventas.ts), que solo cubre al vendedor
  * autenticado; esta acepta cualquier `vendedor_origen` de la propuesta seleccionada. */
-export const getMetaSugeridaGerencia = (vendedorOrigen: string) =>
+export const getMetaSugeridaGerencia = (vendedorOrigen: string, anio?: number | null, mes?: number | null) =>
   api.get<MetaSugeridaDesglose>('/api/v1/gerencia/goals/meta-sugerida', {
-    params: { vendedor_origen: vendedorOrigen },
+    params: { vendedor_origen: vendedorOrigen, anio: anio ?? undefined, mes: mes ?? undefined },
   });
+
+// Nota: `/meta-config/parametros[/auditoria]` (motor v2 plano, 13 constantes) se
+// conserva en el backend por compatibilidad pero no tiene UI propia desde que el
+// pipeline modular (abajo) lo reemplazó -- sin cliente frontend a propósito.
+
+// ── Configuración modular del motor de metas v3 (Fase 6) ────────────────────────────
+export const getMetaConfigCatalogo = () =>
+  api.get<MetaConfigCatalogo>('/api/v1/gerencia/goals/meta-config/catalogo');
+
+export const getMetaConfigModulos = () =>
+  api.get<MetaConfigModulo[]>('/api/v1/gerencia/goals/meta-config/modulos');
+
+export const putMetaConfigModulo = (
+  etapa: string, payload: { metodo: string | null; activo: boolean; parametros: Record<string, unknown> },
+) => api.put<MetaConfigModulo>(`/api/v1/gerencia/goals/meta-config/modulos/${etapa}`, payload);

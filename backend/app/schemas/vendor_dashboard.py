@@ -16,12 +16,12 @@ class CuotaVendedor(BaseModel):
 
 
 class ComisionResumenVendedor(BaseModel):
+    """Comisión única y variable (docs/features/plan_motor_metas_v3_y_comisiones_
+    unificadas.md, Fase 1, R-1) -- sin esquema plano paralelo ni modo condicionante."""
     comision_devengada: float
     tasa_aplicada_pct: float
     bono_aplicado: float
     dias_restantes_mes: int
-    comision_variable: Optional[float] = None
-    modo_comision: str
 
 
 class MetaDiariaVendedor(BaseModel):

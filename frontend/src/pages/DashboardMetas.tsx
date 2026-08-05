@@ -4,9 +4,10 @@ import { GoalsAISummaryPanel } from '../components/goals/GoalsAISummaryPanel';
 import { CommissionTracker } from '../components/goals/CommissionTracker';
 import { CommissionConfigPanel } from '../components/goals/CommissionConfigPanel';
 import { CommissionSimulationPanel } from '../components/goals/CommissionSimulationPanel';
+import { BitacoraPanel } from '../components/goals/BitacoraPanel';
 import { Tabs } from '../components/ui/Tabs';
 
-type VistaMetas = 'operacion' | 'configuracion' | 'simulacion';
+type VistaMetas = 'operacion' | 'configuracion' | 'simulacion' | 'bitacora';
 
 export const DashboardMetas = () => {
   const [vista, setVista] = useState<VistaMetas>('operacion');
@@ -27,6 +28,7 @@ export const DashboardMetas = () => {
           { value: 'operacion', label: 'Operación' },
           { value: 'configuracion', label: 'Comisiones Variables · Config' },
           { value: 'simulacion', label: 'Comisiones Variables · Simulación' },
+          { value: 'bitacora', label: 'Bitácora de cambios' },
         ]}
       />
 
@@ -44,6 +46,7 @@ export const DashboardMetas = () => {
 
       {vista === 'configuracion' && <CommissionConfigPanel />}
       {vista === 'simulacion' && <CommissionSimulationPanel />}
+      {vista === 'bitacora' && <BitacoraPanel />}
     </div>
   );
 };

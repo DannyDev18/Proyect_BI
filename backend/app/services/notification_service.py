@@ -19,9 +19,9 @@ from app.models.user import User
 from app.repositories.notification_repository import NotificationRepository
 from app.schemas.notification import NotificacionOut
 from app.schemas.pagination import Page, PaginationParams, paginar
+from app.inventory import ReplenishmentService
 from app.services.cartera360_service import Cartera360Service
 from app.services.commission_simulation_service import CommissionSimulationService
-from app.services.prediction_service import PredictionService
 from app.services.warehouse_service import WarehouseService
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,8 @@ _TITULOS_BODEGA = {
     "prediccion_agotamiento": "Agotamiento proyectado",
     "transferencia_sugerida": "Transferencia sugerida",
     "reporte_semanal": "Reporte de compras disponible",
+    "cambio_brusco_demanda": "Cambio brusco de demanda",
+    "tendencia_decreciente": "Tendencia decreciente sostenida",
 }
 
 
@@ -40,15 +42,15 @@ class NotificationService:
         self,
         notification_repo: NotificationRepository,
         warehouse_service: WarehouseService,
-        prediction_service: PredictionService,
         cartera360_service: Cartera360Service,
         commission_simulation_service: CommissionSimulationService,
+        replenishment_service: ReplenishmentService,
     ):
         self.repo = notification_repo
         self.warehouse_service = warehouse_service
-        self.prediction_service = prediction_service
         self.cartera360_service = cartera360_service
         self.commission_simulation_service = commission_simulation_service
+        self.replenishment_service = replenishment_service
 
     # ── Orquestación: calculadas + persistidas por rol ──────────────────────
     def get_notificaciones(self, user: User) -> list[NotificacionOut]:
@@ -88,7 +90,7 @@ class NotificationService:
         `almacenes_permitidos`, inyectado por request vía `resolve_almacenes_filter`),
         así que `self.warehouse_service` ya solo puede leer las bodegas del usuario."""
         crudos = self.warehouse_service.get_notificaciones(sucursal=user.sucursal, almacen=None)
-        return [
+        notificaciones = [
             {
                 "tipo_evento": d["tipo"],
                 "titulo": _TITULOS_BODEGA.get(d["tipo"], d["tipo"]),
@@ -98,6 +100,21 @@ class NotificationService:
             }
             for d in crudos
         ]
+        # F7 (docs/features/plan_reabastecimiento_inteligente.md §7.4): extiende, no
+        # duplica -- solo las 2 señales que el generador de arriba nunca calculó (ver
+        # docstring de `ReplenishmentService.get_alertas`).
+        alertas = self.replenishment_service.get_alertas(limite_por_tipo=5)
+        notificaciones += [
+            {
+                "tipo_evento": a["tipo"],
+                "titulo": _TITULOS_BODEGA.get(a["tipo"], a["tipo"]),
+                "mensaje": a["mensaje"],
+                "accion_url": a.get("accion_url"),
+                "prioridad": a["severidad"],
+            }
+            for a in alertas
+        ]
+        return notificaciones
 
     def _generar_salud_modelos(self, user: User) -> list[dict[str, Any]]:
         model_loader = self.warehouse_service.model_loader
@@ -113,27 +130,11 @@ class NotificationService:
         }]
 
     def _generar_gerencia(self, user: User) -> list[dict[str, Any]]:
-        """Desvío del forecast semanal (Fase 4 del plan): `PredictionService.get_sales_forecast`
-        ya expone `metricas.crecimiento_esperado` (% de la venta proyectada vs. el mismo
-        número de días recientes, `_build_forecast_metrics`) -- no existe hoy un backtest
-        real vs. predicho por período, así que se usa esta señal ya calculada (honesta,
-        no inventada, H31-3) como proxy de "desvío" contra la tendencia reciente."""
-        forecast = self.prediction_service.get_sales_forecast(granularidad="semana")
-        crecimiento = forecast.get("metricas", {}).get("crecimiento_esperado")
-        resultado: list[dict[str, Any]] = []
-        if crecimiento is not None and abs(crecimiento) >= settings.NOTIF_DESVIO_FORECAST_PCT:
-            direccion = "por encima" if crecimiento > 0 else "por debajo"
-            resultado.append({
-                "tipo_evento": "desvio_forecast",
-                "titulo": "Desvío del forecast semanal",
-                "mensaje": (
-                    f"📈 La proyección de ventas de la próxima semana está {abs(crecimiento):.1f}% "
-                    f"{direccion} de la tendencia reciente."
-                ),
-                "accion_url": "/gerencia",
-                "prioridad": "alta" if abs(crecimiento) >= settings.NOTIF_DESVIO_FORECAST_PCT * 2 else "media",
-            })
-        return resultado + self._generar_divergencia_comisiones()
+        """El desvío del forecast semanal (`sales_rf`) se retiró junto con el modelo
+        (auditoría 49): quedan solo las notificaciones de Gerencia con una fuente
+        genuinamente real y accionable (divergencia plano-vs-variable del piloto de
+        comisiones)."""
+        return self._generar_divergencia_comisiones()
 
     def _generar_divergencia_comisiones(self) -> list[dict[str, Any]]:
         """Divergencia plano vs variable del piloto en sombra (Fase 2 ítem 3, plan_

@@ -132,6 +132,20 @@ class CatalogRepository:
         ), {"like": like, "limit": limit}).fetchall()
         return [{"codven": str(r[0]), "nombre_vendedor": r[1]} for r in rows]
 
+    def get_vendedores_activo_bulk(self, codvens: list[str]) -> dict[str, bool]:
+        """Estado `activo` (edw.dim_vendedor.activo) para una lista conocida de códigos
+        -- una sola consulta con `= ANY(...)`, mismo patrón de lote que
+        `get_vendedores_info` (nunca N+1). Un `codven` que no resuelve en el EDW se
+        considera inactivo (`False`) por defecto: nunca se asume activo sobre un dato
+        ausente."""
+        if not codvens:
+            return {}
+        rows = self.db.execute(text(
+            "SELECT codven, activo FROM edw.dim_vendedor WHERE codven = ANY(:codvens)"
+        ), {"codvens": codvens}).fetchall()
+        encontrados = {str(r[0]): bool(r[1]) for r in rows}
+        return {codven: encontrados.get(codven, False) for codven in codvens}
+
     def get_vendedores_info(self, codvens: list[str]) -> dict[str, str | None]:
         """Enriquecimiento por lote: `codven -> nombre_vendedor` para una lista ya
         conocida de códigos (ej. la tabla de configuración de comisiones por

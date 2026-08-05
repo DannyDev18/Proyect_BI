@@ -48,18 +48,8 @@ export interface VentasGoalsTracking {
   ranking_vendedores: RankingVendedorItem[];
 }
 
-/** Integración ML: Metas y Comisiones (docs/auditoria/15_...). */
-export interface ForecastCierre {
-  sucursal: string;
-  dias_restantes: number;
-  ventas_mes_actual: number;
-  proyeccion_cierre: number;
-  meta: number;
-  pct_cumplimiento_esperado: number;
-  probabilidad_alcanzar_meta: number | null;
-  mae_modelo: number | null;
-}
-
+// (`ForecastCierre` -- "Pronóstico de cierre" del vendedor, modelo `sales_rf` -- se
+// retiró por completo, auditoría 49.)
 export interface MetaSugerida {
   vendedor_origen: string;
   meta_sugerida_estadistica: number;
@@ -93,22 +83,18 @@ export interface MiComision {
   monto_meta: number;
   venta_real: number;
   pct_cumplimiento: number;
-  nivel: NivelComision;
+  // Tramo real de cumplimiento configurable (auditoría 45), no el enum fijo legacy --
+  // p.ej. "Sin comisión", "Meta", "Sobrecumplimiento alto".
+  nivel: string;
   tasa_aplicada_pct: number;
   bono_aplicado: number;
   comision_devengada: number;
   dias_restantes_mes: number;
   en_alerta_cierre: boolean;
   mensaje_alerta: string | null;
-  // Comisiones Variables (docs/features/plan_integracion_comisiones_variables.md):
-  // poblados solo cuando el backend corre en modo "sombra"/"variable" (COMISION_MODO).
-  comision_variable?: number | null;
-  nivel_variable?: NivelComision | null;
+  // Comisión única y variable (docs/features/plan_motor_metas_v3_y_comisiones_
+  // unificadas.md, Fase 1, R-1) -- sin esquema plano paralelo ni modo condicionante.
   desglose_variable?: DesgloseComisionVariable | null;
-  // Auditoría 43 (H43-15): modo real de COMISION_MODO ('plana' | 'sombra' | 'variable')
-  // -- el badge/texto del panel dual se deriva de esto, nunca de un texto fijo asumiendo
-  // "sombra".
-  modo_comision: 'plana' | 'sombra' | 'variable';
 }
 
 export interface DesgloseLineaComision {
@@ -160,8 +146,6 @@ export interface ComisionResumenVendedor {
   tasa_aplicada_pct: number;
   bono_aplicado: number;
   dias_restantes_mes: number;
-  comision_variable: number | null;
-  modo_comision: 'plana' | 'sombra' | 'variable';
 }
 
 export interface MetaDiariaVendedor {

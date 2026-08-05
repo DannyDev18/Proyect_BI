@@ -20,6 +20,7 @@ import pandas as pd
 
 from app.core.config import settings
 from app.core.exceptions import ValidationError
+from app.inventory import engine as inventory_engine
 from app.ml import inference
 from app.ml.forecasting import walk_forward_forecast
 from app.ml.model_loader import ModelLoader
@@ -145,36 +146,33 @@ class WarehouseService:
         self.model_loader = model_loader
 
     # ── Fórmulas (RN-B1/B2, §6.3) ────────────────────────────────────────────
+    # Delegadas al motor puro del módulo de inventario (`app.inventory.engine`, Fase 2
+    # de docs/features/plan_modulo_inventario_reabastecimiento.md, auditoría 52) --
+    # mismo resultado exacto de antes, solo dejan de tener el cálculo inline aquí.
+    # `WarehouseService` sigue siendo el único que conoce los umbrales de negocio
+    # (`settings.BODEGA_*`); el motor no los lee directamente (regla de frontera).
     @staticmethod
     def _salida_diaria(salidas_periodo: float, dias: int = 30) -> float:
-        return (salidas_periodo / dias) if dias > 0 else 0.0
+        return inventory_engine.demanda_diaria_simple(salidas_periodo, dias)
 
     @staticmethod
     def _punto_reorden_efectivo(configurado: float, salida_diaria: float) -> float:
-        if configurado and configurado > 0:
-            return round(float(configurado), 2)
-        return round(
-            salida_diaria * (settings.BODEGA_LEAD_TIME_DIAS + settings.BODEGA_STOCK_SEGURIDAD_DIAS), 2,
+        return inventory_engine.punto_reorden_determinista(
+            configurado, salida_diaria,
+            settings.BODEGA_LEAD_TIME_DIAS, settings.BODEGA_STOCK_SEGURIDAD_DIAS,
         )
 
     @staticmethod
     def _dias_inventario(stock: float, salida_diaria: float) -> float | None:
         """None = sin salidas en el período (inventario "infinito", no divisible)."""
-        if salida_diaria <= 0:
-            return None
-        return round(stock / salida_diaria, 1)
+        return inventory_engine.dias_inventario(stock, salida_diaria)
 
     @classmethod
     def _estado_stock(cls, stock: float, reorden: float, dias_inv: float | None) -> str:
-        if dias_inv is not None and dias_inv > settings.BODEGA_DIAS_EXCESO:
-            return ESTADO_EXCESO
-        if reorden <= 0:
-            return ESTADO_SEGURO
-        if stock < reorden:
-            return ESTADO_CRITICO
-        if stock <= reorden * settings.BODEGA_FACTOR_CERCA_REORDEN:
-            return ESTADO_CERCA
-        return ESTADO_SEGURO
+        return inventory_engine.estado_stock(
+            stock, reorden, dias_inv,
+            settings.BODEGA_DIAS_EXCESO, settings.BODEGA_FACTOR_CERCA_REORDEN,
+        )
 
     @staticmethod
     def _monto_movimiento(fila: dict[str, Any], tipo_movimiento: str | None) -> float | None:
@@ -1048,12 +1046,22 @@ class WarehouseService:
             u90 = series["unidades"].tail(90)
             demanda_media = round(float(u90.mean()), 2)
             demanda_mediana = round(float(u90.median()), 2)
-            cv = round(float(u90.std() or 0.0) / demanda_media, 2) if demanda_media > 0 else None
+            meses_con_venta = int(series["unidades"].resample("MS").sum().gt(0).sum())
+            # D-4 (auditoría 52, Fase 3 de docs/features/plan_modulo_inventario_
+            # reabastecimiento.md): mismo cálculo de CV que el motor de reabastecimiento
+            # (`inventory_engine.coeficiente_variacion`), una sola fórmula para las dos
+            # decisiones -- los CORTES de clasificación siguen siendo distintos a
+            # propósito (`BODEGA_CV_ALTA/MEDIA` aquí calibrados para transferencias,
+            # `CORTE_XYZ_X/Y` en el motor calibrados para ABC/XYZ, auditoría 50 A-0.4:
+            # reutilizar los de transferencias dejaba al 96,6% del catálogo en una sola
+            # clase). Efecto real de reusar la función: exige `MESES_MINIMOS_CV` (3)
+            # meses con venta para calcular un CV, antes este cálculo solo exigía
+            # demanda_media > 0 -- confirmado sin impacto práctico (ver auditoría 52 D-4).
+            cv = inventory_engine.coeficiente_variacion(demanda_media, float(u90.std() or 0.0), meses_con_venta)
             media_30 = float(u90.tail(30).mean())
             media_prev = float(u90.iloc[:-30].mean()) if len(u90) > 30 else 0.0
             tendencia = round((media_30 - media_prev) / media_prev * 100, 1) if media_prev > 0 else None
             venta_90d = round(float(series["venta"].tail(90).sum()), 2)
-            meses_con_venta = int(series["unidades"].resample("MS").sum().gt(0).sum())
 
         costo_logistico = round(cantidad * costo_unitario * settings.BODEGA_COSTO_LOGISTICO_PCT / 100, 2)
         beneficio_neto = round(cantidad * costo_unitario - costo_logistico, 2)

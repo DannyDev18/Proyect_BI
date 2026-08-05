@@ -103,8 +103,6 @@ class VendorDashboardService:
                 "tasa_aplicada_pct": mi_comision.tasa_aplicada_pct,
                 "bono_aplicado": mi_comision.bono_aplicado,
                 "dias_restantes_mes": mi_comision.dias_restantes_mes,
-                "comision_variable": mi_comision.comision_variable,
-                "modo_comision": mi_comision.modo_comision,
             },
             "meta_diaria": meta_diaria,
             "ranking": ranking,

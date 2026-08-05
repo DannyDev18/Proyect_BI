@@ -9,8 +9,8 @@ class Notification(Base):
     Notificaciones persistidas del módulo de Notificaciones Inteligentes
     (docs/features/plan_modulo_notificaciones.md, docs/auditoria/31_modulo_notificaciones.md,
     reglas RN-N1..RN-N4). Solo eventos puntuales que requieren estado de lectura
-    (anomalía detectada, meta generada, liquidación disponible); las notificaciones
-    calculadas al vuelo (stock, forecast, churn) NO se persisten aquí.
+    (meta generada, liquidación disponible); las notificaciones calculadas al vuelo
+    (stock, forecast, churn) NO se persisten aquí.
     Mapeada a: public.notificaciones
     """
     __tablename__ = "notificaciones"

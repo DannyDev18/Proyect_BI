@@ -1,9 +1,10 @@
 import { api } from './http';
 import type {
-  ClaseBusqueda, ComisionConfigAuditoriaEntrada, ConfigVendedor, ConfigVendedorPayload, FactorCredito,
-  FactorCreditoPayload, Formula, FormulaComponentePayload, Formulas, LineaSinCosto, MatrizCategoria,
+  ClaseBusqueda, ComisionConfigAuditoriaEntrada, ConfigVendedor, ConfigVendedorPayload,
+  Formula, FormulaComponentePayload, Formulas, LineaSinCosto, MatrizCategoria,
   MatrizCategoriaPayload, PerfilCategoria, ProyeccionComision, SimulacionComisionPayload,
-  TodosTramosCobranza, TramoCobranza, TramosCobranzaPayload, VendedorBusqueda,
+  TodosTramosCobranza, TramoCobranza, TramoCumplimiento, TramosCobranzaPayload, TramosCumplimientoPayload,
+  VendedorBusqueda,
 } from '../types/commissionConfig';
 
 // Configuración del sistema de Comisiones Variables
@@ -17,12 +18,6 @@ export const upsertMatrizCategoria = (payload: MatrizCategoriaPayload) =>
 
 export const deleteMatrizCategoria = (id: number) =>
   api.delete<MatrizCategoria>(`/api/v1/gerencia/goals/commission-config/matriz/${id}`);
-
-export const getFactoresCredito = () =>
-  api.get<{ factores: FactorCredito[] }>('/api/v1/gerencia/goals/commission-config/credito');
-
-export const replaceFactoresCredito = (factores: FactorCreditoPayload[]) =>
-  api.put<{ factores: FactorCredito[] }>('/api/v1/gerencia/goals/commission-config/credito', { factores });
 
 export const getConfigVendedores = () =>
   api.get<{ vendedores: ConfigVendedor[] }>('/api/v1/gerencia/goals/commission-config/vendedores');
@@ -38,6 +33,7 @@ export const postCommissionSimulation = (payload: SimulacionComisionPayload) =>
     meses_historico: 'mesesHistorico' in payload ? payload.mesesHistorico : null,
     anio: 'anio' in payload ? payload.anio : null,
     mes: 'mes' in payload ? payload.mes : null,
+    usar_configuracion_de_hoy: 'usarConfiguracionDeHoy' in payload ? payload.usarConfiguracionDeHoy ?? true : true,
   });
 
 export const getPerfilCategorias = (meses = 24) =>
@@ -72,6 +68,14 @@ export const getTramosCobranza = () =>
 
 export const replaceTramosCobranza = (payload: TramosCobranzaPayload) =>
   api.put<TramoCobranza[]>('/api/v1/gerencia/goals/commission-config/tramos-cobranza', payload);
+
+// ── Tramos de cumplimiento (auditoría 45, docs/features/plan_comisiones_
+// sobrecumplimiento_umbral_y_desglose.md) ────────────────────────────────────────
+export const getTramosCumplimiento = () =>
+  api.get<TramoCumplimiento[]>('/api/v1/gerencia/goals/commission-config/tramos-cumplimiento');
+
+export const replaceTramosCumplimiento = (payload: TramosCumplimientoPayload) =>
+  api.put<TramoCumplimiento[]>('/api/v1/gerencia/goals/commission-config/tramos-cumplimiento', payload);
 
 export const getFormulas = () =>
   api.get<Formulas>('/api/v1/gerencia/goals/commission-config/formula');
